@@ -1,0 +1,33 @@
+config:
+  target: 'http://localhost:80'
+  phases:
+    - duration: 60
+      arrivalRate: 4000
+      name: "Peak load"
+  processor: "./scripts/generate-order.js"
+  http:
+    timeout: 10
+    pool: 100
+
+scenarios:
+  - name: "Create Order"
+    weight: 100
+    flow:
+      - function: "generateOrderData"
+      - post:
+          url: "/order"
+          headers:
+            Content-Type: "application/json"
+          json:
+            userId: "{{ userId }}"
+            market: "{{ market }}"
+            orderType: "{{ orderType }}"
+            orderSide: "{{ orderSide }}"
+            price: "{{ price }}"
+            quantity: "{{ quantity }}"
+            totalPrice: "{{ totalPrice }}"
+          capture:
+            - json: "$.orderId"
+              as: "orderId"
+          expect:
+            - statusCode: 200

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
+                   package="com.match.infrastructure.generated"
+                   id="1"
+                   version="0"
+                   semanticVersion="5.2"
+                   description="Match Order Schema"
+>
+    <types>
+        <composite name="messageHeader" description="Message identifiers and length of message root">
+            <type name="blockLength" primitiveType="uint16"/>
+            <type name="templateId" primitiveType="uint16"/>
+            <type name="schemaId" primitiveType="uint16"/>
+            <type name="version" primitiveType="uint16"/>
+        </composite>
+        <enum name="OrderType" encodingType="int32">
+            <validValue name="LIMIT">0</validValue>
+            <validValue name="MARKET">1</validValue>
+            <validValue name="LIMIT_MAKER">2</validValue>
+        </enum>
+        <enum name="OrderSide" encodingType="int32">
+            <validValue name="BID">0</validValue>
+            <validValue name="ASK">1</validValue>
+        </enum>
+        <type name="utf8" primitiveType="char" length="7" characterEncoding="UTF-8" />
+    </types>
+
+    <sbe:message name="CreateOrder" id="1" description="Create order event">
+        <field name="orderType" id="1" type="OrderType"/>
+        <field name="orderSide" id="2" type="OrderSide"/>
+        <field name="price" id="3" type="double" />
+        <field name="quantity" id="4" type="double" />
+        <field name="totalPrice" id="5" type="double" />
+        <field name="userId" id="6" type="utf8"/>
+        <field name="market" id="7" type="utf8"/>
+    </sbe:message>
+
+    <sbe:message name="CancelOrder" id="2" description="Cancel order event">
+        <field name="userId" id="1" type="utf8"/>
+        <field name="orderId" id="2" type="utf8"/>
+        <field name="market" id="3" type="utf8"/>
+    </sbe:message>
+
+    <sbe:message name="UpdateOrder" id="3" description="Update order event">
+        <field name="orderType" id="1" type="OrderType"/>
+        <field name="orderSide" id="2" type="OrderSide"/>
+        <field name="price" id="3" type="double" />
+        <field name="quantity" id="4" type="double" />
+        <field name="market" id="5" type="utf8"/>
+        <field name="userId" id="6" type="utf8"/>
+        <field name="orderId" id="7" type="utf8"/>
+    </sbe:message>
+
+    <sbe:message name="toggleFlag" id="4">
+
+    </sbe:message>
+</sbe:messageSchema>
