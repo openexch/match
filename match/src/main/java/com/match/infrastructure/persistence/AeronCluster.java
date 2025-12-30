@@ -25,26 +25,52 @@ public class AeronCluster {
                 new AppClusteredService());
 
         clusterConfig.baseDir(getBaseDir(nodeId));
-        clusterConfig.consensusModuleContext().ingressChannel("aeron:udp");
-        clusterConfig.consensusModuleContext().egressChannel("aeron:udp");
-        //this may need tuning for your environment.
+
+        // ==================== ULTRA-LOW LATENCY CHANNEL CONFIG ====================
+        // Large term buffers for high throughput without fragmentation
+        clusterConfig.consensusModuleContext().ingressChannel("aeron:udp?term-length=16m|mtu=8k");
+        clusterConfig.consensusModuleContext().egressChannel("aeron:udp?term-length=16m|mtu=8k");
+
+        // ==================== CONSISTENT LATENCY TIMING CONFIG ====================
         clusterConfig.consensusModuleContext()
-            .leaderHeartbeatTimeoutNs(TimeUnit.SECONDS.toNanos(3))
-            .electionTimeoutNs(TimeUnit.SECONDS.toNanos(5))
-            .terminationTimeoutNs(TimeUnit.SECONDS.toNanos(10));
+            // Heartbeat: 200ms interval, 2s timeout (10x for stability)
+            .leaderHeartbeatIntervalNs(TimeUnit.MILLISECONDS.toNanos(200))
+            .leaderHeartbeatTimeoutNs(TimeUnit.SECONDS.toNanos(2))
+            // Election timeout: 3s (gives time for recovery without being too slow)
+            .electionTimeoutNs(TimeUnit.SECONDS.toNanos(3))
+            // Termination: 500ms (fast shutdown)
+            .terminationTimeoutNs(TimeUnit.MILLISECONDS.toNanos(500))
+            // Session timeout: 30s (handles high load bursts)
+            .sessionTimeoutNs(TimeUnit.SECONDS.toNanos(30))
+            // Startup canvass timeout: 5s
+            .startupCanvassTimeoutNs(TimeUnit.SECONDS.toNanos(5))
+            ;
         //await DNS resolution of all the hostnames
         hostAddresses.forEach(AeronCluster::awaitDnsResolution);
 
         try (
                 ClusteredMediaDriver ignored = ClusteredMediaDriver.launch(
                         clusterConfig.mediaDriverContext()
+                            // Directory management
                             .dirDeleteOnStart(true)
                             .dirDeleteOnShutdown(true)
-                            .driverTimeoutMs(100)
+                            // Timeouts
+                            .driverTimeoutMs(50)
+                            .timerIntervalNs(TimeUnit.MICROSECONDS.toNanos(500))  // 500us for faster polling
                             .clientLivenessTimeoutNs(TimeUnit.SECONDS.toNanos(5))
                             .publicationUnblockTimeoutNs(TimeUnit.SECONDS.toNanos(10))
-                            .untetheredWindowLimitTimeoutNs(TimeUnit.SECONDS.toNanos(5))
-                            .untetheredRestingTimeoutNs(TimeUnit.SECONDS.toNanos(5)),
+                            .untetheredWindowLimitTimeoutNs(TimeUnit.MILLISECONDS.toNanos(100))
+                            .untetheredRestingTimeoutNs(TimeUnit.MILLISECONDS.toNanos(100))
+                            // Socket buffers - 4MB for high throughput (requires tuned OS)
+                            .socketSndbufLength(4 * 1024 * 1024)
+                            .socketRcvbufLength(4 * 1024 * 1024)
+                            // Initial window - 4MB for high throughput
+                            .initialWindowLength(4 * 1024 * 1024)
+                            // IPC term buffer for inter-process communication
+                            .ipcTermBufferLength(16 * 1024 * 1024)  // 16MB IPC buffer
+                            .publicationTermBufferLength(16 * 1024 * 1024) // 16MB pub buffer
+                            // MTU for reduced system calls
+                            .mtuLength(8192),  // 8KB MTU
                         clusterConfig.archiveContext(),
                         clusterConfig.consensusModuleContext().shutdownSignalBarrier(barrier));
                 ClusteredServiceContainer ignored1 = ClusteredServiceContainer.launch(

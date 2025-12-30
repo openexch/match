@@ -17,6 +17,7 @@
         <maven.compiler.target>11</maven.compiler.target>
         <aeron.version>1.48.1</aeron.version>
         <agrona.version>1.23.0</agrona.version>
+        <sbe.version>1.33.1</sbe.version>
     </properties>
 
     <dependencies>
@@ -41,10 +42,46 @@
             <version>3.8.1</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>uk.co.real-logic</groupId>
+            <artifactId>sbe-tool</artifactId>
+            <version>${sbe.version}</version>
+        </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <!-- SBE code generation -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>generate-sbe</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                        <configuration>
+                            <mainClass>uk.co.real_logic.sbe.SbeTool</mainClass>
+                            <arguments>
+                                <argument>${project.basedir}/src/main/resources/sbe/order-schema.xml</argument>
+                            </arguments>
+                            <systemProperties>
+                                <systemProperty>
+                                    <key>sbe.output.dir</key>
+                                    <value>${project.basedir}/src/main/java</value>
+                                </systemProperty>
+                                <systemProperty>
+                                    <key>sbe.target.language</key>
+                                    <value>Java</value>
+                                </systemProperty>
+                            </systemProperties>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>

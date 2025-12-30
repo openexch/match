@@ -1,5 +1,5 @@
 /* Generated SBE (Simple Binary Encoding) message codec. */
-package com.match.infrastructure.generated.sbe;
+package com.match.infrastructure.generated;
 
 import org.agrona.DirectBuffer;
 
@@ -10,10 +10,10 @@ import org.agrona.DirectBuffer;
 @SuppressWarnings("all")
 public final class CancelOrderDecoder
 {
-    public static final int BLOCK_LENGTH = 21;
+    public static final int BLOCK_LENGTH = 20;
     public static final int TEMPLATE_ID = 2;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 0;
+    public static final int SCHEMA_VERSION = 1;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -149,7 +149,7 @@ public final class CancelOrderDecoder
 
     public static int userIdEncodingLength()
     {
-        return 7;
+        return 8;
     }
 
     public static String userIdMetaAttribute(final MetaAttribute metaAttribute)
@@ -162,67 +162,24 @@ public final class CancelOrderDecoder
         return "";
     }
 
-    public static byte userIdNullValue()
+    public static long userIdNullValue()
     {
-        return (byte)0;
+        return -9223372036854775808L;
     }
 
-    public static byte userIdMinValue()
+    public static long userIdMinValue()
     {
-        return (byte)32;
+        return -9223372036854775807L;
     }
 
-    public static byte userIdMaxValue()
+    public static long userIdMaxValue()
     {
-        return (byte)126;
+        return 9223372036854775807L;
     }
 
-    public static int userIdLength()
+    public long userId()
     {
-        return 7;
-    }
-
-
-    public byte userId(final int index)
-    {
-        if (index < 0 || index >= 7)
-        {
-            throw new IndexOutOfBoundsException("index out of range: index=" + index);
-        }
-
-        final int pos = offset + 0 + (index * 1);
-
-        return buffer.getByte(pos);
-    }
-
-
-    public static String userIdCharacterEncoding()
-    {
-        return java.nio.charset.StandardCharsets.UTF_8.name();
-    }
-
-    public int getUserId(final byte[] dst, final int dstOffset)
-    {
-        final int length = 7;
-        if (dstOffset < 0 || dstOffset > (dst.length - length))
-        {
-            throw new IndexOutOfBoundsException("Copy will go out of range: offset=" + dstOffset);
-        }
-
-        buffer.getBytes(offset + 0, dst, dstOffset, length);
-
-        return length;
-    }
-
-    public String userId()
-    {
-        final byte[] dst = new byte[7];
-        buffer.getBytes(offset + 0, dst, 0, 7);
-
-        int end = 0;
-        for (; end < 7 && dst[end] != 0; ++end);
-
-        return new String(dst, 0, end, java.nio.charset.StandardCharsets.UTF_8);
+        return buffer.getLong(offset + 0, BYTE_ORDER);
     }
 
 
@@ -238,12 +195,12 @@ public final class CancelOrderDecoder
 
     public static int orderIdEncodingOffset()
     {
-        return 7;
+        return 8;
     }
 
     public static int orderIdEncodingLength()
     {
-        return 7;
+        return 8;
     }
 
     public static String orderIdMetaAttribute(final MetaAttribute metaAttribute)
@@ -256,91 +213,48 @@ public final class CancelOrderDecoder
         return "";
     }
 
-    public static byte orderIdNullValue()
+    public static long orderIdNullValue()
     {
-        return (byte)0;
+        return -9223372036854775808L;
     }
 
-    public static byte orderIdMinValue()
+    public static long orderIdMinValue()
     {
-        return (byte)32;
+        return -9223372036854775807L;
     }
 
-    public static byte orderIdMaxValue()
+    public static long orderIdMaxValue()
     {
-        return (byte)126;
+        return 9223372036854775807L;
     }
 
-    public static int orderIdLength()
+    public long orderId()
     {
-        return 7;
-    }
-
-
-    public byte orderId(final int index)
-    {
-        if (index < 0 || index >= 7)
-        {
-            throw new IndexOutOfBoundsException("index out of range: index=" + index);
-        }
-
-        final int pos = offset + 7 + (index * 1);
-
-        return buffer.getByte(pos);
+        return buffer.getLong(offset + 8, BYTE_ORDER);
     }
 
 
-    public static String orderIdCharacterEncoding()
-    {
-        return java.nio.charset.StandardCharsets.UTF_8.name();
-    }
-
-    public int getOrderId(final byte[] dst, final int dstOffset)
-    {
-        final int length = 7;
-        if (dstOffset < 0 || dstOffset > (dst.length - length))
-        {
-            throw new IndexOutOfBoundsException("Copy will go out of range: offset=" + dstOffset);
-        }
-
-        buffer.getBytes(offset + 7, dst, dstOffset, length);
-
-        return length;
-    }
-
-    public String orderId()
-    {
-        final byte[] dst = new byte[7];
-        buffer.getBytes(offset + 7, dst, 0, 7);
-
-        int end = 0;
-        for (; end < 7 && dst[end] != 0; ++end);
-
-        return new String(dst, 0, end, java.nio.charset.StandardCharsets.UTF_8);
-    }
-
-
-    public static int marketId()
+    public static int marketIdId()
     {
         return 3;
     }
 
-    public static int marketSinceVersion()
+    public static int marketIdSinceVersion()
     {
         return 0;
     }
 
-    public static int marketEncodingOffset()
+    public static int marketIdEncodingOffset()
     {
-        return 14;
+        return 16;
     }
 
-    public static int marketEncodingLength()
+    public static int marketIdEncodingLength()
     {
-        return 7;
+        return 4;
     }
 
-    public static String marketMetaAttribute(final MetaAttribute metaAttribute)
+    public static String marketIdMetaAttribute(final MetaAttribute metaAttribute)
     {
         if (MetaAttribute.PRESENCE == metaAttribute)
         {
@@ -350,67 +264,24 @@ public final class CancelOrderDecoder
         return "";
     }
 
-    public static byte marketNullValue()
+    public static int marketIdNullValue()
     {
-        return (byte)0;
+        return -2147483648;
     }
 
-    public static byte marketMinValue()
+    public static int marketIdMinValue()
     {
-        return (byte)32;
+        return -2147483647;
     }
 
-    public static byte marketMaxValue()
+    public static int marketIdMaxValue()
     {
-        return (byte)126;
+        return 2147483647;
     }
 
-    public static int marketLength()
+    public int marketId()
     {
-        return 7;
-    }
-
-
-    public byte market(final int index)
-    {
-        if (index < 0 || index >= 7)
-        {
-            throw new IndexOutOfBoundsException("index out of range: index=" + index);
-        }
-
-        final int pos = offset + 14 + (index * 1);
-
-        return buffer.getByte(pos);
-    }
-
-
-    public static String marketCharacterEncoding()
-    {
-        return java.nio.charset.StandardCharsets.UTF_8.name();
-    }
-
-    public int getMarket(final byte[] dst, final int dstOffset)
-    {
-        final int length = 7;
-        if (dstOffset < 0 || dstOffset > (dst.length - length))
-        {
-            throw new IndexOutOfBoundsException("Copy will go out of range: offset=" + dstOffset);
-        }
-
-        buffer.getBytes(offset + 14, dst, dstOffset, length);
-
-        return length;
-    }
-
-    public String market()
-    {
-        final byte[] dst = new byte[7];
-        buffer.getBytes(offset + 14, dst, 0, 7);
-
-        int end = 0;
-        for (; end < 7 && dst[end] != 0; ++end);
-
-        return new String(dst, 0, end, java.nio.charset.StandardCharsets.UTF_8);
+        return buffer.getInt(offset + 16, BYTE_ORDER);
     }
 
 
@@ -456,22 +327,13 @@ public final class CancelOrderDecoder
         builder.append(BLOCK_LENGTH);
         builder.append("):");
         builder.append("userId=");
-        for (int i = 0; i < userIdLength() && this.userId(i) > 0; i++)
-        {
-            builder.append((char)this.userId(i));
-        }
+        builder.append(this.userId());
         builder.append('|');
         builder.append("orderId=");
-        for (int i = 0; i < orderIdLength() && this.orderId(i) > 0; i++)
-        {
-            builder.append((char)this.orderId(i));
-        }
+        builder.append(this.orderId());
         builder.append('|');
-        builder.append("market=");
-        for (int i = 0; i < marketLength() && this.market(i) > 0; i++)
-        {
-            builder.append((char)this.market(i));
-        }
+        builder.append("marketId=");
+        builder.append(this.marketId());
 
         limit(originalLimit);
 

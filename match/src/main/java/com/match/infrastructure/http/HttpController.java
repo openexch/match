@@ -2,7 +2,7 @@ package com.match.infrastructure.http;// HttpAeronGateway.java
 
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
-import com.match.infrastructure.generated.sbe.*;
+import com.match.infrastructure.generated.*;
 import com.sun.net.httpserver.HttpServer;
 import io.aeron.Publication;
 import io.aeron.cluster.client.AeronCluster;
@@ -138,15 +138,16 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             throw new IllegalStateException("Cluster is not connected.");
         }
 
-        createOrderEncoder.wrapAndApplyHeader(buffer,0, headerEncoder);
+        createOrderEncoder.wrapAndApplyHeader(buffer, 0, headerEncoder);
 
-        createOrderEncoder.userId(order.userId);
-        createOrderEncoder.market(order.market);
+        // Use primitive types for zero-allocation encoding
+        createOrderEncoder.userId(order.getUserIdAsLong());
+        createOrderEncoder.price(order.getPriceAsLong());
+        createOrderEncoder.quantity(order.getQuantityAsLong());
+        createOrderEncoder.totalPrice(order.getTotalPriceAsLong());
+        createOrderEncoder.marketId(order.getMarketId());
         createOrderEncoder.orderType(order.toOrderType());
         createOrderEncoder.orderSide(order.toOrderSide());
-        createOrderEncoder.price(order.price);
-        createOrderEncoder.quantity(order.quantity);
-        createOrderEncoder.totalPrice(order.totalPrice);
 
         final int length = MessageHeaderEncoder.ENCODED_LENGTH + createOrderEncoder.encodedLength();
         long result;

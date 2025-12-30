@@ -1,5 +1,5 @@
 /* Generated SBE (Simple Binary Encoding) message codec. */
-package com.match.infrastructure.generated.sbe;
+package com.match.infrastructure.generated;
 
 import org.agrona.DirectBuffer;
 
@@ -10,10 +10,10 @@ import org.agrona.DirectBuffer;
 @SuppressWarnings("all")
 public final class CreateOrderDecoder
 {
-    public static final int BLOCK_LENGTH = 46;
+    public static final int BLOCK_LENGTH = 38;
     public static final int TEMPLATE_ID = 1;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 0;
+    public static final int SCHEMA_VERSION = 1;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -132,27 +132,27 @@ public final class CreateOrderDecoder
         this.limit = limit;
     }
 
-    public static int orderTypeId()
+    public static int userIdId()
     {
         return 1;
     }
 
-    public static int orderTypeSinceVersion()
+    public static int userIdSinceVersion()
     {
         return 0;
     }
 
-    public static int orderTypeEncodingOffset()
+    public static int userIdEncodingOffset()
     {
         return 0;
     }
 
-    public static int orderTypeEncodingLength()
+    public static int userIdEncodingLength()
     {
-        return 4;
+        return 8;
     }
 
-    public static String orderTypeMetaAttribute(final MetaAttribute metaAttribute)
+    public static String userIdMetaAttribute(final MetaAttribute metaAttribute)
     {
         if (MetaAttribute.PRESENCE == metaAttribute)
         {
@@ -162,61 +162,30 @@ public final class CreateOrderDecoder
         return "";
     }
 
-    public int orderTypeRaw()
+    public static long userIdNullValue()
     {
-        return buffer.getInt(offset + 0, BYTE_ORDER);
+        return -9223372036854775808L;
     }
 
-    public OrderType orderType()
+    public static long userIdMinValue()
     {
-        return OrderType.get(buffer.getInt(offset + 0, BYTE_ORDER));
+        return -9223372036854775807L;
     }
 
-
-    public static int orderSideId()
+    public static long userIdMaxValue()
     {
-        return 2;
+        return 9223372036854775807L;
     }
 
-    public static int orderSideSinceVersion()
+    public long userId()
     {
-        return 0;
-    }
-
-    public static int orderSideEncodingOffset()
-    {
-        return 4;
-    }
-
-    public static int orderSideEncodingLength()
-    {
-        return 4;
-    }
-
-    public static String orderSideMetaAttribute(final MetaAttribute metaAttribute)
-    {
-        if (MetaAttribute.PRESENCE == metaAttribute)
-        {
-            return "required";
-        }
-
-        return "";
-    }
-
-    public int orderSideRaw()
-    {
-        return buffer.getInt(offset + 4, BYTE_ORDER);
-    }
-
-    public OrderSide orderSide()
-    {
-        return OrderSide.get(buffer.getInt(offset + 4, BYTE_ORDER));
+        return buffer.getLong(offset + 0, BYTE_ORDER);
     }
 
 
     public static int priceId()
     {
-        return 3;
+        return 2;
     }
 
     public static int priceSinceVersion()
@@ -244,30 +213,30 @@ public final class CreateOrderDecoder
         return "";
     }
 
-    public static double priceNullValue()
+    public static long priceNullValue()
     {
-        return Double.NaN;
+        return -9223372036854775808L;
     }
 
-    public static double priceMinValue()
+    public static long priceMinValue()
     {
-        return -1.7976931348623157E308d;
+        return -9223372036854775807L;
     }
 
-    public static double priceMaxValue()
+    public static long priceMaxValue()
     {
-        return 1.7976931348623157E308d;
+        return 9223372036854775807L;
     }
 
-    public double price()
+    public long price()
     {
-        return buffer.getDouble(offset + 8, BYTE_ORDER);
+        return buffer.getLong(offset + 8, BYTE_ORDER);
     }
 
 
     public static int quantityId()
     {
-        return 4;
+        return 3;
     }
 
     public static int quantitySinceVersion()
@@ -295,30 +264,30 @@ public final class CreateOrderDecoder
         return "";
     }
 
-    public static double quantityNullValue()
+    public static long quantityNullValue()
     {
-        return Double.NaN;
+        return -9223372036854775808L;
     }
 
-    public static double quantityMinValue()
+    public static long quantityMinValue()
     {
-        return -1.7976931348623157E308d;
+        return -9223372036854775807L;
     }
 
-    public static double quantityMaxValue()
+    public static long quantityMaxValue()
     {
-        return 1.7976931348623157E308d;
+        return 9223372036854775807L;
     }
 
-    public double quantity()
+    public long quantity()
     {
-        return buffer.getDouble(offset + 16, BYTE_ORDER);
+        return buffer.getLong(offset + 16, BYTE_ORDER);
     }
 
 
     public static int totalPriceId()
     {
-        return 5;
+        return 4;
     }
 
     public static int totalPriceSinceVersion()
@@ -346,48 +315,48 @@ public final class CreateOrderDecoder
         return "";
     }
 
-    public static double totalPriceNullValue()
+    public static long totalPriceNullValue()
     {
-        return Double.NaN;
+        return -9223372036854775808L;
     }
 
-    public static double totalPriceMinValue()
+    public static long totalPriceMinValue()
     {
-        return -1.7976931348623157E308d;
+        return -9223372036854775807L;
     }
 
-    public static double totalPriceMaxValue()
+    public static long totalPriceMaxValue()
     {
-        return 1.7976931348623157E308d;
+        return 9223372036854775807L;
     }
 
-    public double totalPrice()
+    public long totalPrice()
     {
-        return buffer.getDouble(offset + 24, BYTE_ORDER);
+        return buffer.getLong(offset + 24, BYTE_ORDER);
     }
 
 
-    public static int userIdId()
+    public static int marketIdId()
     {
-        return 6;
+        return 5;
     }
 
-    public static int userIdSinceVersion()
+    public static int marketIdSinceVersion()
     {
         return 0;
     }
 
-    public static int userIdEncodingOffset()
+    public static int marketIdEncodingOffset()
     {
         return 32;
     }
 
-    public static int userIdEncodingLength()
+    public static int marketIdEncodingLength()
     {
-        return 7;
+        return 4;
     }
 
-    public static String userIdMetaAttribute(final MetaAttribute metaAttribute)
+    public static String marketIdMetaAttribute(final MetaAttribute metaAttribute)
     {
         if (MetaAttribute.PRESENCE == metaAttribute)
         {
@@ -397,91 +366,48 @@ public final class CreateOrderDecoder
         return "";
     }
 
-    public static byte userIdNullValue()
+    public static int marketIdNullValue()
     {
-        return (byte)0;
+        return -2147483648;
     }
 
-    public static byte userIdMinValue()
+    public static int marketIdMinValue()
     {
-        return (byte)32;
+        return -2147483647;
     }
 
-    public static byte userIdMaxValue()
+    public static int marketIdMaxValue()
     {
-        return (byte)126;
+        return 2147483647;
     }
 
-    public static int userIdLength()
+    public int marketId()
     {
-        return 7;
-    }
-
-
-    public byte userId(final int index)
-    {
-        if (index < 0 || index >= 7)
-        {
-            throw new IndexOutOfBoundsException("index out of range: index=" + index);
-        }
-
-        final int pos = offset + 32 + (index * 1);
-
-        return buffer.getByte(pos);
+        return buffer.getInt(offset + 32, BYTE_ORDER);
     }
 
 
-    public static String userIdCharacterEncoding()
+    public static int orderTypeId()
     {
-        return java.nio.charset.StandardCharsets.UTF_8.name();
+        return 6;
     }
 
-    public int getUserId(final byte[] dst, final int dstOffset)
-    {
-        final int length = 7;
-        if (dstOffset < 0 || dstOffset > (dst.length - length))
-        {
-            throw new IndexOutOfBoundsException("Copy will go out of range: offset=" + dstOffset);
-        }
-
-        buffer.getBytes(offset + 32, dst, dstOffset, length);
-
-        return length;
-    }
-
-    public String userId()
-    {
-        final byte[] dst = new byte[7];
-        buffer.getBytes(offset + 32, dst, 0, 7);
-
-        int end = 0;
-        for (; end < 7 && dst[end] != 0; ++end);
-
-        return new String(dst, 0, end, java.nio.charset.StandardCharsets.UTF_8);
-    }
-
-
-    public static int marketId()
-    {
-        return 7;
-    }
-
-    public static int marketSinceVersion()
+    public static int orderTypeSinceVersion()
     {
         return 0;
     }
 
-    public static int marketEncodingOffset()
+    public static int orderTypeEncodingOffset()
     {
-        return 39;
+        return 36;
     }
 
-    public static int marketEncodingLength()
+    public static int orderTypeEncodingLength()
     {
-        return 7;
+        return 1;
     }
 
-    public static String marketMetaAttribute(final MetaAttribute metaAttribute)
+    public static String orderTypeMetaAttribute(final MetaAttribute metaAttribute)
     {
         if (MetaAttribute.PRESENCE == metaAttribute)
         {
@@ -491,67 +417,55 @@ public final class CreateOrderDecoder
         return "";
     }
 
-    public static byte marketNullValue()
+    public short orderTypeRaw()
     {
-        return (byte)0;
+        return ((short)(buffer.getByte(offset + 36) & 0xFF));
     }
 
-    public static byte marketMinValue()
+    public OrderType orderType()
     {
-        return (byte)32;
+        return OrderType.get(((short)(buffer.getByte(offset + 36) & 0xFF)));
     }
 
-    public static byte marketMaxValue()
-    {
-        return (byte)126;
-    }
 
-    public static int marketLength()
+    public static int orderSideId()
     {
         return 7;
     }
 
-
-    public byte market(final int index)
+    public static int orderSideSinceVersion()
     {
-        if (index < 0 || index >= 7)
+        return 0;
+    }
+
+    public static int orderSideEncodingOffset()
+    {
+        return 37;
+    }
+
+    public static int orderSideEncodingLength()
+    {
+        return 1;
+    }
+
+    public static String orderSideMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
         {
-            throw new IndexOutOfBoundsException("index out of range: index=" + index);
+            return "required";
         }
 
-        final int pos = offset + 39 + (index * 1);
-
-        return buffer.getByte(pos);
+        return "";
     }
 
-
-    public static String marketCharacterEncoding()
+    public short orderSideRaw()
     {
-        return java.nio.charset.StandardCharsets.UTF_8.name();
+        return ((short)(buffer.getByte(offset + 37) & 0xFF));
     }
 
-    public int getMarket(final byte[] dst, final int dstOffset)
+    public OrderSide orderSide()
     {
-        final int length = 7;
-        if (dstOffset < 0 || dstOffset > (dst.length - length))
-        {
-            throw new IndexOutOfBoundsException("Copy will go out of range: offset=" + dstOffset);
-        }
-
-        buffer.getBytes(offset + 39, dst, dstOffset, length);
-
-        return length;
-    }
-
-    public String market()
-    {
-        final byte[] dst = new byte[7];
-        buffer.getBytes(offset + 39, dst, 0, 7);
-
-        int end = 0;
-        for (; end < 7 && dst[end] != 0; ++end);
-
-        return new String(dst, 0, end, java.nio.charset.StandardCharsets.UTF_8);
+        return OrderSide.get(((short)(buffer.getByte(offset + 37) & 0xFF)));
     }
 
 
@@ -596,11 +510,8 @@ public final class CreateOrderDecoder
         }
         builder.append(BLOCK_LENGTH);
         builder.append("):");
-        builder.append("orderType=");
-        builder.append(this.orderType());
-        builder.append('|');
-        builder.append("orderSide=");
-        builder.append(this.orderSide());
+        builder.append("userId=");
+        builder.append(this.userId());
         builder.append('|');
         builder.append("price=");
         builder.append(this.price());
@@ -611,17 +522,14 @@ public final class CreateOrderDecoder
         builder.append("totalPrice=");
         builder.append(this.totalPrice());
         builder.append('|');
-        builder.append("userId=");
-        for (int i = 0; i < userIdLength() && this.userId(i) > 0; i++)
-        {
-            builder.append((char)this.userId(i));
-        }
+        builder.append("marketId=");
+        builder.append(this.marketId());
         builder.append('|');
-        builder.append("market=");
-        for (int i = 0; i < marketLength() && this.market(i) > 0; i++)
-        {
-            builder.append((char)this.market(i));
-        }
+        builder.append("orderType=");
+        builder.append(this.orderType());
+        builder.append('|');
+        builder.append("orderSide=");
+        builder.append(this.orderSide());
 
         limit(originalLimit);
 

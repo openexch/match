@@ -20,108 +20,110 @@ import com.match.application.engine.Engine;
 import com.match.domain.commands.CancelOrderCommand;
 import com.match.domain.commands.CreateOrderCommand;
 import com.match.domain.commands.UpdateOrderCommand;
-import com.match.infrastructure.generated.sbe.CancelOrderDecoder;
-import com.match.infrastructure.generated.sbe.CreateOrderDecoder;
-import com.match.infrastructure.generated.sbe.MessageHeaderDecoder;
-import com.match.infrastructure.generated.sbe.UpdateOrderDecoder;
+import com.match.infrastructure.generated.CancelOrderDecoder;
+import com.match.infrastructure.generated.CreateOrderDecoder;
+import com.match.infrastructure.generated.MessageHeaderDecoder;
+import com.match.infrastructure.generated.UpdateOrderDecoder;
 import org.agrona.DirectBuffer;
 
-import java.math.BigDecimal;
-
 /**
- * Demultiplexes messages from the ingress stream to the appropriate domain handler.
+ * Ultra-low latency SBE demultiplexer.
+ * ZERO allocations, ZERO string parsing in hot path.
  */
 public class SbeDemuxer {
     private final Engine engine;
     private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
 
+    // SBE decoders (reused)
     private final CancelOrderDecoder cancelOrderDecoder = new CancelOrderDecoder();
     private final CreateOrderDecoder createOrderDecoder = new CreateOrderDecoder();
     private final UpdateOrderDecoder updateOrderDecoder = new UpdateOrderDecoder();
 
+    // Pooled command objects (reused, never allocated per message)
+    private final CancelOrderCommand cancelCommand = new CancelOrderCommand();
+    private final CreateOrderCommand createCommand = new CreateOrderCommand();
+    private final UpdateOrderCommand updateCommand = new UpdateOrderCommand();
 
-    /**
-     * @param engine match engine
-     */
-    public SbeDemuxer(
-        Engine engine
-    ) {
+
+    public SbeDemuxer(Engine engine) {
         this.engine = engine;
     }
 
     /**
-     * Dispatch a message to the appropriate domain handler.
-     *
-     * @param buffer the buffer containing the inbound message, including a header
-     * @param offset the offset to apply
-     * @param length the length of the message
+     * Dispatch a message to the appropriate handler.
+     * ZERO allocations, direct primitive access.
      */
-    public void dispatch(final DirectBuffer buffer, final int offset, final int length) throws Exception {
+    public void dispatch(final DirectBuffer buffer, final int offset, final int length, final long timestamp) {
         if (length < MessageHeaderDecoder.ENCODED_LENGTH) {
-            System.out.println("Message too short, ignored.");
             return;
         }
+
         headerDecoder.wrap(buffer, offset);
 
         switch (headerDecoder.templateId()) {
+            case CreateOrderDecoder.TEMPLATE_ID:
+                handleCreateOrder(buffer, offset, timestamp);
+                break;
+
             case CancelOrderDecoder.TEMPLATE_ID:
-            {
-                cancelOrderDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
-
-                CancelOrderCommand cancel = new CancelOrderCommand();
-
-                cancel.setUserId(cancelOrderDecoder.userId());
-                cancel.setOrderId(cancelOrderDecoder.orderId());
-
-                engine.acceptOrder(
-                        cancelOrderDecoder.market(),
-                        "cancel",
-                        cancel
-
-                );
+                handleCancelOrder(buffer, offset, timestamp);
                 break;
-            }
-            case CreateOrderDecoder.TEMPLATE_ID: {
-                createOrderDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
 
-                CreateOrderCommand create = new CreateOrderCommand();
-                create.setUserId(createOrderDecoder.userId());
-                create.setPrice(BigDecimal.valueOf(createOrderDecoder.price()));
-                create.setQuantity(BigDecimal.valueOf(createOrderDecoder.quantity()));
-                create.setTotalPrice(BigDecimal.valueOf(createOrderDecoder.totalPrice()));
-                create.setOrderSide(toDomainOrderSide(createOrderDecoder.orderSide()));
-                create.setOrderType(toDomainOrderType(createOrderDecoder.orderType()));
-
-                engine.acceptOrder(
-                        createOrderDecoder.market(),
-                        "create",
-                        create
-                );
+            case UpdateOrderDecoder.TEMPLATE_ID:
+                handleUpdateOrder(buffer, offset, timestamp);
                 break;
-            }
-            case UpdateOrderDecoder.TEMPLATE_ID: {
-                updateOrderDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
-                UpdateOrderCommand update = new UpdateOrderCommand();
-                update.setUserId(updateOrderDecoder.userId());
-                update.setOrderId(updateOrderDecoder.orderId());
-                update.setPrice(BigDecimal.valueOf(updateOrderDecoder.price()));
-                update.setQuantity(BigDecimal.valueOf(updateOrderDecoder.quantity()));
-                update.setOrderSide(toDomainOrderSide(updateOrderDecoder.orderSide()));
-                update.setOrderType(toDomainOrderType(updateOrderDecoder.orderType()));
 
-                engine.acceptOrder(
-                        updateOrderDecoder.market(),
-                        "update",
-                        update
-                );
-                break;
-            }
             default:
-                System.out.printf("Unknown message template %s, ignored.", headerDecoder.templateId());
+                // Unknown message - ignore in hot path
+                break;
         }
     }
 
-    private com.match.domain.enums.OrderType toDomainOrderType(com.match.infrastructure.generated.sbe.OrderType sbeOrderType) {
+    private void handleCreateOrder(DirectBuffer buffer, int offset, long timestamp) {
+        createOrderDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
+
+        // Direct primitive access - NO string parsing, NO allocations
+        createCommand.reset();
+        createCommand.setUserId(createOrderDecoder.userId());
+        createCommand.setPrice(createOrderDecoder.price());
+        createCommand.setQuantity(createOrderDecoder.quantity());
+        createCommand.setTotalPrice(createOrderDecoder.totalPrice());
+        createCommand.setOrderSide(toDomainOrderSide(createOrderDecoder.orderSide()));
+        createCommand.setOrderType(toDomainOrderType(createOrderDecoder.orderType()));
+
+        int marketId = createOrderDecoder.marketId();
+        engine.acceptOrder(marketId, Engine.CMD_CREATE, createCommand, timestamp);
+    }
+
+    private void handleCancelOrder(DirectBuffer buffer, int offset, long timestamp) {
+        cancelOrderDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
+
+        // Direct primitive access - NO string parsing
+        cancelCommand.reset();
+        cancelCommand.setUserId(cancelOrderDecoder.userId());
+        cancelCommand.setOrderId(cancelOrderDecoder.orderId());
+
+        int marketId = cancelOrderDecoder.marketId();
+        engine.acceptOrder(marketId, Engine.CMD_CANCEL, cancelCommand, timestamp);
+    }
+
+    private void handleUpdateOrder(DirectBuffer buffer, int offset, long timestamp) {
+        updateOrderDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
+
+        // Direct primitive access - NO string parsing
+        updateCommand.reset();
+        updateCommand.setUserId(updateOrderDecoder.userId());
+        updateCommand.setOrderId(updateOrderDecoder.orderId());
+        updateCommand.setPrice(updateOrderDecoder.price());
+        updateCommand.setQuantity(updateOrderDecoder.quantity());
+        updateCommand.setOrderSide(toDomainOrderSide(updateOrderDecoder.orderSide()));
+        updateCommand.setOrderType(toDomainOrderType(updateOrderDecoder.orderType()));
+
+        int marketId = updateOrderDecoder.marketId();
+        engine.acceptOrder(marketId, Engine.CMD_UPDATE, updateCommand, timestamp);
+    }
+
+    private com.match.domain.enums.OrderType toDomainOrderType(com.match.infrastructure.generated.OrderType sbeOrderType) {
         switch (sbeOrderType) {
             case LIMIT:
                 return com.match.domain.enums.OrderType.LIMIT;
@@ -130,18 +132,18 @@ public class SbeDemuxer {
             case LIMIT_MAKER:
                 return com.match.domain.enums.OrderType.LIMIT_MAKER;
             default:
-                throw new IllegalArgumentException("Unsupported OrderType: " + sbeOrderType);
+                return com.match.domain.enums.OrderType.LIMIT;
         }
     }
 
-    private com.match.domain.enums.OrderSide toDomainOrderSide(com.match.infrastructure.generated.sbe.OrderSide sbeOrderSide) {
+    private com.match.domain.enums.OrderSide toDomainOrderSide(com.match.infrastructure.generated.OrderSide sbeOrderSide) {
         switch (sbeOrderSide) {
             case BID:
                 return com.match.domain.enums.OrderSide.BID;
             case ASK:
                 return com.match.domain.enums.OrderSide.ASK;
             default:
-                throw new IllegalArgumentException("Unsupported OrderSide: " + sbeOrderSide);
+                return com.match.domain.enums.OrderSide.BID;
         }
     }
 }

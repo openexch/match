@@ -148,24 +148,55 @@ public final class ClusterConfig
         final String ingressHostname = ingressHostnames.get(memberId - startingMemberId);
         final String hostname = clusterHostnames.get(memberId - startingMemberId);
 
+        // ==================== ULTRA-LOW LATENCY MEDIA DRIVER CONFIG ====================
         final MediaDriver.Context mediaDriverContext = new MediaDriver.Context()
                 .aeronDirectoryName(aeronDirName)
-                .threadingMode(ThreadingMode.SHARED)
-                .termBufferSparseFile(true)
-                .multicastFlowControlSupplier(new MinMulticastFlowControlSupplier());
+                // Threading: DEDICATED for ultra-low latency (separate threads for conductor/sender/receiver)
+                .threadingMode(ThreadingMode.DEDICATED)
+                // Memory: Pre-allocate term buffers for consistent latency (no sparse file faults)
+                .termBufferSparseFile(false)
+                // Idle strategies: BusySpin for lowest latency (uses CPU, avoids context switches)
+                .conductorIdleStrategy(new org.agrona.concurrent.BusySpinIdleStrategy())
+                .senderIdleStrategy(new org.agrona.concurrent.BusySpinIdleStrategy())
+                .receiverIdleStrategy(new org.agrona.concurrent.BusySpinIdleStrategy())
+                .sharedIdleStrategy(new org.agrona.concurrent.BusySpinIdleStrategy())
+                // Flow control
+                .multicastFlowControlSupplier(new MinMulticastFlowControlSupplier())
+                // Buffer sizes for high throughput
+                .publicationTermBufferLength(16 * 1024 * 1024)  // 16MB publication term buffer
+                .ipcTermBufferLength(16 * 1024 * 1024)          // 16MB IPC term buffer
+                // Socket buffers - 4MB for high throughput (requires tuned OS)
+                .socketSndbufLength(4 * 1024 * 1024)
+                .socketRcvbufLength(4 * 1024 * 1024)
+                // Timing
+                .timerIntervalNs(1_000_000)  // 1ms timer resolution
+                .clientLivenessTimeoutNs(10_000_000_000L)  // 10s client timeout
+                // Loss/NAK handling
+                .nakUnicastDelayNs(100_000)      // 100us NAK delay
+                .nakMulticastMaxBackoffNs(1_000_000)  // 1ms max NAK backoff
+                .retransmitUnicastDelayNs(100_000);   // 100us retransmit delay
 
         final AeronArchive.Context replicationArchiveContext = new AeronArchive.Context()
                 .controlResponseChannel("aeron:udp?endpoint=" + hostname + ":0");
 
+        // ==================== ULTRA-LOW LATENCY ARCHIVE CONFIG ====================
         final Archive.Context archiveContext = new Archive.Context()
                 .aeronDirectoryName(aeronDirName)
                 .archiveDir(new File(baseDir, ARCHIVE_SUB_DIR))
                 .controlChannel(udpChannel(memberId, hostname, portBase))
                 .archiveClientContext(replicationArchiveContext)
-                .localControlChannel("aeron:ipc?term-length=64k")
+                .localControlChannel("aeron:ipc?term-length=16m")  // 16MB for high throughput
                 .replicationChannel("aeron:udp?endpoint=" + hostname + ":0")
+                // Disable events for lower latency
                 .recordingEventsEnabled(false)
-                .threadingMode(ArchiveThreadingMode.SHARED);
+                // DEDICATED threading for low latency
+                .threadingMode(ArchiveThreadingMode.DEDICATED)
+                // Catalog and segment sizes
+                .catalogCapacity(256 * 1024)  // 256KB catalog
+                .segmentFileLength(256 * 1024 * 1024)  // 256MB segments
+                // Max concurrent recordings/replays
+                .maxConcurrentRecordings(10)
+                .maxConcurrentReplays(10);
 
         final AeronArchive.Context aeronArchiveContext = new AeronArchive.Context()
                 .lock(NoOpLock.INSTANCE)
@@ -174,22 +205,38 @@ public final class ClusterConfig
                 .controlResponseChannel(archiveContext.localControlChannel())
                 .aeronDirectoryName(aeronDirName);
 
+        // ==================== ULTRA-LOW LATENCY CONSENSUS MODULE CONFIG ====================
         final ConsensusModule.Context consensusModuleContext = new ConsensusModule.Context()
                 .clusterMemberId(memberId)
                 .clusterMembers(clusterMembers)
                 .clusterDir(new File(baseDir, CLUSTER_SUB_DIR))
                 .archiveContext(aeronArchiveContext.clone())
                 .serviceCount(1 + additionalServices.length)
-                .replicationChannel("aeron:udp?endpoint=" + hostname + ":0");
+                .replicationChannel("aeron:udp?endpoint=" + hostname + ":0")
+                // Idle strategy for consensus
+                .idleStrategySupplier(org.agrona.concurrent.BusySpinIdleStrategy::new)
+                // Timing for consistent latency (tighter timeouts)
+                .leaderHeartbeatIntervalNs(200_000_000L)   // 200ms heartbeat
+                .leaderHeartbeatTimeoutNs(2_000_000_000L)  // 2s timeout (10x heartbeat)
+                // Log buffer size
+                .logFragmentLimit(64)  // Process more fragments per work cycle
+                // Wheel timer tick resolution
+                .wheelTickResolutionNs(1_000_000)  // 1ms tick resolution
+                .ticksPerWheel(1024);  // More ticks for finer granularity
 
         final List<ClusteredServiceContainer.Context> serviceContexts = new ArrayList<>();
 
+        // ==================== ULTRA-LOW LATENCY SERVICE CONTAINER CONFIG ====================
         final ClusteredServiceContainer.Context clusteredServiceContext = new ClusteredServiceContainer.Context()
                 .aeronDirectoryName(aeronDirName)
                 .archiveContext(aeronArchiveContext.clone())
                 .clusterDir(new File(baseDir, CLUSTER_SUB_DIR))
                 .clusteredService(clusteredService)
-                .serviceId(0);
+                .serviceId(0)
+                // Idle strategy: BusySpin for lowest latency
+                .idleStrategySupplier(org.agrona.concurrent.BusySpinIdleStrategy::new)
+                // Snapshot duration threshold (trigger warning if snapshot takes too long)
+                .snapshotDurationThresholdNs(5_000_000_000L);  // 5 seconds
         serviceContexts.add(clusteredServiceContext);
 
         for (int i = 0; i < additionalServices.length; i++)
@@ -199,7 +246,9 @@ public final class ClusterConfig
                     .archiveContext(aeronArchiveContext.clone())
                     .clusterDir(new File(baseDir, CLUSTER_SUB_DIR))
                     .clusteredService(additionalServices[i])
-                    .serviceId(i + 1);
+                    .serviceId(i + 1)
+                    .idleStrategySupplier(org.agrona.concurrent.BusySpinIdleStrategy::new)
+                    .snapshotDurationThresholdNs(5_000_000_000L);
             serviceContexts.add(additionalServiceContext);
         }
 

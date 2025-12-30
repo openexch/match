@@ -1,21 +1,21 @@
 /* Generated SBE (Simple Binary Encoding) message codec. */
-package com.match.infrastructure.generated.sbe;
+package com.match.infrastructure.generated;
 
 @SuppressWarnings("all")
 public enum OrderSide
 {
-    BID(0),
+    BID((short)0),
 
-    ASK(1),
+    ASK((short)1),
 
     /**
      * To be used to represent not present or null.
      */
-    NULL_VAL(-2147483648);
+    NULL_VAL((short)255);
 
-    private final int value;
+    private final short value;
 
-    OrderSide(final int value)
+    OrderSide(final short value)
     {
         this.value = value;
     }
@@ -25,7 +25,7 @@ public enum OrderSide
      *
      * @return the raw value encoded.
      */
-    public int value()
+    public short value()
     {
         return value;
     }
@@ -36,13 +36,13 @@ public enum OrderSide
      * @param value encoded to be looked up.
      * @return the enum value representing the value.
      */
-    public static OrderSide get(final int value)
+    public static OrderSide get(final short value)
     {
         switch (value)
         {
             case 0: return BID;
             case 1: return ASK;
-            case -2147483648: return NULL_VAL;
+            case 255: return NULL_VAL;
         }
 
         throw new IllegalArgumentException("Unknown value: " + value);

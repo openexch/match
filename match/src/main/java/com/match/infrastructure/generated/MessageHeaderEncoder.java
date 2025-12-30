@@ -1,25 +1,25 @@
 /* Generated SBE (Simple Binary Encoding) message codec. */
-package com.match.infrastructure.generated.sbe;
+package com.match.infrastructure.generated;
 
-import org.agrona.DirectBuffer;
+import org.agrona.MutableDirectBuffer;
 
 
 /**
  * Message identifiers and length of message root
  */
 @SuppressWarnings("all")
-public final class MessageHeaderDecoder
+public final class MessageHeaderEncoder
 {
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 0;
+    public static final int SCHEMA_VERSION = 1;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final int ENCODED_LENGTH = 8;
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
     private int offset;
-    private DirectBuffer buffer;
+    private MutableDirectBuffer buffer;
 
-    public MessageHeaderDecoder wrap(final DirectBuffer buffer, final int offset)
+    public MessageHeaderEncoder wrap(final MutableDirectBuffer buffer, final int offset)
     {
         if (buffer != this.buffer)
         {
@@ -30,7 +30,7 @@ public final class MessageHeaderDecoder
         return this;
     }
 
-    public DirectBuffer buffer()
+    public MutableDirectBuffer buffer()
     {
         return buffer;
     }
@@ -65,11 +65,6 @@ public final class MessageHeaderDecoder
         return 2;
     }
 
-    public static int blockLengthSinceVersion()
-    {
-        return 0;
-    }
-
     public static int blockLengthNullValue()
     {
         return 65535;
@@ -85,9 +80,10 @@ public final class MessageHeaderDecoder
         return 65534;
     }
 
-    public int blockLength()
+    public MessageHeaderEncoder blockLength(final int value)
     {
-        return (buffer.getShort(offset + 0, BYTE_ORDER) & 0xFFFF);
+        buffer.putShort(offset + 0, (short)value, BYTE_ORDER);
+        return this;
     }
 
 
@@ -99,11 +95,6 @@ public final class MessageHeaderDecoder
     public static int templateIdEncodingLength()
     {
         return 2;
-    }
-
-    public static int templateIdSinceVersion()
-    {
-        return 0;
     }
 
     public static int templateIdNullValue()
@@ -121,9 +112,10 @@ public final class MessageHeaderDecoder
         return 65534;
     }
 
-    public int templateId()
+    public MessageHeaderEncoder templateId(final int value)
     {
-        return (buffer.getShort(offset + 2, BYTE_ORDER) & 0xFFFF);
+        buffer.putShort(offset + 2, (short)value, BYTE_ORDER);
+        return this;
     }
 
 
@@ -135,11 +127,6 @@ public final class MessageHeaderDecoder
     public static int schemaIdEncodingLength()
     {
         return 2;
-    }
-
-    public static int schemaIdSinceVersion()
-    {
-        return 0;
     }
 
     public static int schemaIdNullValue()
@@ -157,9 +144,10 @@ public final class MessageHeaderDecoder
         return 65534;
     }
 
-    public int schemaId()
+    public MessageHeaderEncoder schemaId(final int value)
     {
-        return (buffer.getShort(offset + 4, BYTE_ORDER) & 0xFFFF);
+        buffer.putShort(offset + 4, (short)value, BYTE_ORDER);
+        return this;
     }
 
 
@@ -171,11 +159,6 @@ public final class MessageHeaderDecoder
     public static int versionEncodingLength()
     {
         return 2;
-    }
-
-    public static int versionSinceVersion()
-    {
-        return 0;
     }
 
     public static int versionNullValue()
@@ -193,9 +176,10 @@ public final class MessageHeaderDecoder
         return 65534;
     }
 
-    public int version()
+    public MessageHeaderEncoder version(final int value)
     {
-        return (buffer.getShort(offset + 6, BYTE_ORDER) & 0xFFFF);
+        buffer.putShort(offset + 6, (short)value, BYTE_ORDER);
+        return this;
     }
 
 
@@ -216,20 +200,9 @@ public final class MessageHeaderDecoder
             return builder;
         }
 
-        builder.append('(');
-        builder.append("blockLength=");
-        builder.append(this.blockLength());
-        builder.append('|');
-        builder.append("templateId=");
-        builder.append(this.templateId());
-        builder.append('|');
-        builder.append("schemaId=");
-        builder.append(this.schemaId());
-        builder.append('|');
-        builder.append("version=");
-        builder.append(this.version());
-        builder.append(')');
+        final MessageHeaderDecoder decoder = new MessageHeaderDecoder();
+        decoder.wrap(buffer, offset);
 
-        return builder;
+        return decoder.appendTo(builder);
     }
 }

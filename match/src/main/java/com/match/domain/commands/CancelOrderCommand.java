@@ -1,22 +1,34 @@
 package com.match.domain.commands;
 
+/**
+ * Command for canceling an order.
+ * Optimized for object pooling with reset() method.
+ */
 public class CancelOrderCommand {
-    private String userId;
-    private String orderId;
+    private long userId;
+    private long orderId;
 
-    public String getUserId() {
+    /**
+     * Reset for object pool reuse
+     */
+    public void reset() {
+        this.userId = 0L;
+        this.orderId = 0L;
+    }
+
+    public long getUserId() {
         return userId;
     }
 
-    public void setUserId(String userId) {
+    public void setUserId(long userId) {
         this.userId = userId;
     }
 
-    public String getOrderId() {
+    public long getOrderId() {
         return orderId;
     }
 
-    public void setOrderId(String orderId) {
+    public void setOrderId(long orderId) {
         this.orderId = orderId;
     }
-} 
+}

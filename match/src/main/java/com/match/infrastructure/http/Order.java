@@ -1,27 +1,30 @@
 package com.match.infrastructure.http;
 
-// Order.java
-// Bu sınıf, HTTP isteğinden gelen JSON verisini temsil eder.
+import com.match.domain.FixedPoint;
+import com.match.infrastructure.generated.OrderSide;
+import com.match.infrastructure.generated.OrderType;
 
-import com.match.infrastructure.generated.sbe.OrderSide;
-import com.match.infrastructure.generated.sbe.OrderType;
-
+/**
+ * Order received from HTTP JSON request.
+ * Provides conversion methods for SBE encoding.
+ */
 public class Order {
-    // JSON alanları ile aynı isimde olmalıdırlar.
+    // JSON fields
     String userId;
     String market;
-    String orderType; // e.g., "LIMIT", "MARKET"
-    String orderSide; // e.g., "BUY", "SELL"
+    String orderType;
+    String orderSide;
     double price;
     double quantity;
     double totalPrice;
-    long timestamp; // Latency hesaplaması için timestamp
+    long timestamp;
 
-    // Gson'un bu sınıfı kullanabilmesi için boş bir constructor faydalıdır.
+    // Market ID mapping
+    private static final int MARKET_BTC_USD = 1;
+
     public Order() {
     }
 
-    // Konsolda kolayca yazdırmak için bir toString metodu ekleyelim.
     @Override
     public String toString() {
         return "Order{" +
@@ -36,7 +39,52 @@ public class Order {
                 '}';
     }
 
+    /**
+     * Convert userId string to long (using hash for non-numeric IDs)
+     */
+    public long getUserIdAsLong() {
+        if (userId == null || userId.isEmpty()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(userId);
+        } catch (NumberFormatException e) {
+            // Use hash for non-numeric user IDs
+            return userId.hashCode() & 0x7FFFFFFFFFFFFFFFL;
+        }
+    }
+
+    /**
+     * Convert market string to market ID
+     */
+    public int getMarketId() {
+        // Currently only BTC-USD is supported
+        return MARKET_BTC_USD;
+    }
+
+    /**
+     * Get price as fixed-point long (8 decimals)
+     */
+    public long getPriceAsLong() {
+        return FixedPoint.fromDouble(price);
+    }
+
+    /**
+     * Get quantity as fixed-point long (8 decimals)
+     */
+    public long getQuantityAsLong() {
+        return FixedPoint.fromDouble(quantity);
+    }
+
+    /**
+     * Get total price as fixed-point long (8 decimals)
+     */
+    public long getTotalPriceAsLong() {
+        return FixedPoint.fromDouble(totalPrice);
+    }
+
     public OrderType toOrderType() {
+        if (orderType == null) return OrderType.LIMIT;
         switch (orderType) {
             case "LIMIT":
                 return OrderType.LIMIT;
@@ -44,17 +92,20 @@ public class Order {
                 return OrderType.MARKET;
             case "LIMIT_MAKER":
                 return OrderType.LIMIT_MAKER;
+            default:
+                return OrderType.LIMIT;
         }
-        return OrderType.LIMIT;
     }
 
     public OrderSide toOrderSide() {
+        if (orderSide == null) return OrderSide.BID;
         switch (orderSide) {
             case "ASK":
                 return OrderSide.ASK;
             case "BID":
                 return OrderSide.BID;
+            default:
+                return OrderSide.BID;
         }
-        return OrderSide.BID;
     }
 }

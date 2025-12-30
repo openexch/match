@@ -5,20 +5,27 @@ import com.match.domain.OrderMatch;
 import com.match.domain.enums.OrderSide;
 import com.match.domain.interfaces.OrderBook;
 import com.match.domain.interfaces.OrderBookSide;
-
-import java.math.BigDecimal;
-import java.util.HashMap;
-import java.util.Map;
 import com.match.infrastructure.Logger;
+import org.agrona.collections.Long2ObjectHashMap;
 
+import java.util.EnumMap;
+
+/**
+ * Order book implementation optimized for ultra-low latency.
+ * Uses primitive collections for O(1) lookups.
+ */
 public class OrderBookImpl implements OrderBook {
     private static final Logger logger = Logger.getLogger(OrderBookImpl.class);
-    private final Map<OrderSide, OrderBookSide> orderSides;
-    private final Map<String, Order> index;
+
+    // Use EnumMap for side lookup (faster than HashMap)
+    private final EnumMap<OrderSide, OrderBookSide> orderSides;
+
+    // Use primitive long key map for order index
+    private final Long2ObjectHashMap<Order> index;
 
     public OrderBookImpl(String id, String currency, String payment) {
-        this.orderSides = new HashMap<>();
-        this.index = new HashMap<>();
+        this.orderSides = new EnumMap<>(OrderSide.class);
+        this.index = new Long2ObjectHashMap<>();
         logger.info("Order book created for %s%s pair", currency, payment);
     }
 
@@ -28,7 +35,7 @@ public class OrderBookImpl implements OrderBook {
     }
 
     @Override
-    public void cancelOrder(String orderId) throws Exception {
+    public void cancelOrder(long orderId) throws Exception {
         Order existingOrder = index.get(orderId);
         if (existingOrder != null) {
             OrderBookSide side = orderSides.get(existingOrder.getSide());
@@ -40,8 +47,7 @@ public class OrderBookImpl implements OrderBook {
     }
 
     @Override
-    public void updateOrder(String orderId) throws Exception {
-        // Simplified: remove, and then it would be re-added as a creation
+    public void updateOrder(long orderId) throws Exception {
         Order orderToUpdate = index.get(orderId);
         if (orderToUpdate != null) {
             OrderBookSide side = orderSides.get(orderToUpdate.getSide());
@@ -61,19 +67,26 @@ public class OrderBookImpl implements OrderBook {
             OrderBookSide.OrderTypeSideHandler handler = makerSide.getHandler(order.getType());
             OrderBookSide.MatchResult result = handler.handle(makerSide, order);
 
+            // Process matches
             for (OrderMatch match : result.getMatches()) {
-                match.getMaker().setRemainingQuantity(match.getMaker().getRemainingQuantity().subtract(match.getQuantity()));
-                if (match.getMaker().getRemainingQuantity().compareTo(BigDecimal.ZERO) == 0) {
-                    makerSide.removeOrder(match.getMaker());
-                    index.remove(match.getMaker().getId());
+                Order maker = match.getMaker();
+                long newRemaining = maker.getRemainingQuantity() - match.getQuantity();
+                maker.setRemainingQuantity(newRemaining);
+
+                if (newRemaining <= 0L) {
+                    makerSide.removeOrder(maker);
+                    index.remove(maker.getId());
                 }
             }
 
-            if (result.getPlaceOrder() != null) {
-                takerSide.placeOrder(result.getPlaceOrder());
-                index.put(result.getPlaceOrder().getId(), result.getPlaceOrder());
+            // Place remaining order if not fully filled
+            if (result.shouldPlaceOrder()) {
+                Order placeOrder = result.getPlaceOrder();
+                takerSide.placeOrder(placeOrder);
+                index.put(placeOrder.getId(), placeOrder);
             }
         } else {
+            // No match possible, place on book
             takerSide.placeOrder(order);
             index.put(order.getId(), order);
         }
@@ -92,5 +105,19 @@ public class OrderBookImpl implements OrderBook {
     @Override
     public OrderBookSide getAskSide() {
         return orderSides.get(OrderSide.ASK);
+    }
+
+    /**
+     * Get order by ID
+     */
+    public Order getOrder(long orderId) {
+        return index.get(orderId);
+    }
+
+    /**
+     * Get total number of orders in book
+     */
+    public int getOrderCount() {
+        return index.size();
     }
 }
