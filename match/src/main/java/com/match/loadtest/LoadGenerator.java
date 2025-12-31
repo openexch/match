@@ -25,9 +25,13 @@ import java.util.concurrent.atomic.AtomicLong;
 public class LoadGenerator {
 
     private static final int QUEUE_CAPACITY = 64 * 1024; // 64K slots, must be power of 2
+    private static final int MAX_DRAIN_PER_CYCLE_NORMAL = 64;
+    private static final int MAX_DRAIN_PER_CYCLE_LOW_LATENCY = 8;  // Smaller batches = lower latency
 
     private final LoadConfig config;
     private final MetricsCollector metrics;
+    private final boolean ultraLowLatency;
+    private final int warmupSeconds;
     private final MediaDriver mediaDriver;
     private final AeronCluster cluster;
     private final ExecutorService executorService;
@@ -47,14 +51,20 @@ public class LoadGenerator {
     private final boolean useUI;
 
     public LoadGenerator(LoadConfig config) throws Exception {
-        this(config, true);
+        this(config, true, false, 0);
     }
 
     public LoadGenerator(LoadConfig config, boolean useUI) throws Exception {
+        this(config, useUI, false, 0);
+    }
+
+    public LoadGenerator(LoadConfig config, boolean useUI, boolean ultraLowLatency, int warmupSeconds) throws Exception {
         this.config = config;
         this.metrics = new MetricsCollector();
         this.orderQueue = new ManyToOneConcurrentArrayQueue<>(QUEUE_CAPACITY);
         this.useUI = useUI;
+        this.ultraLowLatency = ultraLowLatency;
+        this.warmupSeconds = warmupSeconds;
         this.ui = useUI ? new LoadTestUI(config) : null;
 
         if (!useUI) {
@@ -251,8 +261,33 @@ public class LoadGenerator {
         long lastKeepAliveTimeNs = System.nanoTime();
         final long keepAliveIntervalNs = TimeUnit.MILLISECONDS.toNanos(250);
 
-        // Batch drain limit
-        final int maxDrainPerCycle = 64;
+        // Batch drain limit - smaller batches = lower latency but more overhead
+        final int maxDrainPerCycle = ultraLowLatency ? MAX_DRAIN_PER_CYCLE_LOW_LATENCY : MAX_DRAIN_PER_CYCLE_NORMAL;
+
+        // Warmup phase - run without recording metrics
+        if (warmupSeconds > 0) {
+            System.out.printf("→ JIT Warmup phase: %d seconds (metrics disabled)...%n", warmupSeconds);
+            final long warmupEndNs = System.nanoTime() + TimeUnit.SECONDS.toNanos(warmupSeconds);
+            while (running.get() && !cluster.isClosed() && System.nanoTime() < warmupEndNs) {
+                cluster.pollEgress();
+                OrderRequest order;
+                int drainCount = 0;
+                while (drainCount < maxDrainPerCycle && (order = orderQueue.poll()) != null) {
+                    sendOrder(order, buffer, headerEncoder, createOrderEncoder);
+                    messagesSent.incrementAndGet();
+                    drainCount++;
+                }
+                final long nowNs = System.nanoTime();
+                if (nowNs - lastKeepAliveTimeNs >= keepAliveIntervalNs) {
+                    cluster.sendKeepAlive();
+                    lastKeepAliveTimeNs = nowNs;
+                }
+                idleStrategy.idle(drainCount);
+            }
+            System.out.println("→ Warmup complete, starting measurement...");
+            metrics.reset();  // Reset metrics after warmup
+            messagesSent.set(0);
+        }
 
         while (running.get() && !cluster.isClosed()) {
             int workCount = 0;
@@ -436,8 +471,22 @@ public class LoadGenerator {
         try {
             LoadConfig config = parseArgs(args);
             boolean useUI = !hasFlag(args, "--no-ui");
+            boolean ultraLowLatency = hasFlag(args, "--ultra");
+            int warmupSeconds = getIntFlag(args, "--warmup", 0);
 
-            LoadGenerator generator = new LoadGenerator(config, useUI);
+            // Ultra-low latency mode implies single thread for minimum contention
+            if (ultraLowLatency && config.getWorkerThreads() > 1) {
+                System.out.println("→ Ultra-low latency mode: using 1 worker thread");
+                config = LoadConfig.builder()
+                    .targetOrdersPerSecond(config.getTargetOrdersPerSecond())
+                    .durationSeconds(config.getDurationSeconds())
+                    .workerThreads(1)  // Single thread for ultra-low latency
+                    .scenario(config.getScenario())
+                    .clusterHosts(config.getClusterHosts())
+                    .build();
+            }
+
+            LoadGenerator generator = new LoadGenerator(config, useUI, ultraLowLatency, warmupSeconds);
 
             Runtime.getRuntime().addShutdownHook(new Thread(generator::stop));
 
@@ -457,6 +506,15 @@ public class LoadGenerator {
             }
         }
         return false;
+    }
+
+    private static int getIntFlag(String[] args, String flag, int defaultValue) {
+        for (int i = 0; i < args.length - 1; i++) {
+            if (args[i].equals(flag)) {
+                return Integer.parseInt(args[i + 1]);
+            }
+        }
+        return defaultValue;
     }
 
     private static LoadConfig parseArgs(String[] args) {
@@ -485,7 +543,11 @@ public class LoadGenerator {
                     builder.clusterHosts(List.of(args[++i].split(",")));
                     break;
                 case "--no-ui":
+                case "--ultra":
                     // Handled separately
+                    break;
+                case "--warmup":
+                    i++;  // Skip value, handled separately
                     break;
                 case "--help":
                     printUsage();
@@ -511,10 +573,12 @@ public class LoadGenerator {
         System.out.println("  -s, --scenario <name> Scenario: BALANCED, MARKET_MAKER, AGGRESSIVE, SPIKE (default: BALANCED)");
         System.out.println("  -h, --hosts <list>    Cluster hosts comma-separated");
         System.out.println("  --no-ui               Disable interactive UI (use text output)");
+        System.out.println("  --ultra               Ultra-low latency mode (single thread, small batches)");
+        System.out.println("  --warmup <n>          JIT warmup seconds before measurement (default: 0)");
         System.out.println("  --help                Show this help message");
         System.out.println();
         System.out.println("Examples:");
         System.out.println("  LoadGenerator -r 5000 -d 120 -t 8 -s MARKET_MAKER");
-        System.out.println("  LoadGenerator --rate 10000 --duration 60 --threads 16 --scenario AGGRESSIVE");
+        System.out.println("  LoadGenerator --rate 100000 --duration 60 --ultra --warmup 15");
     }
 }

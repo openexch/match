@@ -9,13 +9,22 @@ JAVA_OPTS = -XX:+UseZGC -XX:+ZGenerational -XX:+UnlockDiagnosticVMOptions -XX:Gu
 	--add-opens java.base/jdk.internal.misc=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
 	-Xmx2g -Xms2g
 
-# JVM flags for ultra-low latency load test client
+# JVM flags for ultra-low latency load test client (ZGC)
 JAVA_OPTS_CLIENT = -XX:+UseZGC -XX:+ZGenerational -XX:+UnlockDiagnosticVMOptions \
 	-XX:+AlwaysPreTouch -XX:+UseNUMA -XX:+PerfDisableSharedMem \
 	-XX:+TieredCompilation -XX:TieredStopAtLevel=4 \
 	-XX:CompileThreshold=1000 \
 	--add-opens java.base/jdk.internal.misc=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
 	-Xmx4g -Xms4g
+
+# JVM flags for absolute lowest latency (Epsilon GC = no GC pauses)
+# WARNING: Will run out of memory eventually - only for short benchmarks
+JAVA_OPTS_EPSILON = -XX:+UnlockExperimentalVMOptions -XX:+UseEpsilonGC \
+	-XX:+AlwaysPreTouch -XX:+UseNUMA -XX:+PerfDisableSharedMem \
+	-XX:+TieredCompilation -XX:TieredStopAtLevel=4 \
+	-XX:CompileThreshold=500 \
+	--add-opens java.base/jdk.internal.misc=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
+	-Xmx8g -Xms8g
 
 JAR_PATH = match/target/cluster-engine-1.0.jar
 
@@ -49,20 +58,6 @@ start-node2:
 	CLUSTER_ADDRESSES="localhost,localhost,localhost" CLUSTER_NODE=2 CLUSTER_PORT_BASE=9000 \
 	BASE_DIR=/tmp/aeron-cluster/node2 java $(JAVA_OPTS) -jar $(JAR_PATH)
 
-# Start all 3 nodes in background (no CPU pinning)
-start-cluster: clean-native
-	@echo "Starting 3-node cluster..."
-	@CLUSTER_ADDRESSES="localhost,localhost,localhost" CLUSTER_NODE=0 CLUSTER_PORT_BASE=9000 \
-	BASE_DIR=/tmp/aeron-cluster/node0 java $(JAVA_OPTS) -jar $(JAR_PATH) > /tmp/aeron-cluster/node0.log 2>&1 &
-	@sleep 2
-	@CLUSTER_ADDRESSES="localhost,localhost,localhost" CLUSTER_NODE=1 CLUSTER_PORT_BASE=9000 \
-	BASE_DIR=/tmp/aeron-cluster/node1 java $(JAVA_OPTS) -jar $(JAR_PATH) > /tmp/aeron-cluster/node1.log 2>&1 &
-	@sleep 2
-	@CLUSTER_ADDRESSES="localhost,localhost,localhost" CLUSTER_NODE=2 CLUSTER_PORT_BASE=9000 \
-	BASE_DIR=/tmp/aeron-cluster/node2 java $(JAVA_OPTS) -jar $(JAR_PATH) > /tmp/aeron-cluster/node2.log 2>&1 &
-	@sleep 3
-	@echo "Cluster started. Check logs: tail -f /tmp/aeron-cluster/node*.log"
-
 # Start all 3 nodes with CPU pinning (requires 12+ cores)
 start-cluster-pinned: clean-native
 	@echo "Starting 3-node cluster with CPU pinning..."
@@ -80,49 +75,25 @@ start-cluster-pinned: clean-native
 # Stop native cluster
 stop-cluster:
 	@echo "Stopping cluster..."
-	@pkill -f "cluster-engine-1.0.jar" || true
-	@echo "Cluster stopped"
+	@pkill -9 -f "cluster-engine-1.0.jar" 2>/dev/null || true
+	@pkill -9 -f "aeron" 2>/dev/null || true
+	@sleep 1
+	@rm -rf /tmp/aeron-cluster/node*
+	@echo "Cluster stopped and cleaned"
 
-# Native load tests (with optimized JVM flags)
-loadtest-native:
-	java $(JAVA_OPTS_CLIENT) -cp $(JAR_PATH) com.match.loadtest.LoadGenerator
-
-loadtest-native-1k:
-	java $(JAVA_OPTS_CLIENT) -cp $(JAR_PATH) com.match.loadtest.LoadGenerator --rate 1000 --duration 60
-
-loadtest-native-10k:
-	java $(JAVA_OPTS_CLIENT) -cp $(JAR_PATH) com.match.loadtest.LoadGenerator --rate 10000 --duration 60
-
-loadtest-native-50k:
-	java $(JAVA_OPTS_CLIENT) -cp $(JAR_PATH) com.match.loadtest.LoadGenerator --rate 50000 --duration 60
-
-loadtest-native-100k:
-	java $(JAVA_OPTS_CLIENT) -cp $(JAR_PATH) com.match.loadtest.LoadGenerator --rate 100000 --duration 60
-
-# Load test with CPU pinning (ultra-low latency)
-loadtest-native-pinned:
-	taskset -c $(CPU_LOADTEST) java $(JAVA_OPTS_CLIENT) \
-	-cp $(JAR_PATH) com.match.loadtest.LoadGenerator --rate 100000 --duration 60
-
-# Load test with in-JVM warmup (recommended for accurate latency measurement)
-# Runs warmup at lower rate, then main test - all in same JVM for JIT optimization
-loadtest-native-warmup:
-	@echo "=== Ultra-Low Latency Test with Warmup ===" && \
-	@echo "Phase 1: JIT Warmup (10s at 50k/s)..." && \
-	java $(JAVA_OPTS_CLIENT) -cp $(JAR_PATH) com.match.loadtest.LoadGenerator --rate 50000 --duration 10 --no-ui && \
-	@echo "Phase 2: Main Test (60s at 100k/s)..." && \
-	java $(JAVA_OPTS_CLIENT) -cp $(JAR_PATH) com.match.loadtest.LoadGenerator --rate 100000 --duration 60
-
-# Full ultra-low latency test with CPU pinning and warmup
+# Ultra-low latency test with built-in warmup (single JVM, no context switch overhead)
 loadtest-ultra:
-	@echo "=== Ultra-Low Latency Benchmark ===" && \
-	@echo "Phase 1: JIT Warmup (15s at 50k/s)..." && \
+	@echo "=== Ultra-Low Latency Benchmark (ZGC) ===" && \
 	taskset -c $(CPU_LOADTEST) java $(JAVA_OPTS_CLIENT) \
-	-cp $(JAR_PATH) com.match.loadtest.LoadGenerator --rate 50000 --duration 15 --no-ui && \
-	sleep 2 && \
-	@echo "Phase 2: Main Test (60s at 100k/s)..." && \
-	taskset -c $(CPU_LOADTEST) java $(JAVA_OPTS_CLIENT) \
-	-cp $(JAR_PATH) com.match.loadtest.LoadGenerator --rate 100000 --duration 60
+	-cp $(JAR_PATH) com.match.loadtest.LoadGenerator \
+	--rate 100000 --duration 60 --ultra --warmup 15
+
+# Maximum performance test with Epsilon GC (no GC pauses, 30s only to avoid OOM)
+loadtest-epsilon:
+	@echo "=== Maximum Performance Benchmark (Epsilon GC - No GC Pauses) ===" && \
+	taskset -c $(CPU_LOADTEST) java $(JAVA_OPTS_EPSILON) \
+	-cp $(JAR_PATH) com.match.loadtest.LoadGenerator \
+	--rate 100000 --duration 30 --ultra --warmup 10
 
 # ==================== OS TUNING ====================
 # Apply OS optimizations for ultra-low latency (requires sudo)
@@ -158,42 +129,3 @@ os-check:
 	@sysctl vm.swappiness vm.dirty_ratio
 	@echo "\n=== CPU Count ==="
 	@nproc
-
-# ==================== DOCKER CLUSTER ====================
-# Docker Compose komutları
-up:
-	docker compose -f docker/docker-compose.yml up -d
-
-down:
-	docker compose -f docker/docker-compose.yml down
-
-logs:
-	docker compose -f docker/docker-compose.yml logs -f
-
-# Yük testi komutları
-loadtest:
-	docker compose -f docker/docker-compose.yml exec loadtest java -cp /home/aeron/jar/cluster.jar com.match.LoadTestClient
-
-loadtest-custom:
-	@read -p "Orders per second: " ops; \
-	read -p "Duration (ms): " duration; \
-	docker compose -f docker/docker-compose.yml exec loadtest java -cp /home/aeron/jar/cluster.jar com.match.LoadTestClient $$ops $$duration
-
-# Hızlı yük testi örnekleri
-loadtest-1k:
-	docker compose -f docker/docker-compose.yml exec loadtest java -cp /home/aeron/jar/cluster.jar com.match.LoadTestClient 1000 60000
-
-loadtest-5k:
-	docker compose -f docker/docker-compose.yml exec loadtest java -cp /home/aeron/jar/cluster.jar com.match.LoadTestClient 5000 60000
-
-loadtest-10k:
-	docker compose -f docker/docker-compose.yml exec loadtest java -cp /home/aeron/jar/cluster.jar com.match.LoadTestClient 10000 60000
-
-# Cluster durumu kontrolü
-status:
-	docker compose -f docker/docker-compose.yml ps
-
-# Temizlik
-clean:
-	docker compose -f docker/docker-compose.yml down -v
-	docker system prune -f

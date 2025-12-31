@@ -41,6 +41,19 @@ public class MetricsCollector {
         timeoutCount.increment();
     }
 
+    /**
+     * Reset all metrics (used after warmup phase)
+     */
+    public void reset() {
+        successCount.reset();
+        failureCount.reset();
+        backpressureCount.reset();
+        timeoutCount.reset();
+        latencyTracker.reset();
+        lastSnapshotTime.set(System.currentTimeMillis());
+        lastSnapshotCount.set(0);
+    }
+
     // Getters for UI
     public long getSuccessCount() {
         return successCount.sum();
@@ -157,6 +170,11 @@ public class MetricsCollector {
             int idx = writeIndex;
             samples[idx % CAPACITY] = latencyNanos;
             writeIndex = idx + 1;  // Volatile write ensures visibility
+        }
+
+        public void reset() {
+            writeIndex = 0;
+            Arrays.fill(samples, 0);
         }
 
         public LatencyStats getStats() {
