@@ -222,7 +222,9 @@ public final class ClusterConfig
                 .logFragmentLimit(64)  // Process more fragments per work cycle
                 // Wheel timer tick resolution
                 .wheelTickResolutionNs(1_000_000)  // 1ms tick resolution
-                .ticksPerWheel(1024);  // More ticks for finer granularity
+                .ticksPerWheel(1024)  // More ticks for finer granularity
+                // Session timeout - close stale sessions to allow reconnection
+                .sessionTimeoutNs(10_000_000_000L);  // 10s session timeout
 
         final List<ClusteredServiceContainer.Context> serviceContexts = new ArrayList<>();
 
