@@ -144,45 +144,51 @@ public class MetricsCollector {
     }
 
     /**
-     * Simple latency tracker with percentile calculations
+     * Lock-free latency tracker with percentile calculations.
+     * Single-writer (duty cycle thread), multi-reader safe.
      */
     private static class LatencyTracker {
         private static final int CAPACITY = 1_000_000;
         private final long[] samples = new long[CAPACITY];
-        private int index = 0;
-        private final Object lock = new Object();
+        private volatile int writeIndex = 0;  // Only written by duty cycle thread
 
         public void record(long latencyNanos) {
-            synchronized (lock) {
-                samples[index % CAPACITY] = latencyNanos;
-                index++;
-            }
+            // Lock-free: single writer pattern
+            int idx = writeIndex;
+            samples[idx % CAPACITY] = latencyNanos;
+            writeIndex = idx + 1;  // Volatile write ensures visibility
         }
 
         public LatencyStats getStats() {
-            synchronized (lock) {
-                if (index == 0) {
-                    return new LatencyStats(0, 0, 0, 0, 0, 0);
-                }
-
-                int count = Math.min(index, CAPACITY);
-                long[] copy = Arrays.copyOf(samples, count);
-                Arrays.sort(copy);
-
-                long min = copy[0];
-                long max = copy[count - 1];
-                long sum = 0;
-                for (int i = 0; i < count; i++) {
-                    sum += copy[i];
-                }
-                long avg = sum / count;
-
-                long p50 = copy[(int) (count * 0.50)];
-                long p95 = copy[(int) (count * 0.95)];
-                long p99 = copy[Math.min(count - 1, (int) (count * 0.99))];
-
-                return new LatencyStats(min, max, avg, p50, p95, p99);
+            int currentIndex = writeIndex;  // Snapshot the index
+            if (currentIndex == 0) {
+                return new LatencyStats(0, 0, 0, 0, 0, 0);
             }
+
+            int count = Math.min(currentIndex, CAPACITY);
+            long[] copy = new long[count];
+
+            // Copy samples - may have slight inconsistency but acceptable for metrics
+            int startIdx = currentIndex > CAPACITY ? currentIndex - CAPACITY : 0;
+            for (int i = 0; i < count; i++) {
+                copy[i] = samples[(startIdx + i) % CAPACITY];
+            }
+
+            Arrays.sort(copy);
+
+            long min = copy[0];
+            long max = copy[count - 1];
+            long sum = 0;
+            for (int i = 0; i < count; i++) {
+                sum += copy[i];
+            }
+            long avg = sum / count;
+
+            long p50 = copy[(int) (count * 0.50)];
+            long p95 = copy[(int) (count * 0.95)];
+            long p99 = copy[Math.min(count - 1, (int) (count * 0.99))];
+
+            return new LatencyStats(min, max, avg, p50, p95, p99);
         }
     }
 

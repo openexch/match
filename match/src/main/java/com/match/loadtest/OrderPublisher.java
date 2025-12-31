@@ -117,19 +117,10 @@ public class OrderPublisher implements Runnable {
                 }
 
             } else {
-                // Small sleep to avoid busy waiting
-                long sleepNanos = Math.min(nextSendTime - now, 1_000_000L); // Max 1ms
-                if (sleepNanos > 100_000L) { // Only sleep if > 100us
-                    try {
-                        Thread.sleep(sleepNanos / 1_000_000L, (int) (sleepNanos % 1_000_000L));
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                } else {
-                    // Busy wait for very short intervals
-                    Thread.yield();
-                }
+                // Ultra-low latency: busy spin with CPU hint
+                // Thread.onSpinWait() is a CPU hint that improves spin-wait loop performance
+                // Avoids context switch overhead of Thread.yield() or Thread.sleep()
+                Thread.onSpinWait();
             }
         }
 

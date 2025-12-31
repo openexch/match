@@ -65,10 +65,13 @@ public class LoadGenerator {
             System.out.println("→ Launching embedded Media Driver...");
         }
 
-        // Initialize Media Driver with optimized settings
+        // Initialize Media Driver with ultra-low latency settings
         this.mediaDriver = MediaDriver.launchEmbedded(
             new MediaDriver.Context()
-                .threadingMode(ThreadingMode.SHARED)
+                .threadingMode(ThreadingMode.DEDICATED)  // Separate threads for sender/receiver/conductor
+                .conductorIdleStrategy(new BusySpinIdleStrategy())
+                .senderIdleStrategy(new BusySpinIdleStrategy())
+                .receiverIdleStrategy(new BusySpinIdleStrategy())
                 .dirDeleteOnStart(true)
                 .dirDeleteOnShutdown(true)
                 .socketSndbufLength(2 * 1024 * 1024)
@@ -321,7 +324,8 @@ public class LoadGenerator {
 
             if (result == Publication.BACK_PRESSURED || result == Publication.ADMIN_ACTION) {
                 metrics.recordBackpressure();
-                Thread.yield();
+                // Busy spin instead of yield - avoids context switch overhead
+                Thread.onSpinWait();
             }
         }
 
