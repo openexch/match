@@ -3,6 +3,8 @@ package com.match.infrastructure.http;// HttpAeronGateway.java
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import com.match.infrastructure.generated.*;
+import com.sun.net.httpserver.Headers;
+import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.aeron.Publication;
 import io.aeron.cluster.client.AeronCluster;
@@ -19,6 +21,7 @@ import org.agrona.concurrent.SleepingMillisIdleStrategy;
 import org.agrona.concurrent.SystemEpochClock;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -54,13 +57,18 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
 
     public HttpController() throws IOException {
 
-        final List<String> hostnames = Arrays.asList("172.16.202.2,172.16.202.3,172.16.202.4".split(","));
+        // Use environment variable or default to localhost for development
+        final String clusterAddresses = System.getenv().getOrDefault("CLUSTER_ADDRESSES", "localhost,localhost,localhost");
+        final String egressHost = System.getenv().getOrDefault("EGRESS_HOST", "localhost");
+        final int egressPort = Integer.parseInt(System.getenv().getOrDefault("EGRESS_PORT", "9091"));
+
+        final List<String> hostnames = Arrays.asList(clusterAddresses.split(","));
         final String ingressEndpoints = io.aeron.samples.cluster.ClusterConfig.ingressEndpoints(
                 hostnames, 9000, ClusterConfig.CLIENT_FACING_PORT_OFFSET);
         this.mediaDriver = MediaDriver.launchEmbedded(new MediaDriver.Context().threadingMode(ThreadingMode.SHARED).dirDeleteOnStart(true).dirDeleteOnShutdown(true));
         final AeronCluster.Context clusterCtx = new AeronCluster.Context().
                 egressListener(this).
-                egressChannel("aeron:udp?endpoint=172.16.202.10:9091").
+                egressChannel("aeron:udp?endpoint=" + egressHost + ":" + egressPort).
                 ingressChannel("aeron:udp?term-length=64k").
                 aeronDirectoryName(mediaDriver.aeronDirectoryName()).
                 ingressEndpoints(ingressEndpoints);
@@ -119,9 +127,124 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             }
         });
 
+        // Root redirect to UI
+        this.server.createContext("/", (exchange) -> {
+            String path = exchange.getRequestURI().getPath();
+
+            if ("/".equals(path)) {
+                // Redirect root to /ui/
+                exchange.getResponseHeaders().set("Location", "/ui/");
+                exchange.sendResponseHeaders(302, -1);
+                exchange.close();
+                return;
+            }
+
+            // 404 for other unhandled paths
+            String response = "Not Found";
+            exchange.sendResponseHeaders(404, response.length());
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(response.getBytes());
+            }
+        });
+
+        // Static file serving for UI
+        this.server.createContext("/ui", this::handleStaticFile);
+
         this.server.setExecutor(null);
         this.server.start();
         System.out.println("🚀 JSON HTTP Gateway started on http://localhost:" + HTTP_PORT);
+        System.out.println("📊 Trading UI available at http://localhost:" + HTTP_PORT + "/ui/");
+    }
+
+    /**
+     * Serve static files from classpath resources.
+     * Supports SPA fallback - serves index.html for unknown routes.
+     */
+    private void handleStaticFile(HttpExchange exchange) throws IOException {
+        String path = exchange.getRequestURI().getPath();
+
+        // Add CORS headers for WebSocket compatibility
+        Headers responseHeaders = exchange.getResponseHeaders();
+        responseHeaders.set("Access-Control-Allow-Origin", "*");
+        responseHeaders.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+        responseHeaders.set("Access-Control-Allow-Headers", "Content-Type");
+
+        // Handle CORS preflight
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            exchange.close();
+            return;
+        }
+
+        // Remove /ui prefix to get relative path
+        String resourcePath = path.replaceFirst("^/ui", "");
+        if (resourcePath.isEmpty() || resourcePath.equals("/")) {
+            resourcePath = "/index.html";
+        }
+
+        // Security: prevent path traversal
+        if (resourcePath.contains("..")) {
+            exchange.sendResponseHeaders(403, -1);
+            exchange.close();
+            return;
+        }
+
+        // Try to load resource from classpath
+        String fullPath = "/static/ui" + resourcePath;
+        InputStream is = getClass().getResourceAsStream(fullPath);
+
+        // SPA fallback: serve index.html for non-file routes
+        if (is == null && !resourcePath.contains(".")) {
+            is = getClass().getResourceAsStream("/static/ui/index.html");
+            resourcePath = "/index.html";
+        }
+
+        if (is == null) {
+            String response = "Not Found: " + resourcePath;
+            exchange.sendResponseHeaders(404, response.length());
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(response.getBytes());
+            }
+            return;
+        }
+
+        // Set content type based on file extension
+        String contentType = getContentType(resourcePath);
+        responseHeaders.set("Content-Type", contentType);
+
+        // Cache static assets (except HTML)
+        if (!contentType.contains("html")) {
+            responseHeaders.set("Cache-Control", "public, max-age=31536000");
+        } else {
+            responseHeaders.set("Cache-Control", "no-cache");
+        }
+
+        // Stream the file
+        byte[] content = is.readAllBytes();
+        is.close();
+
+        exchange.sendResponseHeaders(200, content.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(content);
+        }
+    }
+
+    /**
+     * Get content type based on file extension.
+     */
+    private String getContentType(String path) {
+        if (path.endsWith(".html")) return "text/html; charset=UTF-8";
+        if (path.endsWith(".js")) return "application/javascript; charset=UTF-8";
+        if (path.endsWith(".css")) return "text/css; charset=UTF-8";
+        if (path.endsWith(".json")) return "application/json; charset=UTF-8";
+        if (path.endsWith(".png")) return "image/png";
+        if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
+        if (path.endsWith(".svg")) return "image/svg+xml";
+        if (path.endsWith(".ico")) return "image/x-icon";
+        if (path.endsWith(".woff")) return "font/woff";
+        if (path.endsWith(".woff2")) return "font/woff2";
+        if (path.endsWith(".ttf")) return "font/ttf";
+        return "application/octet-stream";
     }
 
     // Diğer metotlar (startPolling, sendMessage, onMessage, vb.) bir öncekiyle aynı...
@@ -129,7 +252,20 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
     public void startPolling() {
         final IdleStrategy idleStrategy = new SleepingMillisIdleStrategy(100);
         while (!cluster.isClosed()) {
-            idleStrategy.idle(cluster.pollEgress());
+            // Poll egress and send keepalive
+            int work = cluster.pollEgress();
+
+            // Send cluster heartbeat roughly every 250ms
+            final long now = SystemEpochClock.INSTANCE.time();
+            if (now >= (lastHeartbeatTime + HEARTBEAT_INTERVAL)) {
+                lastHeartbeatTime = now;
+                if (connectionState == ConnectionState.CONNECTED) {
+                    cluster.sendKeepAlive();
+                    work++;
+                }
+            }
+
+            idleStrategy.idle(work);
         }
     }
 

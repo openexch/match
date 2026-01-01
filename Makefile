@@ -36,9 +36,21 @@ CPU_NODE1 = 4-7
 CPU_NODE2 = 8-11
 CPU_LOADTEST = 12-19
 
-# Build the project
-build:
+# Build the project (Java + UI)
+build: build-ui
 	cd match && mvn clean package -DskipTests -q
+
+# Build only Java
+build-java:
+	cd match && mvn clean package -DskipTests -q
+
+# Build the React UI
+build-ui:
+	cd match/ui && npm install && npm run build
+
+# Dev mode for UI (with hot reload)
+dev-ui:
+	cd match/ui && npm run dev
 
 # Clean cluster data directories
 clean-native:
@@ -71,6 +83,18 @@ start-cluster-pinned: clean-native
 	BASE_DIR=/tmp/aeron-cluster/node2 taskset -c $(CPU_NODE2) java $(JAVA_OPTS) -jar $(JAR_PATH) > /tmp/aeron-cluster/node2.log 2>&1 &
 	@sleep 3
 	@echo "Cluster started with CPU pinning. Check logs: tail -f /tmp/aeron-cluster/node*.log"
+
+# Start HTTP gateway (serves UI on port 8080)
+start-gateway:
+	@echo "Starting HTTP Gateway on port 8080..."
+	java $(JAVA_OPTS) -cp $(JAR_PATH) com.match.infrastructure.http.HttpController
+
+# Start HTTP gateway in background
+start-gateway-bg:
+	@echo "Starting HTTP Gateway in background..."
+	@java $(JAVA_OPTS) -cp $(JAR_PATH) com.match.infrastructure.http.HttpController > /tmp/http-gateway.log 2>&1 &
+	@sleep 3
+	@echo "HTTP Gateway started. UI at http://localhost:8080/ui/"
 
 # Stop native cluster
 stop-cluster:

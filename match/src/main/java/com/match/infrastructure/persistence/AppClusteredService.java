@@ -2,6 +2,10 @@ package com.match.infrastructure.persistence;
 
 import com.match.application.engine.Engine;
 import com.match.application.orderbook.DirectMatchingEngine;
+import com.match.application.publisher.MatchEventPublisher;
+import com.match.infrastructure.websocket.MarketPublisher;
+import com.match.infrastructure.websocket.SubscriptionManager;
+import com.match.infrastructure.websocket.WebSocketServer;
 import io.aeron.cluster.service.ClientSession;
 import io.aeron.cluster.service.Cluster;
 import io.aeron.cluster.service.ClusteredService;
@@ -20,11 +24,19 @@ import com.match.infrastructure.Logger;
 public class AppClusteredService implements ClusteredService {
     private static final Logger logger = Logger.getLogger(AppClusteredService.class);
 
+    // WebSocket server port
+    private static final int WEBSOCKET_PORT = 8081;
+
     private final Engine engine = new Engine();
     private final ClientSessions clientSessions = new ClientSessions();
     private final SessionMessageContextImpl context = new SessionMessageContextImpl(clientSessions);
     private final TimerManager timerManager = new TimerManager(context);
     private final SbeDemuxer sbeDemuxer = new SbeDemuxer(engine);
+
+    // Event publishing infrastructure
+    private final MatchEventPublisher eventPublisher = new MatchEventPublisher();
+    private final SubscriptionManager subscriptionManager = new SubscriptionManager();
+    private WebSocketServer webSocketServer;
 
     // Store cluster reference for snapshot idle strategy
     private Cluster cluster;
@@ -34,8 +46,49 @@ public class AppClusteredService implements ClusteredService {
         this.cluster = cluster;
         context.setIdleStrategy(cluster.idleStrategy());
         timerManager.setCluster(cluster);
+
+        // Load snapshot if available
         if (snapshotImage != null) {
             loadSnapshot(snapshotImage);
+        }
+
+        // Initialize event publishing for BTC-USD market
+        initializeEventPublishing();
+    }
+
+    /**
+     * Initialize LMAX Disruptor-based event publishing and WebSocket server.
+     */
+    private void initializeEventPublishing() {
+        try {
+            // Create per-market publisher for BTC-USD
+            MarketPublisher btcPublisher = new MarketPublisher(
+                Engine.MARKET_BTC_USD,
+                "BTC-USD",
+                subscriptionManager
+            );
+
+            // Wire matching engine to publisher for direct order book access
+            // Order book snapshots are fetched every 50ms on publisher thread (not matching engine thread)
+            btcPublisher.setMatchingEngine(engine.getEngine(Engine.MARKET_BTC_USD));
+
+            // Initialize Disruptor ring buffer for BTC-USD market
+            eventPublisher.initMarket(Engine.MARKET_BTC_USD, btcPublisher);
+
+            // Wire publisher to engine (for trade events only)
+            engine.setEventPublisher(eventPublisher);
+
+            // Start the Disruptor (creates publisher threads)
+            eventPublisher.start();
+
+            // Start WebSocket server for external clients
+            webSocketServer = new WebSocketServer(WEBSOCKET_PORT, subscriptionManager);
+            webSocketServer.start();
+
+            logger.info("Event publishing initialized with WebSocket on port " + WEBSOCKET_PORT);
+        } catch (Exception e) {
+            logger.warn("Failed to initialize event publishing: " + e.getMessage());
+            // Continue without publishing - engine will still work
         }
     }
 
@@ -53,6 +106,11 @@ public class AppClusteredService implements ClusteredService {
             long orderIdGen = buffer.getLong(pos);
             pos += 8;
             engine.setOrderIdGenerator(orderIdGen);
+
+            // Read trade ID generator (for event publisher)
+            long tradeIdGen = buffer.getLong(pos);
+            pos += 8;
+            eventPublisher.setTradeIdGenerator(tradeIdGen);
 
             // Read number of markets
             int numMarkets = buffer.getInt(pos);
@@ -94,7 +152,8 @@ public class AppClusteredService implements ClusteredService {
             // Continue polling until no more fragments
         }
 
-        System.out.println("Snapshot loaded. OrderId: " + engine.getOrderIdGenerator());
+        System.out.println("Snapshot loaded. OrderId: " + engine.getOrderIdGenerator() +
+                          ", TradeId: " + eventPublisher.getTradeIdGenerator());
     }
 
     @Override
@@ -144,6 +203,10 @@ public class AppClusteredService implements ClusteredService {
         buffer.putLong(pos, engine.getOrderIdGenerator());
         pos += 8;
 
+        // Write trade ID generator (for event publisher)
+        buffer.putLong(pos, eventPublisher.getTradeIdGenerator());
+        pos += 8;
+
         // Get all engines
         Int2ObjectHashMap<DirectMatchingEngine> engines = engine.getEngines();
 
@@ -190,7 +253,8 @@ public class AppClusteredService implements ClusteredService {
             cluster.idleStrategy().idle();
         }
 
-        System.out.println("Snapshot complete. Size: " + pos + " bytes, OrderId: " + engine.getOrderIdGenerator());
+        System.out.println("Snapshot complete. Size: " + pos + " bytes, OrderId: " + engine.getOrderIdGenerator() +
+                          ", TradeId: " + eventPublisher.getTradeIdGenerator());
     }
 
     @Override
@@ -201,6 +265,21 @@ public class AppClusteredService implements ClusteredService {
     @Override
     public void onTerminate(final Cluster cluster) {
         logger.info("Terminating cluster service");
+
+        // Shutdown WebSocket server
+        if (webSocketServer != null) {
+            try {
+                webSocketServer.close();
+            } catch (Exception e) {
+                logger.warn("Error closing WebSocket server: " + e.getMessage());
+            }
+        }
+
+        // Shutdown event publisher (Disruptor)
+        if (eventPublisher != null) {
+            eventPublisher.shutdown();
+        }
+
         // Close all active sessions immediately
         clientSessions.getAllSessions().forEach(session -> {
             try {
@@ -209,6 +288,7 @@ public class AppClusteredService implements ClusteredService {
                 logger.warn("Error closing session %d: %s", session, e.getMessage());
             }
         });
+
         // Close engine
         engine.close();
 

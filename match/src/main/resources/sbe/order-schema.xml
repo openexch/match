@@ -2,7 +2,7 @@
 <sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
                    package="com.match.infrastructure.generated"
                    id="1"
-                   version="1"
+                   version="2"
                    semanticVersion="5.2"
                    description="Match Order Schema - Optimized for Ultra-Low Latency"
 >
@@ -26,6 +26,18 @@
             <validValue name="CREATE">0</validValue>
             <validValue name="CANCEL">1</validValue>
             <validValue name="UPDATE">2</validValue>
+        </enum>
+        <enum name="OrderStatus" encodingType="uint8">
+            <validValue name="NEW">0</validValue>
+            <validValue name="PARTIALLY_FILLED">1</validValue>
+            <validValue name="FILLED">2</validValue>
+            <validValue name="CANCELLED">3</validValue>
+            <validValue name="REJECTED">4</validValue>
+        </enum>
+        <enum name="BookUpdateType" encodingType="uint8">
+            <validValue name="NEW_LEVEL">0</validValue>
+            <validValue name="UPDATE_LEVEL">1</validValue>
+            <validValue name="DELETE_LEVEL">2</validValue>
         </enum>
     </types>
 
@@ -54,6 +66,46 @@
         <field name="marketId" id="5" type="int32"/>
         <field name="orderType" id="6" type="OrderType"/>
         <field name="orderSide" id="7" type="OrderSide"/>
+    </sbe:message>
+
+    <!-- ========== OUTBOUND MESSAGES (Server to Client) ========== -->
+
+    <!-- Trade Execution - Published for each match during order processing -->
+    <sbe:message name="TradeExecution" id="4" description="Trade execution/fill event">
+        <field name="tradeId" id="1" type="int64"/>
+        <field name="takerOrderId" id="2" type="int64"/>
+        <field name="makerOrderId" id="3" type="int64"/>
+        <field name="takerUserId" id="4" type="int64"/>
+        <field name="makerUserId" id="5" type="int64"/>
+        <field name="price" id="6" type="int64"/>
+        <field name="quantity" id="7" type="int64"/>
+        <field name="marketId" id="8" type="int32"/>
+        <field name="takerSide" id="9" type="OrderSide"/>
+        <field name="timestamp" id="10" type="int64"/>
+    </sbe:message>
+
+    <!-- Order Status Update - Published when order state changes -->
+    <sbe:message name="OrderStatusUpdate" id="5" description="Order status update">
+        <field name="orderId" id="1" type="int64"/>
+        <field name="userId" id="2" type="int64"/>
+        <field name="price" id="3" type="int64"/>
+        <field name="remainingQty" id="4" type="int64"/>
+        <field name="filledQty" id="5" type="int64"/>
+        <field name="marketId" id="6" type="int32"/>
+        <field name="orderSide" id="7" type="OrderSide"/>
+        <field name="status" id="8" type="OrderStatus"/>
+        <field name="timestamp" id="9" type="int64"/>
+    </sbe:message>
+
+    <!-- Order Book Update - Published for level changes -->
+    <sbe:message name="OrderBookUpdate" id="6" description="Order book level update">
+        <field name="price" id="1" type="int64"/>
+        <field name="quantity" id="2" type="int64"/>
+        <field name="orderCount" id="3" type="int32"/>
+        <field name="marketId" id="4" type="int32"/>
+        <field name="side" id="5" type="OrderSide"/>
+        <field name="updateType" id="6" type="BookUpdateType"/>
+        <field name="timestamp" id="7" type="int64"/>
     </sbe:message>
 
 </sbe:messageSchema>

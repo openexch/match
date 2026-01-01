@@ -1,0 +1,89 @@
+.order-book {
+  background: #1a1a2e;
+  border-radius: 8px;
+  padding: 16px;
+  min-width: 350px;
+}
+
+.order-book h2 {
+  margin: 0 0 16px 0;
+  color: #e0e0e0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.order-book-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr 80px;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #333;
+  color: #888;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.order-book-asks,
+.order-book-bids {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.order-book-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 80px;
+  gap: 8px;
+  padding: 4px 0;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 13px;
+  position: relative;
+}
+
+.depth-bar {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  opacity: 0.15;
+  pointer-events: none;
+}
+
+.bid-bar {
+  background: #0ecb81;
+}
+
+.ask-bar {
+  background: #f6465d;
+}
+
+.price {
+  font-weight: 500;
+}
+
+.bid-price {
+  color: #0ecb81;
+}
+
+.ask-price {
+  color: #f6465d;
+}
+
+.quantity {
+  color: #e0e0e0;
+  text-align: right;
+}
+
+.order-count {
+  color: #888;
+  text-align: right;
+}
+
+.order-book-spread {
+  padding: 8px 0;
+  text-align: center;
+  color: #888;
+  font-size: 12px;
+  border-top: 1px solid #333;
+  border-bottom: 1px solid #333;
+  margin: 4px 0;
+}

@@ -1,0 +1,78 @@
+.trade-list {
+  background: #1a1a2e;
+  border-radius: 8px;
+  padding: 16px;
+  min-width: 350px;
+}
+
+.trade-list h2 {
+  margin: 0 0 16px 0;
+  color: #e0e0e0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.trade-list-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr 100px;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #333;
+  color: #888;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.trade-list-body {
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.trade-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 100px;
+  gap: 8px;
+  padding: 6px 0;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 13px;
+  border-bottom: 1px solid #222;
+  animation: fadeIn 0.2s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    background: rgba(255, 255, 255, 0.1);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+.trade-row.buy .trade-price {
+  color: #0ecb81;
+}
+
+.trade-row.sell .trade-price {
+  color: #f6465d;
+}
+
+.trade-price {
+  font-weight: 500;
+}
+
+.trade-quantity {
+  color: #e0e0e0;
+  text-align: right;
+}
+
+.trade-time {
+  color: #888;
+  text-align: right;
+  font-size: 11px;
+}
+
+.no-trades {
+  padding: 20px;
+  text-align: center;
+  color: #666;
+}

@@ -34,10 +34,14 @@ public class DirectIndexOrderBook {
     private static final int LEVEL_FIELDS = 4;
     private final long[] levels;
 
-    // Best price tracking
-    private int bestPriceIdx = -1;     // Index of best price (-1 = empty)
-    private int worstPriceIdx = -1;    // Index of worst price
-    private int activeLevelCount = 0;
+    // Best price tracking - volatile for cross-thread visibility (scheduler reads these)
+    private volatile int bestPriceIdx = -1;     // Index of best price (-1 = empty)
+    private volatile int worstPriceIdx = -1;    // Index of worst price
+    private volatile int activeLevelCount = 0;
+
+    // Version counter for memory barrier - incremented on every modification
+    // Readers should read this BEFORE reading levels array to ensure visibility
+    private volatile long version = 0;
 
     // Direction: true = ascending (ask), false = descending (bid)
     private final boolean ascending;
@@ -169,6 +173,9 @@ public class DirectIndexOrderBook {
         // Store order location for O(1) cancel
         int locationIdx = (int) (orderId % MAX_ACTIVE_ORDERS);
         orderLocations[locationIdx] = packLocation(priceIdx, slot);
+
+        // Memory barrier - increment version AFTER all writes complete
+        version++;
     }
 
     /**
@@ -217,6 +224,8 @@ public class DirectIndexOrderBook {
             updateBestWorstPrice(priceIdx, false);
         }
 
+        // Memory barrier
+        version++;
         return true;
     }
 
@@ -240,6 +249,10 @@ public class DirectIndexOrderBook {
         // Update level total
         int levelBase = priceIdx * LEVEL_FIELDS;
         levels[levelBase + 3] -= reduceBy;
+
+        // Memory barrier - increment version AFTER all writes complete
+        // This is critical for partial fills to be visible to readers
+        version++;
 
         // If fully filled, treat as cancelled
         if (newQty <= 0) {
@@ -324,6 +337,28 @@ public class DirectIndexOrderBook {
         }
 
         return orders[orderBase + 2];
+    }
+
+    /**
+     * Get head order user ID. O(1)
+     * Used for publishing trade executions with maker user info.
+     */
+    public long getHeadOrderUserId(int priceIdx) {
+        if (priceIdx < 0 || priceIdx >= maxPriceLevels) return 0;
+        int levelBase = priceIdx * LEVEL_FIELDS;
+        if (levels[levelBase + 2] == 0) return 0;
+
+        int headSlot = (int) levels[levelBase];
+        int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + headSlot) * ORDER_FIELDS;
+
+        // Skip deleted orders
+        while (orders[orderBase + 2] == 0) {
+            int nextSlot = (int) orders[orderBase + 3];
+            if (nextSlot < 0) return 0;
+            orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + nextSlot) * ORDER_FIELDS;
+        }
+
+        return orders[orderBase + 1]; // userId is at index 1
     }
 
     /**
@@ -435,6 +470,14 @@ public class DirectIndexOrderBook {
 
     public long getBasePrice() {
         return basePrice;
+    }
+
+    /**
+     * Get current version for memory barrier.
+     * Reading this establishes happens-before with last modification.
+     */
+    public long getVersion() {
+        return version;
     }
 
     // ==================== Snapshot Support ====================

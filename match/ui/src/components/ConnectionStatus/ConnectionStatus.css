@@ -1,0 +1,59 @@
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 20px;
+  background: #2a2a40;
+  font-size: 12px;
+}
+
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.connection-status.connected .status-indicator {
+  background: #0ecb81;
+  box-shadow: 0 0 8px #0ecb81;
+}
+
+.connection-status.connecting .status-indicator {
+  background: #f0b90b;
+  animation: pulse 1s infinite;
+}
+
+.connection-status.disconnected .status-indicator,
+.connection-status.error .status-indicator {
+  background: #f6465d;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.status-text {
+  color: #e0e0e0;
+}
+
+.reconnect-btn {
+  margin-left: 8px;
+  padding: 4px 12px;
+  background: #0ecb81;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.reconnect-btn:hover {
+  background: #0da870;
+}

@@ -224,6 +224,7 @@ public enum OrderScenario {
         public final double price;
         public final double quantity;
         public final String market;
+        public final double marketOrderBudget; // Budget for market buy orders
 
         public OrderParams(String orderType, String orderSide, double price, double quantity, String market) {
             this.orderType = orderType;
@@ -231,9 +232,17 @@ public enum OrderScenario {
             this.price = price;
             this.quantity = quantity;
             this.market = market;
+            // For market orders, estimate budget based on high side of price range (~$120k)
+            // Must be higher than ask prices to ensure matching
+            this.marketOrderBudget = quantity * 120000.0;
         }
 
         public double getTotalPrice() {
+            // For market BUY orders, return budget (estimated cost)
+            // For limit orders, return price * quantity
+            if ("MARKET".equals(orderType) && "BID".equals(orderSide)) {
+                return marketOrderBudget;
+            }
             return price * quantity;
         }
     }

@@ -18,6 +18,8 @@
         <aeron.version>1.48.1</aeron.version>
         <agrona.version>1.23.0</agrona.version>
         <sbe.version>1.33.1</sbe.version>
+        <disruptor.version>4.0.0</disruptor.version>
+        <netty.version>4.1.100.Final</netty.version>
     </properties>
 
     <dependencies>
@@ -46,6 +48,18 @@
             <groupId>uk.co.real-logic</groupId>
             <artifactId>sbe-tool</artifactId>
             <version>${sbe.version}</version>
+        </dependency>
+        <!-- LMAX Disruptor for lock-free event passing -->
+        <dependency>
+            <groupId>com.lmax</groupId>
+            <artifactId>disruptor</artifactId>
+            <version>${disruptor.version}</version>
+        </dependency>
+        <!-- Netty for WebSocket server -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+            <version>${netty.version}</version>
         </dependency>
     </dependencies>
 

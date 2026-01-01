@@ -12,8 +12,9 @@ public class DirectMatchingEngine {
 
     // Match result storage - pre-allocated
     private static final int MAX_MATCHES_PER_ORDER = 100;
+    private static final int MATCH_FIELDS = 4; // makerOrderId, makerUserId, price, quantity
 
-    // Match data: [makerOrderId, price, quantity] per match
+    // Match data: [makerOrderId, makerUserId, price, quantity] per match
     private final long[] matchResults;
     private int matchCount;
 
@@ -35,7 +36,7 @@ public class DirectMatchingEngine {
     public DirectMatchingEngine(long basePrice, long maxPrice, long tickSize) {
         this.askBook = new DirectIndexOrderBook(basePrice, maxPrice, tickSize, true);  // ascending
         this.bidBook = new DirectIndexOrderBook(basePrice, maxPrice, tickSize, false); // descending
-        this.matchResults = new long[MAX_MATCHES_PER_ORDER * 3]; // 3 fields per match
+        this.matchResults = new long[MAX_MATCHES_PER_ORDER * MATCH_FIELDS]; // 4 fields per match
     }
 
     /**
@@ -141,17 +142,19 @@ public class DirectMatchingEngine {
             long makerOrderId = book.getHeadOrderId(priceIdx);
             if (makerOrderId < 0) break;
 
+            long makerUserId = book.getHeadOrderUserId(priceIdx);
             long makerQty = book.getHeadOrderQuantity(priceIdx);
             long matchQty = Math.min(takerRemainingQty, makerQty);
 
             if (matchQty <= 0) break;
 
-            // Record match
+            // Record match with maker userId for publishing
             if (matchCount < MAX_MATCHES_PER_ORDER) {
-                int idx = matchCount * 3;
+                int idx = matchCount * MATCH_FIELDS;
                 matchResults[idx] = makerOrderId;
-                matchResults[idx + 1] = price;
-                matchResults[idx + 2] = matchQty;
+                matchResults[idx + 1] = makerUserId;
+                matchResults[idx + 2] = price;
+                matchResults[idx + 3] = matchQty;
                 matchCount++;
             }
 
@@ -169,6 +172,7 @@ public class DirectMatchingEngine {
             long makerOrderId = book.getHeadOrderId(priceIdx);
             if (makerOrderId < 0) break;
 
+            long makerUserId = book.getHeadOrderUserId(priceIdx);
             long makerQty = book.getHeadOrderQuantity(priceIdx);
 
             // Calculate max we can buy with remaining budget
@@ -180,12 +184,13 @@ public class DirectMatchingEngine {
             // Calculate cost
             long cost = FixedPoint.multiply(matchQty, price);
 
-            // Record match
+            // Record match with maker userId for publishing
             if (matchCount < MAX_MATCHES_PER_ORDER) {
-                int idx = matchCount * 3;
+                int idx = matchCount * MATCH_FIELDS;
                 matchResults[idx] = makerOrderId;
-                matchResults[idx + 1] = price;
-                matchResults[idx + 2] = matchQty;
+                matchResults[idx + 1] = makerUserId;
+                matchResults[idx + 2] = price;
+                matchResults[idx + 3] = matchQty;
                 matchCount++;
             }
 
@@ -218,15 +223,19 @@ public class DirectMatchingEngine {
     }
 
     public long getMatchMakerOrderId(int matchIndex) {
-        return matchResults[matchIndex * 3];
+        return matchResults[matchIndex * MATCH_FIELDS];
+    }
+
+    public long getMatchMakerUserId(int matchIndex) {
+        return matchResults[matchIndex * MATCH_FIELDS + 1];
     }
 
     public long getMatchPrice(int matchIndex) {
-        return matchResults[matchIndex * 3 + 1];
+        return matchResults[matchIndex * MATCH_FIELDS + 2];
     }
 
     public long getMatchQuantity(int matchIndex) {
-        return matchResults[matchIndex * 3 + 2];
+        return matchResults[matchIndex * MATCH_FIELDS + 3];
     }
 
     public long getTakerRemainingQuantity() {
@@ -262,6 +271,91 @@ public class DirectMatchingEngine {
     public boolean isBidEmpty() {
         return bidBook.isEmpty();
     }
+
+    // ==================== Top N Levels for Publishing ====================
+
+    // Pre-allocated arrays for top N levels (avoid allocations)
+    private static final int MAX_PUBLISH_LEVELS = 20;
+    private final long[] topBidPrices = new long[MAX_PUBLISH_LEVELS];
+    private final long[] topBidQuantities = new long[MAX_PUBLISH_LEVELS];
+    private final int[] topBidOrderCounts = new int[MAX_PUBLISH_LEVELS];
+    private final long[] topAskPrices = new long[MAX_PUBLISH_LEVELS];
+    private final long[] topAskQuantities = new long[MAX_PUBLISH_LEVELS];
+    private final int[] topAskOrderCounts = new int[MAX_PUBLISH_LEVELS];
+    private int topBidCount;
+    private int topAskCount;
+
+    // Version tracking for collected data - stores version at collection time
+    private long collectedBidVersion;
+    private long collectedAskVersion;
+
+    /**
+     * Collect top N price levels from both books.
+     * ZERO allocations - uses pre-allocated arrays.
+     *
+     * @param maxLevels Maximum levels to collect (up to 20)
+     */
+    public void collectTopLevels(int maxLevels) {
+        int levels = Math.min(maxLevels, MAX_PUBLISH_LEVELS);
+
+        // Read version FIRST to establish memory barrier (acquires latest values)
+        // Store versions for later use - this prevents compiler from optimizing away the reads
+        collectedBidVersion = bidBook.getVersion();
+        collectedAskVersion = askBook.getVersion();
+
+        // Collect top bids (descending price order)
+        topBidCount = 0;
+        if (!bidBook.isEmpty()) {
+            int priceIdx = bidBook.getBestPriceIndex();
+            while (priceIdx >= 0 && topBidCount < levels) {
+                long price = bidBook.getBasePrice() + (long) priceIdx * bidBook.getTickSize();
+                long qty = bidBook.getTotalQuantity(priceIdx);
+                int orderCount = bidBook.getOrderCount(priceIdx);
+
+                if (qty > 0) {
+                    topBidPrices[topBidCount] = price;
+                    topBidQuantities[topBidCount] = qty;
+                    topBidOrderCounts[topBidCount] = orderCount;
+                    topBidCount++;
+                }
+
+                priceIdx = bidBook.nextPriceIndex(priceIdx);
+            }
+        }
+
+        // Collect top asks (ascending price order)
+        topAskCount = 0;
+        if (!askBook.isEmpty()) {
+            int priceIdx = askBook.getBestPriceIndex();
+            while (priceIdx >= 0 && topAskCount < levels) {
+                long price = askBook.getBasePrice() + (long) priceIdx * askBook.getTickSize();
+                long qty = askBook.getTotalQuantity(priceIdx);
+                int orderCount = askBook.getOrderCount(priceIdx);
+
+                if (qty > 0) {
+                    topAskPrices[topAskCount] = price;
+                    topAskQuantities[topAskCount] = qty;
+                    topAskOrderCounts[topAskCount] = orderCount;
+                    topAskCount++;
+                }
+
+                priceIdx = askBook.nextPriceIndex(priceIdx);
+            }
+        }
+    }
+
+    // Accessors for collected top levels
+    public int getTopBidCount() { return topBidCount; }
+    public int getTopAskCount() { return topAskCount; }
+    public long[] getTopBidPrices() { return topBidPrices; }
+    public long[] getTopBidQuantities() { return topBidQuantities; }
+    public int[] getTopBidOrderCounts() { return topBidOrderCounts; }
+    public long[] getTopAskPrices() { return topAskPrices; }
+    public long[] getTopAskQuantities() { return topAskQuantities; }
+    public int[] getTopAskOrderCounts() { return topAskOrderCounts; }
+    public long getCollectedBidVersion() { return collectedBidVersion; }
+    public long getCollectedAskVersion() { return collectedAskVersion; }
+    public long getCollectedVersion() { return Math.max(collectedBidVersion, collectedAskVersion); }
 
     // ==================== Snapshot Support ====================
 
