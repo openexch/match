@@ -172,9 +172,11 @@ public class LoadGenerator {
         }
 
         // Start metrics reporting / UI updates
+        // UI mode: 100ms for smooth animation, text mode: 2s for compact output
+        int updateIntervalMs = useUI ? 100 : 2000;
         metricsReporter.scheduleAtFixedRate(
             this::updateMetrics,
-            100, 100, TimeUnit.MILLISECONDS  // Update every 100ms for smooth UI
+            updateIntervalMs, updateIntervalMs, TimeUnit.MILLISECONDS
         );
 
         // Start single cluster duty cycle thread

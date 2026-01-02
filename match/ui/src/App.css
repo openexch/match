@@ -1,64 +1,296 @@
+/* CSS Variables for consistent theming */
+:root {
+  --bg-primary: #0d0d1a;
+  --bg-secondary: #1a1a2e;
+  --bg-tertiary: #2d2d44;
+  --border-color: #2d2d44;
+  --text-primary: #e0e0e0;
+  --text-secondary: #888;
+  --text-muted: #666;
+  --accent-green: #0ecb81;
+  --accent-green-hover: #0da870;
+  --accent-red: #f6465d;
+  --accent-red-hover: #d93d51;
+  --accent-yellow: #f0b90b;
+  --font-mono: 'SF Mono', Monaco, 'Courier New', monospace;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: #0d0d1a;
-  color: #e0e0e0;
-  min-height: 100vh;
+html, body, #root {
+  height: 100%;
 }
 
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* App Layout */
 .app {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  max-width: 1200px;
+  height: 100vh;
+  max-width: 1800px;
   margin: 0 auto;
-  padding: 20px;
+  padding: 0 16px;
 }
 
+/* Header */
 .app-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 0;
-  border-bottom: 1px solid #333;
-  margin-bottom: 24px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
-.app-header h1 {
-  font-size: 28px;
-  font-weight: 700;
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.admin-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  padding: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.admin-btn:hover {
+  background: #3a3a50;
+  color: var(--text-primary);
+  border-color: #4a4a60;
+}
+
+.admin-btn svg {
+  display: block;
+}
+
+/* Logo */
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo-icon {
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(135deg, var(--accent-green), #00a8ff);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 800;
   color: #fff;
 }
 
+.logo-text {
+  font-size: 22px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.5px;
+}
+
+/* Stats Bar */
+.stats-bar {
+  padding: 16px 0;
+  flex-shrink: 0;
+}
+
+/* Main Trading Area */
 .app-main {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
+  grid-template-columns: 320px 1fr 360px;
+  gap: 16px;
   flex: 1;
+  min-height: 0;
+  padding: 16px 0;
 }
 
-@media (max-width: 768px) {
-  .app-main {
-    grid-template-columns: 1fr;
-  }
+.left-panel,
+.center-panel,
+.right-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
+.center-panel {
+  min-width: 0;
+}
+
+/* Orders Panel */
+.orders-panel {
+  flex-shrink: 0;
+  max-height: 250px;
+  padding-bottom: 16px;
+}
+
+/* Footer */
 .app-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 0;
-  border-top: 1px solid #333;
-  margin-top: 24px;
-  color: #666;
+  padding: 12px 0;
+  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.footer-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
   font-size: 12px;
 }
 
+.footer-left .separator {
+  color: var(--border-color);
+}
+
+.footer-left .version {
+  color: var(--text-secondary);
+}
+
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-indicator {
+  width: 8px;
+  height: 8px;
+  background: var(--accent-green);
+  border-radius: 50%;
+  animation: pulse 2s ease-in-out infinite;
+}
+
 .update-rate {
-  color: #0ecb81;
+  font-size: 12px;
+  color: var(--accent-green);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Responsive Design */
+@media (max-width: 1400px) {
+  .app-main {
+    grid-template-columns: 280px 1fr 320px;
+  }
+}
+
+@media (max-width: 1200px) {
+  .app-main {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .left-panel {
+    grid-column: 1 / -1;
+  }
+
+  .center-panel {
+    grid-column: 1;
+  }
+
+  .right-panel {
+    grid-column: 2;
+  }
+}
+
+@media (max-width: 768px) {
+  .app {
+    padding: 0 12px;
+  }
+
+  .app-header {
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px 0;
+  }
+
+  .header-left {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .header-right {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .stats-bar {
+    overflow-x: auto;
+  }
+
+  .app-main {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .left-panel,
+  .center-panel,
+  .right-panel {
+    grid-column: 1;
+  }
+
+  .app-footer {
+    flex-direction: column;
+    gap: 8px;
+    text-align: center;
+  }
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3d3d5c;
+}
+
+/* Selection */
+::selection {
+  background: rgba(14, 203, 129, 0.3);
+  color: #fff;
 }

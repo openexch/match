@@ -2,6 +2,7 @@ package com.match.infrastructure.websocket;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.match.application.publisher.MarketDataBroadcaster;
 import com.match.application.publisher.MarketEventHandler;
 import com.match.application.publisher.OrderStatusType;
 import com.match.application.publisher.PublishEvent;
@@ -38,6 +39,9 @@ public class MarketPublisher implements MarketEventHandler {
     private final String marketName;
     private final SubscriptionManager subscriptionManager;
 
+    // Optional broadcaster for cluster mode (Aeron egress instead of WebSocket)
+    private volatile MarketDataBroadcaster broadcaster;
+
     // Reference to matching engine for order book snapshots (set after construction)
     private volatile com.match.application.orderbook.DirectMatchingEngine matchingEngine;
 
@@ -67,6 +71,10 @@ public class MarketPublisher implements MarketEventHandler {
     private long lastAskQty = -1;
     private int lastBidCount = -1;
     private int lastAskCount = -1;
+
+    // Diagnostic counters
+    private long flushCount = 0;
+    private long flushErrorCount = 0;
 
     public MarketPublisher(int marketId, String marketName, SubscriptionManager subscriptionManager) {
         this.marketId = marketId;
@@ -138,6 +146,15 @@ public class MarketPublisher implements MarketEventHandler {
         this.matchingEngine = engine;
     }
 
+    /**
+     * Set broadcaster for cluster mode.
+     * When set, market data is sent via broadcaster (Aeron egress) instead of WebSocket.
+     * This allows the cluster to broadcast to gateways which then relay to WebSocket clients.
+     */
+    public void setBroadcaster(MarketDataBroadcaster broadcaster) {
+        this.broadcaster = broadcaster;
+    }
+
     @Override
     public void onStart() {
         // Prevent duplicate starts (can happen if Disruptor calls lifecycle methods)
@@ -159,8 +176,6 @@ public class MarketPublisher implements MarketEventHandler {
             FLUSH_INTERVAL_MS,
             TimeUnit.MILLISECONDS
         );
-
-        logger.info("MarketPublisher started for market " + marketId + " (" + marketName + ") with " + FLUSH_INTERVAL_MS + "ms buffering");
     }
 
     @Override
@@ -176,8 +191,6 @@ public class MarketPublisher implements MarketEventHandler {
                 Thread.currentThread().interrupt();
             }
         }
-
-        logger.info("MarketPublisher stopped for market " + marketId);
     }
 
     @Override
@@ -284,10 +297,24 @@ public class MarketPublisher implements MarketEventHandler {
     }
 
     private synchronized void flushBuffers() {
+        flushCount++;
+
+
         try {
-            ChannelGroup subscribers = subscriptionManager.getSubscribers(marketId);
-            if (subscribers == null || subscribers.isEmpty()) {
+            // Check if we have any subscribers (either via broadcaster or WebSocket)
+            boolean hasSubscribers;
+            if (broadcaster != null) {
+                hasSubscribers = broadcaster.hasSubscribers();
+            } else {
+                ChannelGroup subs = subscriptionManager.getSubscribers(marketId);
+                hasSubscribers = subs != null && !subs.isEmpty();
+            }
+
+            if (!hasSubscribers) {
                 // No subscribers, clear buffers but don't serialize
+                if (flushCount % 100 == 0) {
+                    logger.warn("NO SUBSCRIBERS for market " + marketId + " - dropping updates");
+                }
                 clearBuffersWithoutSending();
                 return;
             }
@@ -295,7 +322,7 @@ public class MarketPublisher implements MarketEventHandler {
             // Flush aggregated trades
             if (!tradesByPrice.isEmpty()) {
                 String tradesJson = serializeAggregatedTrades();
-                subscribers.writeAndFlush(new TextWebSocketFrame(tradesJson));
+                broadcastMessage(tradesJson);
                 clearTradesBuffer();
             }
 
@@ -303,16 +330,13 @@ public class MarketPublisher implements MarketEventHandler {
             if (matchingEngine != null) {
                 String bookJson = serializeOrderBookFromEngine();
                 if (bookJson != null) {
-                    // Log message size periodically
-                    if (System.currentTimeMillis() % 5000 < 100) {
-                        logger.info("Sending book snapshot: " + bookJson.length() + " bytes to " + subscribers.size() + " subscribers");
-                    }
-                    subscribers.writeAndFlush(new TextWebSocketFrame(bookJson));
+                    broadcastMessage(bookJson);
                 }
             }
         } catch (Exception e) {
-            // Log but don't rethrow - this would kill the scheduler
-            logger.warn("Error flushing buffers for market " + marketId + ": " + e.getMessage());
+            // Log with FULL stack trace - this is critical for debugging
+            flushErrorCount++;
+            logger.error("FLUSH ERROR for market " + marketId + " (error #" + flushErrorCount + "): " + e.getMessage());
             e.printStackTrace();
             // Clear buffers to prevent memory leak
             clearBuffersWithoutSending();
@@ -321,6 +345,22 @@ public class MarketPublisher implements MarketEventHandler {
 
     private void clearBuffersWithoutSending() {
         clearTradesBuffer();
+    }
+
+    /**
+     * Broadcast message using either broadcaster (cluster mode) or WebSocket (gateway mode).
+     */
+    private void broadcastMessage(String jsonMessage) {
+        if (broadcaster != null) {
+            // Cluster mode: send via Aeron egress broadcast
+            broadcaster.broadcast(jsonMessage);
+        } else {
+            // Gateway mode: send directly to WebSocket subscribers
+            ChannelGroup subscribers = subscriptionManager.getSubscribers(marketId);
+            if (subscribers != null && !subscribers.isEmpty()) {
+                subscribers.writeAndFlush(new TextWebSocketFrame(jsonMessage));
+            }
+        }
     }
 
     private void clearTradesBuffer() {
@@ -334,13 +374,21 @@ public class MarketPublisher implements MarketEventHandler {
     }
 
     private void sendOrderStatus(PublishEvent event) {
-        ChannelGroup subscribers = subscriptionManager.getSubscribers(marketId);
-        if (subscribers == null || subscribers.isEmpty()) {
+        // Check if we have any subscribers
+        boolean hasSubscribers;
+        if (broadcaster != null) {
+            hasSubscribers = broadcaster.hasSubscribers();
+        } else {
+            ChannelGroup subs = subscriptionManager.getSubscribers(marketId);
+            hasSubscribers = subs != null && !subs.isEmpty();
+        }
+
+        if (!hasSubscribers) {
             return;
         }
 
         String json = serializeOrderStatus(event);
-        subscribers.writeAndFlush(new TextWebSocketFrame(json));
+        broadcastMessage(json);
     }
 
     /**
@@ -395,12 +443,8 @@ public class MarketPublisher implements MarketEventHandler {
         int bidCount = matchingEngine.getTopBidCount();
         int askCount = matchingEngine.getTopAskCount();
 
-        // Log when book is empty (for debugging)
+        // Skip when book is empty
         if (bidCount == 0 && askCount == 0) {
-            // Log periodically when book is empty
-            if (System.currentTimeMillis() % 5000 < 100) {
-                logger.info("Order book is empty - no levels to send");
-            }
             return null;
         }
 
@@ -414,15 +458,6 @@ public class MarketPublisher implements MarketEventHandler {
         // Get versions that were captured at collection time (after memory barrier)
         long collectedBidVersion = matchingEngine.getCollectedBidVersion();
         long collectedAskVersion = matchingEngine.getCollectedAskVersion();
-
-        // Log book state periodically for debugging - include actual price data
-        if (System.currentTimeMillis() % 2000 < 100) {
-            long bestBid = bidCount > 0 ? bidPrices[0] : 0;
-            long bestAsk = askCount > 0 ? askPrices[0] : 0;
-            logger.info("Book: " + bidCount + " bids, " + askCount + " asks, bestBid=" +
-                FixedPoint.toDouble(bestBid) + ", bestAsk=" + FixedPoint.toDouble(bestAsk) +
-                ", bidVer=" + collectedBidVersion + ", askVer=" + collectedAskVersion);
-        }
 
         // Change detection - check best bid/ask price, quantity, and count
         long currentBestBid = bidCount > 0 ? bidPrices[0] : -1;

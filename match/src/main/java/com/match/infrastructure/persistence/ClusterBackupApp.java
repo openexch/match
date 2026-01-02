@@ -91,21 +91,32 @@ public class ClusterBackupApp {
             .recordingEventsEnabled(false)
             .threadingMode(ArchiveThreadingMode.SHARED);
 
-        // Configure AeronArchive client context
-        final AeronArchive.Context aeronArchiveContext = new AeronArchive.Context()
+        // Configure local AeronArchive client context (for local backup archive)
+        final AeronArchive.Context localArchiveContext = new AeronArchive.Context()
             .controlRequestChannel(archiveContext.localControlChannel())
             .controlResponseChannel(archiveContext.localControlChannel())
             .aeronDirectoryName(aeronDirName);
 
         // Configure ClusterBackup
-        // The backup needs a local consensus channel for receiving cluster data
+        // The backup needs channels for consensus and catchup from cluster
         final String consensusChannel = "aeron:udp?endpoint=" + backupHost + ":9876";
         final String catchupChannel = "aeron:udp?endpoint=" + backupHost + ":0";
+
+        // Configure cluster archive context (for connecting to cluster's archive)
+        // We need to specify how to reach each cluster member's archive
+        final String leaderArchiveEndpoint = hostAddresses.get(0) + ":" +
+            ClusterConfig.calculatePort(0, portBase, ClusterConfig.ARCHIVE_CONTROL_PORT_OFFSET);
+
+        final AeronArchive.Context clusterArchiveContext = new AeronArchive.Context()
+            .controlRequestChannel("aeron:udp?endpoint=" + leaderArchiveEndpoint)
+            .controlResponseChannel("aeron:udp?endpoint=" + backupHost + ":0")
+            .aeronDirectoryName(aeronDirName);
 
         final ClusterBackup.Context clusterBackupContext = new ClusterBackup.Context()
             .aeronDirectoryName(aeronDirName)
             .clusterDirectoryName(new File(baseDir, ClusterConfig.CLUSTER_SUB_DIR).getAbsolutePath())
-            .archiveContext(aeronArchiveContext.clone())
+            .archiveContext(localArchiveContext.clone())
+            .clusterArchiveContext(clusterArchiveContext)
             .clusterBackupIntervalNs(backupIntervalNs)
             .clusterConsensusEndpoints(clusterConsensusEndpoints)
             .consensusChannel(consensusChannel)

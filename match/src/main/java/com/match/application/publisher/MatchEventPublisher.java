@@ -96,9 +96,6 @@ public class MatchEventPublisher {
         disruptors.put(marketId, disruptor);
         ringBuffers.put(marketId, disruptor.getRingBuffer());
         handlers.put(marketId, handler);
-
-        logger.info("Initialized publisher for market " + marketId +
-                   " with ring buffer size " + RING_BUFFER_SIZE);
     }
 
     /**
@@ -152,6 +149,16 @@ public class MatchEventPublisher {
         }
 
         long tradeId = tradeIdGenerator.getAndIncrement();
+
+        // Check ring buffer capacity before blocking
+        long remaining = ringBuffer.remainingCapacity();
+        long bufferSize = ringBuffer.getBufferSize();
+        if (remaining < bufferSize / 2) {
+            logger.warn("RING BUFFER LOW: market=" + marketId + ", remaining=" + remaining + "/" + bufferSize);
+        }
+        if (remaining == 0) {
+            logger.error("RING BUFFER FULL - engine will block! market=" + marketId);
+        }
 
         // Get next sequence - this may block briefly if buffer is full
         // In a well-tuned system, this should never block

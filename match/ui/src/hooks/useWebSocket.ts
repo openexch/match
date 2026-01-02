@@ -11,6 +11,10 @@ const INITIAL_RECONNECT_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 30000;
 const PING_INTERVAL = 30000;
 
+// Message counter for diagnostics
+let messageCount = 0;
+let lastMessageLogTime = 0;
+
 export function useWebSocket({ marketId, onMessage }: UseWebSocketOptions) {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const wsRef = useRef<WebSocket | null>(null);
@@ -49,10 +53,12 @@ export function useWebSocket({ marketId, onMessage }: UseWebSocketOptions) {
       wsRef.current = ws;
 
       ws.onopen = () => {
+        console.log('[WS] Connected to', getWebSocketUrl());
         setStatus('connected');
         reconnectAttemptRef.current = 0;
 
         // Subscribe to market
+        console.log('[WS] Subscribing to market', marketId);
         ws.send(JSON.stringify({ action: 'subscribe', marketId }));
 
         // Start ping interval
@@ -65,6 +71,14 @@ export function useWebSocket({ marketId, onMessage }: UseWebSocketOptions) {
 
       ws.onmessage = (event) => {
         try {
+          messageCount++;
+          const now = Date.now();
+          // Log message rate every 5 seconds
+          if (now - lastMessageLogTime >= 5000) {
+            console.log('[WS] Messages received:', messageCount, '(+' + messageCount + ' in last 5s)');
+            lastMessageLogTime = now;
+            messageCount = 0;
+          }
           const message = JSON.parse(event.data) as WebSocketMessage;
           onMessage(message);
         } catch (e) {
@@ -72,7 +86,8 @@ export function useWebSocket({ marketId, onMessage }: UseWebSocketOptions) {
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
+        console.log('[WS] Connection closed:', event.code, event.reason || '(no reason)');
         setStatus('disconnected');
         clearTimers();
 
@@ -83,14 +98,16 @@ export function useWebSocket({ marketId, onMessage }: UseWebSocketOptions) {
             MAX_RECONNECT_DELAY
           );
           reconnectAttemptRef.current++;
-          console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttemptRef.current})`);
+          console.log(`[WS] Reconnecting in ${delay}ms (attempt ${reconnectAttemptRef.current})`);
           reconnectTimeoutRef.current = window.setTimeout(connect, delay);
         } else {
+          console.error('[WS] Max reconnection attempts reached');
           setStatus('error');
         }
       };
 
-      ws.onerror = () => {
+      ws.onerror = (event) => {
+        console.error('[WS] WebSocket error:', event);
         setStatus('error');
       };
     } catch (e) {

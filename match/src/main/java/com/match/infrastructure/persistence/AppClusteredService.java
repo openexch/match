@@ -2,10 +2,11 @@ package com.match.infrastructure.persistence;
 
 import com.match.application.engine.Engine;
 import com.match.application.orderbook.DirectMatchingEngine;
+import com.match.application.publisher.MarketDataBroadcaster;
 import com.match.application.publisher.MatchEventPublisher;
 import com.match.infrastructure.websocket.MarketPublisher;
 import com.match.infrastructure.websocket.SubscriptionManager;
-import com.match.infrastructure.websocket.WebSocketServer;
+import io.aeron.Publication;
 import io.aeron.cluster.service.ClientSession;
 import io.aeron.cluster.service.Cluster;
 import io.aeron.cluster.service.ClusteredService;
@@ -18,14 +19,14 @@ import io.aeron.Image;
 import org.agrona.DirectBuffer;
 import org.agrona.ExpandableArrayBuffer;
 import org.agrona.MutableDirectBuffer;
+import org.agrona.concurrent.UnsafeBuffer;
 import org.agrona.collections.Int2ObjectHashMap;
 import com.match.infrastructure.Logger;
 
+import java.nio.charset.StandardCharsets;
+
 public class AppClusteredService implements ClusteredService {
     private static final Logger logger = Logger.getLogger(AppClusteredService.class);
-
-    // WebSocket server port
-    private static final int WEBSOCKET_PORT = 8081;
 
     private final Engine engine = new Engine();
     private final ClientSessions clientSessions = new ClientSessions();
@@ -36,10 +37,52 @@ public class AppClusteredService implements ClusteredService {
     // Event publishing infrastructure
     private final MatchEventPublisher eventPublisher = new MatchEventPublisher();
     private final SubscriptionManager subscriptionManager = new SubscriptionManager();
-    private WebSocketServer webSocketServer;
 
-    // Store cluster reference for snapshot idle strategy
+    // Store cluster reference for snapshot idle strategy and broadcasting
     private Cluster cluster;
+
+    // Buffer for broadcasting market data via Aeron egress
+    private final UnsafeBuffer broadcastBuffer = new UnsafeBuffer(new byte[32 * 1024]); // 32KB for JSON messages
+
+    /**
+     * MarketDataBroadcaster implementation that sends via Aeron cluster egress.
+     * This broadcasts to all connected Aeron clients (including gateway).
+     */
+    private final MarketDataBroadcaster aeronBroadcaster = new MarketDataBroadcaster() {
+        @Override
+        public void broadcast(String jsonMessage) {
+            if (clientSessions.getAllSessions().isEmpty()) {
+                return;
+            }
+
+            byte[] bytes = jsonMessage.getBytes(StandardCharsets.UTF_8);
+            broadcastBuffer.putBytes(0, bytes);
+
+            // Broadcast to all connected Aeron clients
+            for (ClientSession session : clientSessions.getAllSessions()) {
+                int retries = 0;
+                while (retries < 3) {
+                    long result = session.offer(broadcastBuffer, 0, bytes.length);
+                    if (result > 0) {
+                        break; // Success
+                    } else if (result == Publication.BACK_PRESSURED || result == Publication.ADMIN_ACTION) {
+                        retries++;
+                        if (cluster != null) {
+                            cluster.idleStrategy().idle();
+                        }
+                    } else {
+                        // NOT_CONNECTED or other error - skip this session
+                        break;
+                    }
+                }
+            }
+        }
+
+        @Override
+        public boolean hasSubscribers() {
+            return !clientSessions.getAllSessions().isEmpty();
+        }
+    };
 
     @Override
     public void onStart(final Cluster cluster, final Image snapshotImage) {
@@ -57,7 +100,9 @@ public class AppClusteredService implements ClusteredService {
     }
 
     /**
-     * Initialize LMAX Disruptor-based event publishing and WebSocket server.
+     * Initialize LMAX Disruptor-based event publishing.
+     * Market data is broadcast via Aeron egress to connected clients (gateway).
+     * Gateway then relays to WebSocket clients.
      */
     private void initializeEventPublishing() {
         try {
@@ -72,6 +117,10 @@ public class AppClusteredService implements ClusteredService {
             // Order book snapshots are fetched every 50ms on publisher thread (not matching engine thread)
             btcPublisher.setMatchingEngine(engine.getEngine(Engine.MARKET_BTC_USD));
 
+            // Use Aeron broadcaster instead of WebSocket
+            // Market data flows: Cluster → Aeron egress → Gateway → WebSocket → UI
+            btcPublisher.setBroadcaster(aeronBroadcaster);
+
             // Initialize Disruptor ring buffer for BTC-USD market
             eventPublisher.initMarket(Engine.MARKET_BTC_USD, btcPublisher);
 
@@ -81,11 +130,7 @@ public class AppClusteredService implements ClusteredService {
             // Start the Disruptor (creates publisher threads)
             eventPublisher.start();
 
-            // Start WebSocket server for external clients
-            webSocketServer = new WebSocketServer(WEBSOCKET_PORT, subscriptionManager);
-            webSocketServer.start();
-
-            logger.info("Event publishing initialized with WebSocket on port " + WEBSOCKET_PORT);
+            logger.info("Event publishing initialized with Aeron broadcaster (no WebSocket on cluster node)");
         } catch (Exception e) {
             logger.warn("Failed to initialize event publishing: " + e.getMessage());
             // Continue without publishing - engine will still work
@@ -264,16 +309,7 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onTerminate(final Cluster cluster) {
-        logger.info("Terminating cluster service");
-
-        // Shutdown WebSocket server
-        if (webSocketServer != null) {
-            try {
-                webSocketServer.close();
-            } catch (Exception e) {
-                logger.warn("Error closing WebSocket server: " + e.getMessage());
-            }
-        }
+        logger.info("Terminating cluster service gracefully");
 
         // Shutdown event publisher (Disruptor)
         if (eventPublisher != null) {
@@ -292,6 +328,6 @@ public class AppClusteredService implements ClusteredService {
         // Close engine
         engine.close();
 
-        logger.info("Cluster service terminated");
+        logger.info("Cluster service terminated gracefully");
     }
 } 

@@ -1,0 +1,42 @@
+.market-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.market-tabs {
+  display: flex;
+  gap: 4px;
+  background: #1a1a2e;
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.market-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  color: #888;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.market-tab:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #e0e0e0;
+}
+
+.market-tab.active {
+  background: #2d2d44;
+  color: #fff;
+}
+
+.market-symbol {
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+}

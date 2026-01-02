@@ -31,19 +31,19 @@ public class AeronCluster {
         clusterConfig.consensusModuleContext().ingressChannel("aeron:udp?term-length=16m|mtu=8k");
         clusterConfig.consensusModuleContext().egressChannel("aeron:udp?term-length=16m|mtu=8k");
 
-        // ==================== CONSISTENT LATENCY TIMING CONFIG ====================
+        // ==================== FAST LEADER ELECTION CONFIG ====================
         clusterConfig.consensusModuleContext()
-            // Heartbeat: 200ms interval, 2s timeout (10x for stability)
-            .leaderHeartbeatIntervalNs(TimeUnit.MILLISECONDS.toNanos(200))
-            .leaderHeartbeatTimeoutNs(TimeUnit.SECONDS.toNanos(2))
-            // Election timeout: 3s (gives time for recovery without being too slow)
-            .electionTimeoutNs(TimeUnit.SECONDS.toNanos(3))
+            // Heartbeat: 100ms interval, 1s timeout (10x for stability)
+            .leaderHeartbeatIntervalNs(TimeUnit.MILLISECONDS.toNanos(100))
+            .leaderHeartbeatTimeoutNs(TimeUnit.SECONDS.toNanos(1))
+            // Election timeout: 1s (fast election)
+            .electionTimeoutNs(TimeUnit.SECONDS.toNanos(1))
             // Termination: 500ms (fast shutdown)
             .terminationTimeoutNs(TimeUnit.MILLISECONDS.toNanos(500))
             // Session timeout: 30s (handles high load bursts)
             .sessionTimeoutNs(TimeUnit.SECONDS.toNanos(30))
-            // Startup canvass timeout: 5s
-            .startupCanvassTimeoutNs(TimeUnit.SECONDS.toNanos(5))
+            // Startup canvass timeout: 2s (must be multiple of heartbeat timeout)
+            .startupCanvassTimeoutNs(TimeUnit.SECONDS.toNanos(2))
             ;
         //await DNS resolution of all the hostnames
         hostAddresses.forEach(AeronCluster::awaitDnsResolution);

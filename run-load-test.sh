@@ -54,7 +54,8 @@ run_test() {
         --duration "$duration" \
         --threads "$threads" \
         --scenario "$scenario" \
-        --hosts "localhost,localhost,localhost"
+        --hosts "localhost,localhost,localhost" \
+        --no-ui
 
     echo ""
     echo -e "${GREEN}✓ Test completed${NC}"

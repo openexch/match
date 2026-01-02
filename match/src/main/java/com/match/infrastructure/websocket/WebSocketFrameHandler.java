@@ -70,6 +70,18 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                     logger.info("Client unsubscribed from market " + marketId);
                     break;
 
+                case "subscribe-admin":
+                    subscriptionManager.subscribeAdmin(ctx.channel());
+                    sendAdminConfirmation(ctx, "subscribed");
+                    logger.info("Client subscribed to admin updates");
+                    break;
+
+                case "unsubscribe-admin":
+                    subscriptionManager.unsubscribeAdmin(ctx.channel());
+                    sendAdminConfirmation(ctx, "unsubscribed");
+                    logger.info("Client unsubscribed from admin updates");
+                    break;
+
                 case "ping":
                     sendPong(ctx);
                     break;
@@ -92,6 +104,13 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
         response.addProperty("type", "SUBSCRIPTION_CONFIRMED");
         response.addProperty("status", status);
         response.addProperty("marketId", marketId);
+        ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(response)));
+    }
+
+    private void sendAdminConfirmation(ChannelHandlerContext ctx, String status) {
+        JsonObject response = new JsonObject();
+        response.addProperty("type", "ADMIN_SUBSCRIPTION_CONFIRMED");
+        response.addProperty("status", status);
         ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(response)));
     }
 

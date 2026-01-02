@@ -192,8 +192,8 @@ public final class ClusterConfig
                 // DEDICATED threading for low latency
                 .threadingMode(ArchiveThreadingMode.DEDICATED)
                 // Catalog and segment sizes
-                .catalogCapacity(256 * 1024)  // 256KB catalog
-                .segmentFileLength(256 * 1024 * 1024)  // 256MB segments
+                .catalogCapacity(1024 * 1024)  // 1MB catalog for more recordings
+                .segmentFileLength(1024 * 1024 * 1024)  // 1GB segments for sustained high throughput
                 // Max concurrent recordings/replays
                 .maxConcurrentRecordings(10)
                 .maxConcurrentReplays(10);

@@ -1,10 +1,10 @@
 import { useState, useCallback } from 'react';
-import type { Trade, TradesBatchMessage } from '../types/market';
+import type { AggregatedTrade, TradesBatchMessage } from '../types/market';
 
 const MAX_TRADES = 50;
 
 export function useTrades() {
-  const [trades, setTrades] = useState<Trade[]>([]);
+  const [trades, setTrades] = useState<AggregatedTrade[]>([]);
 
   const handleTradesBatch = useCallback((message: TradesBatchMessage) => {
     setTrades((prev) => {

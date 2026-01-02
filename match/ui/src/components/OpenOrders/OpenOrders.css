@@ -1,0 +1,181 @@
+.open-orders {
+  background: #1a1a2e;
+  border-radius: 12px;
+  border: 1px solid #2d2d44;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.open-orders-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #2d2d44;
+}
+
+.open-orders-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.order-count {
+  background: #2d2d44;
+  color: #888;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: #666;
+  font-size: 14px;
+}
+
+.orders-table-wrapper {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 180px;
+}
+
+.orders-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.orders-table th {
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 500;
+  color: #888;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid #2d2d44;
+  white-space: nowrap;
+}
+
+.orders-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(45, 45, 68, 0.5);
+  white-space: nowrap;
+}
+
+.orders-table tr:last-child td {
+  border-bottom: none;
+}
+
+.orders-table tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.orders-table .time {
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  color: #888;
+  font-size: 12px;
+}
+
+.orders-table .market {
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.orders-table .side {
+  font-weight: 600;
+}
+
+.orders-table .side.bid {
+  color: #0ecb81;
+}
+
+.orders-table .side.ask {
+  color: #f6465d;
+}
+
+.orders-table .price,
+.orders-table .amount {
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  color: #e0e0e0;
+}
+
+.filled-bar-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 80px;
+}
+
+.filled-bar-container span {
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  font-size: 12px;
+  color: #888;
+}
+
+.filled-bar {
+  height: 4px;
+  background: #0ecb81;
+  border-radius: 2px;
+  flex: 1;
+  max-width: 60px;
+}
+
+.orders-table .status {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.orders-table .status.new {
+  color: #f0b90b;
+}
+
+.orders-table .status.partially_filled {
+  color: #0ecb81;
+}
+
+.orders-table .actions {
+  text-align: right;
+}
+
+.cancel-btn {
+  padding: 6px 12px;
+  border: 1px solid #f6465d;
+  border-radius: 4px;
+  background: transparent;
+  color: #f6465d;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.cancel-btn:hover:not(:disabled) {
+  background: rgba(246, 70, 93, 0.15);
+}
+
+.cancel-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .orders-table {
+    font-size: 12px;
+  }
+
+  .orders-table th,
+  .orders-table td {
+    padding: 10px 12px;
+  }
+}
