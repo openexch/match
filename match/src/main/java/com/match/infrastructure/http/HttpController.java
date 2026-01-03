@@ -38,8 +38,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.concurrent.TimeUnit;
 
 public class HttpController implements EgressListener, AutoCloseable, Agent {
@@ -138,13 +140,19 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
     private static final OperationProgress operationProgress = new OperationProgress();
 
     // Cluster status tracking for real-time UI updates
+    // Uses thread-safe atomic types to ensure visibility across threads
     private static class ClusterStatus {
         volatile int leaderId = -1;
         volatile long leadershipTermId = -1;
         volatile boolean gatewayConnected = false;
         volatile long lastUpdateTime = 0;
-        final boolean[] nodeHealthy = new boolean[3];
-        final String[] nodeStatus = new String[]{"OFFLINE", "OFFLINE", "OFFLINE"};
+        // Thread-safe arrays for cross-thread visibility
+        final AtomicBoolean[] nodeHealthy = new AtomicBoolean[] {
+            new AtomicBoolean(false), new AtomicBoolean(false), new AtomicBoolean(false)
+        };
+        final AtomicReferenceArray<String> nodeStatus = new AtomicReferenceArray<>(
+            new String[]{"OFFLINE", "OFFLINE", "OFFLINE"}
+        );
 
         void updateLeader(int newLeaderId, long termId) {
             int oldLeaderId = this.leaderId;
@@ -155,10 +163,10 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             // Update node statuses based on leader
             for (int i = 0; i < 3; i++) {
                 if (i == newLeaderId) {
-                    nodeStatus[i] = "LEADER";
-                    nodeHealthy[i] = true;
-                } else if (nodeHealthy[i]) {
-                    nodeStatus[i] = "FOLLOWER";
+                    nodeStatus.set(i, "LEADER");
+                    nodeHealthy[i].set(true);
+                } else if (nodeHealthy[i].get()) {
+                    nodeStatus.set(i, "FOLLOWER");
                 }
             }
 
@@ -170,9 +178,9 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
 
         void setNodeStatus(int nodeId, String status, boolean healthy) {
             if (nodeId >= 0 && nodeId < 3) {
-                String oldStatus = nodeStatus[nodeId];
-                nodeStatus[nodeId] = status;
-                nodeHealthy[nodeId] = healthy;
+                String oldStatus = nodeStatus.get(nodeId);
+                nodeStatus.set(nodeId, status);
+                nodeHealthy[nodeId].set(healthy);
                 lastUpdateTime = System.currentTimeMillis();
 
                 // Broadcast node status change
@@ -210,8 +218,8 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                 for (int i = 0; i < 3; i++) {
                     Map<String, Object> node = new HashMap<>();
                     node.put("id", i);
-                    node.put("status", nodeStatus[i]);
-                    node.put("healthy", nodeHealthy[i]);
+                    node.put("status", nodeStatus.get(i));
+                    node.put("healthy", nodeHealthy[i].get());
                     nodes.add(node);
                 }
                 msg.put("nodes", nodes);
@@ -639,8 +647,8 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             for (int i = 0; i < 3; i++) {
                 Map<String, Object> node = new HashMap<>();
                 node.put("id", i);
-                node.put("status", clusterStatus.nodeStatus[i]);
-                node.put("healthy", clusterStatus.nodeHealthy[i]);
+                node.put("status", clusterStatus.nodeStatus.get(i));
+                node.put("healthy", clusterStatus.nodeHealthy[i].get());
                 nodes.add(node);
             }
             msg.put("nodes", nodes);
@@ -890,7 +898,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
 
         for (int i = 0; i < 3; i++) {
             try {
-                String currentStatus = clusterStatus.nodeStatus[i];
+                String currentStatus = clusterStatus.nodeStatus.get(i);
                 // Don't override transitional states - these are managed by operations
                 if (currentStatus.equals("STOPPING") || currentStatus.equals("STARTING") ||
                     currentStatus.equals("REJOINING") || currentStatus.equals("ELECTION")) {
@@ -1018,7 +1026,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             node.put("id", i);
 
             // Get current status from our tracking (includes transitional states)
-            String trackedStatus = clusterStatus.nodeStatus[i];
+            String trackedStatus = clusterStatus.nodeStatus.get(i);
             boolean isTransitional = trackedStatus.equals("STOPPING") ||
                                      trackedStatus.equals("STARTING") ||
                                      trackedStatus.equals("REJOINING") ||
@@ -1047,8 +1055,8 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                         } else {
                             node.put("role", i == leaderNode ? "LEADER" : "FOLLOWER");
                             // Update our tracking to match reality
-                            clusterStatus.nodeStatus[i] = i == leaderNode ? "LEADER" : "FOLLOWER";
-                            clusterStatus.nodeHealthy[i] = true;
+                            clusterStatus.nodeStatus.set(i, i == leaderNode ? "LEADER" : "FOLLOWER");
+                            clusterStatus.nodeHealthy[i].set(true);
                         }
                     } else {
                         throw new RuntimeException("Service not active");
@@ -1060,8 +1068,8 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                         node.put("role", trackedStatus);
                     } else {
                         node.put("role", "OFFLINE");
-                        clusterStatus.nodeStatus[i] = "OFFLINE";
-                        clusterStatus.nodeHealthy[i] = false;
+                        clusterStatus.nodeStatus.set(i, "OFFLINE");
+                        clusterStatus.nodeHealthy[i].set(false);
                     }
                 }
             }
