@@ -2,6 +2,7 @@ package com.match.infrastructure.websocket;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.match.application.orderbook.DirectMatchingEngine;
 import com.match.application.publisher.MarketDataBroadcaster;
 import com.match.application.publisher.MarketEventHandler;
 import com.match.application.publisher.OrderStatusType;
@@ -208,8 +209,17 @@ public class MarketPublisher implements MarketEventHandler {
         }
     }
 
+    // DEBUG: Event counter
+    private long eventCount = 0;
+
     @Override
     public void onEvent(PublishEvent event, long sequence, boolean endOfBatch) throws Exception {
+        eventCount++;
+        // DEBUG: Log every 100 events
+        if (eventCount % 100 == 1) {
+            System.out.printf("[EVENT-DEBUG] seq=%d, type=%d, eventCount=%d%n", sequence, event.getEventType(), eventCount);
+        }
+
         int eventType = event.getEventType();
         if (eventType == PublishEventType.TRADE_EXECUTION) {
             // Buffer trades - order book is fetched directly from engine at 50ms intervals
@@ -315,13 +325,28 @@ public class MarketPublisher implements MarketEventHandler {
         flushCount++;
 
         try {
+            // Capture local references to volatile fields for null-safety
+            // This prevents race conditions where the field could become null between check and use
+            final MarketDataBroadcaster localBroadcaster = broadcaster;
+            final DirectMatchingEngine localEngine = matchingEngine;
+
             // Check if we have any subscribers (either via broadcaster or WebSocket)
             boolean hasSubscribers;
-            if (broadcaster != null) {
-                hasSubscribers = broadcaster.hasSubscribers();
+            if (localBroadcaster != null) {
+                hasSubscribers = localBroadcaster.hasSubscribers();
             } else {
                 ChannelGroup subs = subscriptionManager.getSubscribers(marketId);
                 hasSubscribers = subs != null && !subs.isEmpty();
+            }
+
+            // DEBUG: Log flush status every 5 seconds
+            if (flushCount % 100 == 1) {
+                System.out.printf("[FLUSH-DEBUG] broadcaster=%s, hasSubscribers=%b, trades=%d, orderStatus=%d, engine=%s%n",
+                    localBroadcaster != null ? "SET" : "NULL",
+                    hasSubscribers,
+                    tradesByPrice.size(),
+                    orderStatusBuffer.size(),
+                    localEngine != null ? "SET" : "NULL");
             }
 
             if (!hasSubscribers) {
@@ -333,22 +358,22 @@ public class MarketPublisher implements MarketEventHandler {
             // Flush aggregated trades
             if (!tradesByPrice.isEmpty()) {
                 String tradesJson = serializeAggregatedTrades();
-                broadcastMessage(tradesJson);
+                broadcastMessage(tradesJson, localBroadcaster);
                 clearTradesBuffer();
             }
 
             // Flush buffered order status updates as batch
             if (!orderStatusBuffer.isEmpty()) {
                 String statusJson = serializeOrderStatusBatch();
-                broadcastMessage(statusJson);
+                broadcastMessage(statusJson, localBroadcaster);
                 orderStatusBuffer.clear();
             }
 
             // Get fresh order book snapshot from matching engine (runs on this thread, not matching engine thread)
-            if (matchingEngine != null) {
-                String bookJson = serializeOrderBookFromEngine();
+            if (localEngine != null) {
+                String bookJson = serializeOrderBookFromEngine(localEngine);
                 if (bookJson != null) {
-                    broadcastMessage(bookJson);
+                    broadcastMessage(bookJson, localBroadcaster);
                 }
             }
         } catch (Exception e) {
@@ -368,11 +393,13 @@ public class MarketPublisher implements MarketEventHandler {
 
     /**
      * Broadcast message using either broadcaster (cluster mode) or WebSocket (gateway mode).
+     * @param jsonMessage The message to broadcast
+     * @param localBroadcaster The captured broadcaster reference (null-safe)
      */
-    private void broadcastMessage(String jsonMessage) {
-        if (broadcaster != null) {
+    private void broadcastMessage(String jsonMessage, MarketDataBroadcaster localBroadcaster) {
+        if (localBroadcaster != null) {
             // Cluster mode: send via Aeron egress broadcast
-            broadcaster.broadcast(jsonMessage);
+            localBroadcaster.broadcast(jsonMessage);
         } else {
             // Gateway mode: send directly to WebSocket subscribers
             ChannelGroup subscribers = subscriptionManager.getSubscribers(marketId);
@@ -455,29 +482,30 @@ public class MarketPublisher implements MarketEventHandler {
      * Get order book snapshot directly from matching engine.
      * Called on flush thread every 50ms - does NOT block matching engine.
      * Uses change detection to avoid sending duplicate snapshots.
+     * @param engine The captured matching engine reference (null-safe)
      */
-    private String serializeOrderBookFromEngine() {
+    private String serializeOrderBookFromEngine(DirectMatchingEngine engine) {
         // Collect top 20 levels (this is a read-only operation on engine arrays)
-        matchingEngine.collectTopLevels(MAX_BOOK_LEVELS);
+        engine.collectTopLevels(MAX_BOOK_LEVELS);
 
-        int bidCount = matchingEngine.getTopBidCount();
-        int askCount = matchingEngine.getTopAskCount();
+        int bidCount = engine.getTopBidCount();
+        int askCount = engine.getTopAskCount();
 
         // Skip when book is empty
         if (bidCount == 0 && askCount == 0) {
             return null;
         }
 
-        long[] bidPrices = matchingEngine.getTopBidPrices();
-        long[] bidQuantities = matchingEngine.getTopBidQuantities();
-        int[] bidOrderCounts = matchingEngine.getTopBidOrderCounts();
-        long[] askPrices = matchingEngine.getTopAskPrices();
-        long[] askQuantities = matchingEngine.getTopAskQuantities();
-        int[] askOrderCounts = matchingEngine.getTopAskOrderCounts();
+        long[] bidPrices = engine.getTopBidPrices();
+        long[] bidQuantities = engine.getTopBidQuantities();
+        int[] bidOrderCounts = engine.getTopBidOrderCounts();
+        long[] askPrices = engine.getTopAskPrices();
+        long[] askQuantities = engine.getTopAskQuantities();
+        int[] askOrderCounts = engine.getTopAskOrderCounts();
 
         // Get versions that were captured at collection time (after memory barrier)
-        long collectedBidVersion = matchingEngine.getCollectedBidVersion();
-        long collectedAskVersion = matchingEngine.getCollectedAskVersion();
+        long collectedBidVersion = engine.getCollectedBidVersion();
+        long collectedAskVersion = engine.getCollectedAskVersion();
 
         // Change detection - check best bid/ask price, quantity, and count
         long currentBestBid = bidCount > 0 ? bidPrices[0] : -1;

@@ -56,6 +56,10 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
     // Cache last order book snapshot for immediate sending on new connections
     private volatile String lastBookSnapshot = null;
 
+    // Egress health check: detect stale sessions where ingress works but egress doesn't
+    private volatile long lastEgressTime = System.currentTimeMillis();
+    private static final long EGRESS_TIMEOUT_MS = 60_000; // 60 seconds without egress = stale session
+
     // Admin WebSocket for real-time progress updates
     private static final int ADMIN_WS_PORT = 8082;
     private static ChannelGroup adminChannels;
@@ -63,63 +67,51 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
     private EventLoopGroup adminWorkerGroup;
     private Channel adminServerChannel;
 
-    // Operation progress tracking
-    private static class OperationProgress {
-        volatile String operation;      // "rolling-update", "snapshot", "compact", null
-        volatile String status;         // Current status message
-        volatile int progress;          // 0-100
-        volatile int currentStep;       // Current step number
-        volatile int totalSteps;        // Total steps
-        volatile long startTime;
-        volatile boolean complete;
-        volatile boolean error;
-        volatile String errorMessage;
+    // Operation progress tracking using immutable state for atomic reads
+    // All state is captured in a single immutable class to prevent torn reads
+    private static final class ProgressState {
+        final String operation;      // "rolling-update", "snapshot", "compact", null
+        final String status;         // Current status message
+        final int progress;          // 0-100
+        final int currentStep;       // Current step number
+        final int totalSteps;        // Total steps
+        final long startTime;
+        final boolean complete;
+        final boolean error;
+        final String errorMessage;
 
-        void reset() {
-            operation = null;
-            status = null;
-            progress = 0;
-            currentStep = 0;
-            totalSteps = 0;
-            startTime = 0;
-            complete = false;
-            error = false;
-            errorMessage = null;
+        ProgressState(String operation, String status, int progress, int currentStep,
+                      int totalSteps, long startTime, boolean complete, boolean error,
+                      String errorMessage) {
+            this.operation = operation;
+            this.status = status;
+            this.progress = progress;
+            this.currentStep = currentStep;
+            this.totalSteps = totalSteps;
+            this.startTime = startTime;
+            this.complete = complete;
+            this.error = error;
+            this.errorMessage = errorMessage;
         }
 
-        void start(String op, int steps) {
-            reset();
-            operation = op;
-            totalSteps = steps;
-            startTime = System.currentTimeMillis();
-            status = "Starting...";
-            broadcastProgress();
+        static ProgressState empty() {
+            return new ProgressState(null, null, 0, 0, 0, 0, false, false, null);
         }
 
-        void update(int step, String message) {
-            currentStep = step;
-            status = message;
-            progress = totalSteps > 0 ? (step * 100) / totalSteps : 0;
-            broadcastProgress();
+        ProgressState start(String op, int steps) {
+            return new ProgressState(op, "Starting...", 0, 0, steps, System.currentTimeMillis(), false, false, null);
         }
 
-        void finish(boolean success, String message) {
-            complete = true;
-            error = !success;
-            status = message;
-            errorMessage = success ? null : message;
-            progress = success ? 100 : progress;
-            broadcastProgress();
+        ProgressState update(int step, String message) {
+            int newProgress = totalSteps > 0 ? (step * 100) / totalSteps : 0;
+            return new ProgressState(operation, message, newProgress, step, totalSteps, startTime, false, false, null);
         }
 
-        private void broadcastProgress() {
-            if (adminChannels != null && !adminChannels.isEmpty()) {
-                Map<String, Object> msg = new HashMap<>();
-                msg.put("type", "ADMIN_PROGRESS");
-                msg.put("data", toMap());
-                String json = gson.toJson(msg);
-                adminChannels.writeAndFlush(new TextWebSocketFrame(json));
-            }
+        ProgressState finish(boolean success, String message) {
+            return new ProgressState(
+                operation, message, success ? 100 : progress, currentStep, totalSteps,
+                startTime, true, !success, success ? null : message
+            );
         }
 
         Map<String, Object> toMap() {
@@ -135,6 +127,49 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             map.put("elapsedMs", startTime > 0 ? System.currentTimeMillis() - startTime : 0);
             return map;
         }
+    }
+
+    private static class OperationProgress {
+        // Single volatile reference to immutable state ensures atomic reads
+        private volatile ProgressState state = ProgressState.empty();
+
+        void reset() {
+            state = ProgressState.empty();
+        }
+
+        void start(String op, int steps) {
+            state = state.start(op, steps);
+            broadcastProgress();
+        }
+
+        void update(int step, String message) {
+            state = state.update(step, message);
+            broadcastProgress();
+        }
+
+        void finish(boolean success, String message) {
+            state = state.finish(success, message);
+            broadcastProgress();
+        }
+
+        private void broadcastProgress() {
+            if (adminChannels != null && !adminChannels.isEmpty()) {
+                Map<String, Object> msg = new HashMap<>();
+                msg.put("type", "ADMIN_PROGRESS");
+                msg.put("data", state.toMap());
+                String json = gson.toJson(msg);
+                adminChannels.writeAndFlush(new TextWebSocketFrame(json));
+            }
+        }
+
+        Map<String, Object> toMap() {
+            return state.toMap();
+        }
+
+        // Accessors for individual fields (read from immutable state)
+        String getOperation() { return state.operation; }
+        boolean isComplete() { return state.complete; }
+        boolean isError() { return state.error; }
     }
 
     private static final OperationProgress operationProgress = new OperationProgress();
@@ -154,7 +189,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             new String[]{"OFFLINE", "OFFLINE", "OFFLINE"}
         );
 
-        void updateLeader(int newLeaderId, long termId) {
+        synchronized void updateLeader(int newLeaderId, long termId) {
             int oldLeaderId = this.leaderId;
             this.leaderId = newLeaderId;
             this.leadershipTermId = termId;
@@ -176,7 +211,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             broadcastStatus();
         }
 
-        void setNodeStatus(int nodeId, String status, boolean healthy) {
+        synchronized void setNodeStatus(int nodeId, String status, boolean healthy) {
             if (nodeId >= 0 && nodeId < 3) {
                 String oldStatus = nodeStatus.get(nodeId);
                 nodeStatus.set(nodeId, status);
@@ -192,7 +227,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             }
         }
 
-        void setGatewayConnected(boolean connected) {
+        synchronized void setGatewayConnected(boolean connected) {
             boolean wasConnected = this.gatewayConnected;
             this.gatewayConnected = connected;
             this.lastUpdateTime = System.currentTimeMillis();
@@ -205,7 +240,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             }
         }
 
-        void broadcastStatus() {
+        synchronized void broadcastStatus() {
             if (adminChannels != null && !adminChannels.isEmpty()) {
                 Map<String, Object> msg = new HashMap<>();
                 msg.put("type", "CLUSTER_STATUS");
@@ -234,7 +269,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             }
         }
 
-        void broadcastClusterEvent(String event, Integer nodeId, String message) {
+        synchronized void broadcastClusterEvent(String event, Integer nodeId, String message) {
             if (adminChannels != null && !adminChannels.isEmpty()) {
                 Map<String, Object> msg = new HashMap<>();
                 msg.put("type", "CLUSTER_EVENT");
@@ -806,6 +841,8 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
         System.out.println("Connected to Cluster");
         connectionState = ConnectionState.CONNECTED;
         needsReconnect = false;
+        // Reset egress health check timer on new connection
+        lastEgressTime = System.currentTimeMillis();
 
         // Get current leader from cluster
         int currentLeader = cluster.leaderMemberId();
@@ -820,8 +857,9 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
 
     /**
      * Attempt reconnection if needed and cooldown has passed.
+     * Synchronized to prevent race conditions with connectToCluster().
      */
-    private void tryReconnectIfNeeded() {
+    private synchronized void tryReconnectIfNeeded() {
         if (!needsReconnect) return;
 
         long now = System.currentTimeMillis();
@@ -831,6 +869,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
         System.out.println("Attempting to reconnect to cluster...");
 
         try {
+            // Call directly - Java monitors are reentrant so nested synchronized is safe
             connectToCluster();
             System.out.println("Reconnected to cluster successfully!");
         } catch (Exception e) {
@@ -840,8 +879,23 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
         }
     }
 
+    /**
+     * Get cluster reference safely.
+     * Returns null if cluster is not connected or is being reconnected.
+     */
+    private synchronized AeronCluster getCluster() {
+        if (needsReconnect || cluster == null || cluster.isClosed()) {
+            return null;
+        }
+        return cluster;
+    }
+
     private long lastClusterStatusCheck = 0;
     private static final long CLUSTER_STATUS_CHECK_INTERVAL = 2000; // Check every 2 seconds
+
+    // DEBUG: Poll counters
+    private long pollCount = 0;
+    private long totalPollWork = 0;
 
     public void startPolling() {
         final IdleStrategy idleStrategy = new SleepingMillisIdleStrategy(100);
@@ -860,6 +914,15 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                 // Poll egress and send keepalive
                 int work = cluster.pollEgress();
 
+                // DEBUG: Log poll results periodically
+                pollCount++;
+                if (work > 0) {
+                    totalPollWork += work;
+                    System.out.printf("[POLL-DEBUG] work=%d, totalWork=%d, pollCount=%d%n", work, totalPollWork, pollCount);
+                } else if (pollCount % 1000 == 0) {
+                    System.out.printf("[POLL-DEBUG] idle poll #%d, totalWork=%d%n", pollCount, totalPollWork);
+                }
+
                 // Send cluster heartbeat roughly every 250ms
                 final long now = SystemEpochClock.INSTANCE.time();
                 if (now >= (lastHeartbeatTime + HEARTBEAT_INTERVAL)) {
@@ -874,6 +937,18 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                 if (now >= (lastClusterStatusCheck + CLUSTER_STATUS_CHECK_INTERVAL)) {
                     lastClusterStatusCheck = now;
                     checkAndBroadcastClusterStatus();
+                }
+
+                // Egress health check: detect stale sessions where cluster isn't responding
+                // Only check after connection is established (wait 5 seconds after connect)
+                long timeSinceLastEgress = now - lastEgressTime;
+                if (connectionState == ConnectionState.CONNECTED && timeSinceLastEgress > EGRESS_TIMEOUT_MS) {
+                    System.out.printf("[HEALTH] Egress timeout detected: %dms since last egress. Forcing reconnection.%n", timeSinceLastEgress);
+                    needsReconnect = true;
+                    connectionState = ConnectionState.NOT_CONNECTED;
+                    clusterStatus.setGatewayConnected(false);
+                    // Reset timer for reconnection
+                    lastEgressTime = now;
                 }
 
                 idleStrategy.idle(work);
@@ -892,7 +967,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
     private void checkAndBroadcastClusterStatus() {
         // Quick check using systemctl for node health
         // Skip status updates during operations - let rolling update control states
-        if (operationProgress.operation != null) {
+        if (operationProgress.getOperation() != null) {
             return;
         }
 
@@ -944,6 +1019,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
         final long retryDelayMs = 10;
 
         while ((result = cluster.offer(buffer, 0, length)) < 0) {
+            System.out.printf("[ORDER-DEBUG] offer failed: result=%d%n", result);
             if (result == Publication.CLOSED || result == Publication.NOT_CONNECTED) {
                 needsReconnect = true;
                 throw new IllegalStateException("Cluster connection lost. Reconnecting...");
@@ -964,14 +1040,16 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                 throw new RuntimeException("Failed to send message to cluster: " + result);
             }
         }
+        // DEBUG: Log successful offer
+        System.out.printf("[ORDER-DEBUG] offer succeeded: result=%d, length=%d%n", result, length);
     }
 
     @Override
     public void onMessage(long clusterSessionId, long timestamp, DirectBuffer buffer, int offset, int length, Header header) {
-        final String response = buffer.getStringWithoutLengthUtf8(offset, length);
+        // Track egress receipt for health check
+        lastEgressTime = System.currentTimeMillis();
 
-        // Debug: log all incoming messages
-        System.out.printf("[EGRESS] Received %d bytes from cluster%n", length);
+        final String response = buffer.getStringWithoutLengthUtf8(offset, length);
 
         // Check if this is market data (JSON with type field) and broadcast to WebSocket clients
         if (response.startsWith("{\"type\":")) {
@@ -988,9 +1066,6 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                 return;
             }
         }
-
-        // Log other responses (order confirmations, etc.)
-        System.out.printf("⬅️ Response from cluster (Session ID: %d): '%s'%n", clusterSessionId, response);
     }
 
     @Override
@@ -1418,7 +1493,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             return;
         }
 
-        if (operationProgress.operation != null && !operationProgress.complete) {
+        if (operationProgress.getOperation() != null && !operationProgress.isComplete()) {
             sendJsonResponse(exchange, 409, Map.of("error", "Another operation in progress"));
             return;
         }
@@ -1633,7 +1708,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             return;
         }
 
-        if (operationProgress.operation != null && !operationProgress.complete) {
+        if (operationProgress.getOperation() != null && !operationProgress.isComplete()) {
             sendJsonResponse(exchange, 409, Map.of("error", "Another operation in progress"));
             return;
         }
@@ -1703,7 +1778,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             return;
         }
 
-        if (operationProgress.operation != null && !operationProgress.complete) {
+        if (operationProgress.getOperation() != null && !operationProgress.isComplete()) {
             sendJsonResponse(exchange, 409, Map.of("error", "Another operation in progress"));
             return;
         }
@@ -1753,7 +1828,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
 
         // Check for reset parameter
         String query = exchange.getRequestURI().getQuery();
-        if (query != null && query.contains("reset=true") && operationProgress.complete) {
+        if (query != null && query.contains("reset=true") && operationProgress.isComplete()) {
             operationProgress.reset();
         }
 

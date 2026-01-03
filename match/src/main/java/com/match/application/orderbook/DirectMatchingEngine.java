@@ -282,64 +282,71 @@ public class DirectMatchingEngine {
     private final long[] topAskPrices = new long[MAX_PUBLISH_LEVELS];
     private final long[] topAskQuantities = new long[MAX_PUBLISH_LEVELS];
     private final int[] topAskOrderCounts = new int[MAX_PUBLISH_LEVELS];
-    private int topBidCount;
-    private int topAskCount;
+    private volatile int topBidCount;
+    private volatile int topAskCount;
 
     // Version tracking for collected data - stores version at collection time
-    private long collectedBidVersion;
-    private long collectedAskVersion;
+    private volatile long collectedBidVersion;
+    private volatile long collectedAskVersion;
+
+    // Lock for atomic snapshot collection and reading
+    // Ensures collectTopLevels and subsequent getters see consistent state
+    private final Object snapshotLock = new Object();
 
     /**
      * Collect top N price levels from both books.
      * ZERO allocations - uses pre-allocated arrays.
+     * Synchronized to ensure atomic collection for cross-thread readers.
      *
      * @param maxLevels Maximum levels to collect (up to 20)
      */
     public void collectTopLevels(int maxLevels) {
-        int levels = Math.min(maxLevels, MAX_PUBLISH_LEVELS);
+        synchronized (snapshotLock) {
+            int levels = Math.min(maxLevels, MAX_PUBLISH_LEVELS);
 
-        // Read version FIRST to establish memory barrier (acquires latest values)
-        // Store versions for later use - this prevents compiler from optimizing away the reads
-        collectedBidVersion = bidBook.getVersion();
-        collectedAskVersion = askBook.getVersion();
+            // Read version FIRST to establish memory barrier (acquires latest values)
+            // Store versions for later use - this prevents compiler from optimizing away the reads
+            collectedBidVersion = bidBook.getVersion();
+            collectedAskVersion = askBook.getVersion();
 
-        // Collect top bids (descending price order)
-        topBidCount = 0;
-        if (!bidBook.isEmpty()) {
-            int priceIdx = bidBook.getBestPriceIndex();
-            while (priceIdx >= 0 && topBidCount < levels) {
-                long price = bidBook.getBasePrice() + (long) priceIdx * bidBook.getTickSize();
-                long qty = bidBook.getTotalQuantity(priceIdx);
-                int orderCount = bidBook.getOrderCount(priceIdx);
+            // Collect top bids (descending price order)
+            topBidCount = 0;
+            if (!bidBook.isEmpty()) {
+                int priceIdx = bidBook.getBestPriceIndex();
+                while (priceIdx >= 0 && topBidCount < levels) {
+                    long price = bidBook.getBasePrice() + (long) priceIdx * bidBook.getTickSize();
+                    long qty = bidBook.getTotalQuantity(priceIdx);
+                    int orderCount = bidBook.getOrderCount(priceIdx);
 
-                if (qty > 0) {
-                    topBidPrices[topBidCount] = price;
-                    topBidQuantities[topBidCount] = qty;
-                    topBidOrderCounts[topBidCount] = orderCount;
-                    topBidCount++;
+                    if (qty > 0) {
+                        topBidPrices[topBidCount] = price;
+                        topBidQuantities[topBidCount] = qty;
+                        topBidOrderCounts[topBidCount] = orderCount;
+                        topBidCount++;
+                    }
+
+                    priceIdx = bidBook.nextPriceIndex(priceIdx);
                 }
-
-                priceIdx = bidBook.nextPriceIndex(priceIdx);
             }
-        }
 
-        // Collect top asks (ascending price order)
-        topAskCount = 0;
-        if (!askBook.isEmpty()) {
-            int priceIdx = askBook.getBestPriceIndex();
-            while (priceIdx >= 0 && topAskCount < levels) {
-                long price = askBook.getBasePrice() + (long) priceIdx * askBook.getTickSize();
-                long qty = askBook.getTotalQuantity(priceIdx);
-                int orderCount = askBook.getOrderCount(priceIdx);
+            // Collect top asks (ascending price order)
+            topAskCount = 0;
+            if (!askBook.isEmpty()) {
+                int priceIdx = askBook.getBestPriceIndex();
+                while (priceIdx >= 0 && topAskCount < levels) {
+                    long price = askBook.getBasePrice() + (long) priceIdx * askBook.getTickSize();
+                    long qty = askBook.getTotalQuantity(priceIdx);
+                    int orderCount = askBook.getOrderCount(priceIdx);
 
-                if (qty > 0) {
-                    topAskPrices[topAskCount] = price;
-                    topAskQuantities[topAskCount] = qty;
-                    topAskOrderCounts[topAskCount] = orderCount;
-                    topAskCount++;
+                    if (qty > 0) {
+                        topAskPrices[topAskCount] = price;
+                        topAskQuantities[topAskCount] = qty;
+                        topAskOrderCounts[topAskCount] = orderCount;
+                        topAskCount++;
+                    }
+
+                    priceIdx = askBook.nextPriceIndex(priceIdx);
                 }
-
-                priceIdx = askBook.nextPriceIndex(priceIdx);
             }
         }
     }

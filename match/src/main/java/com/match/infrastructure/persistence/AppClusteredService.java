@@ -24,7 +24,10 @@ import org.agrona.collections.Int2ObjectHashMap;
 import com.match.infrastructure.Logger;
 
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.Queue;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class AppClusteredService implements ClusteredService {
     private static final Logger logger = Logger.getLogger(AppClusteredService.class);
@@ -46,12 +49,15 @@ public class AppClusteredService implements ClusteredService {
     private final UnsafeBuffer broadcastBuffer = new UnsafeBuffer(new byte[32 * 1024]); // 32KB for JSON messages
 
     // Queue for market data messages (thread-safe for producer on Disruptor thread)
-    private final ConcurrentLinkedQueue<String> marketDataQueue = new ConcurrentLinkedQueue<>();
+    // Bounded to prevent OOM if cluster egress backs up
+    private static final int MARKET_DATA_QUEUE_CAPACITY = 10_000;
+    private final Queue<String> marketDataQueue = new ArrayBlockingQueue<>(MARKET_DATA_QUEUE_CAPACITY);
+    private final AtomicLong droppedMessages = new AtomicLong(0);
 
     // Timer ID for market data flush
     private static final long MARKET_DATA_TIMER_ID = 1000;
     private static final long MARKET_DATA_FLUSH_INTERVAL_MS = 50; // 50ms flush interval
-    private volatile boolean marketDataTimerScheduled = false;
+    private final AtomicBoolean marketDataTimerScheduled = new AtomicBoolean(false);
 
     /**
      * MarketDataBroadcaster implementation that queues messages for later sending.
@@ -62,7 +68,13 @@ public class AppClusteredService implements ClusteredService {
         @Override
         public void broadcast(String jsonMessage) {
             // Queue the message - will be sent during timer callback
-            marketDataQueue.offer(jsonMessage);
+            // ArrayBlockingQueue.offer() returns false if queue is full (non-blocking)
+            if (!marketDataQueue.offer(jsonMessage)) {
+                long dropped = droppedMessages.incrementAndGet();
+                if (dropped % 1000 == 1) { // Log every 1000 dropped messages
+                    System.out.println("[WARN] Market data queue full, dropped " + dropped + " messages total");
+                }
+            }
         }
 
         @Override
@@ -256,9 +268,9 @@ public class AppClusteredService implements ClusteredService {
         System.out.println("[SESSION] Opened session " + session.id() + ", total sessions: " + clientSessions.getAllSessions().size());
 
         // Schedule market data timer on first session (not from onStart - that's not allowed)
-        if (!marketDataTimerScheduled) {
+        // Use compareAndSet for atomic check-then-set to prevent duplicate scheduling
+        if (marketDataTimerScheduled.compareAndSet(false, true)) {
             scheduleMarketDataFlush();
-            marketDataTimerScheduled = true;
             System.out.println("[TIMER] Scheduled market data flush timer");
         }
     }
@@ -267,7 +279,11 @@ public class AppClusteredService implements ClusteredService {
     public void onSessionClose(final ClientSession session, final long timestamp, final CloseReason closeReason) {
         context.setClusterTime(timestamp);
         clientSessions.removeSession(session);
+        System.out.println("[SESSION] Closed session " + session.id() + ", reason=" + closeReason + ", remaining sessions: " + clientSessions.getAllSessions().size());
     }
+
+    // DEBUG: Message counter
+    private long msgCount = 0;
 
     @Override
     public void onSessionMessage(
@@ -277,6 +293,12 @@ public class AppClusteredService implements ClusteredService {
         final int offset,
         final int length,
         final Header header) {
+        msgCount++;
+        // DEBUG: Log every 100 messages
+        if (msgCount % 100 == 1) {
+            System.out.printf("[MSG-DEBUG] sessionId=%d, length=%d, msgCount=%d%n", session.id(), length, msgCount);
+        }
+
         context.setSessionContext(session, timestamp);
 
         try {

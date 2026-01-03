@@ -37,8 +37,9 @@ public class SubscriptionManager {
 
     /**
      * Register a new channel connection.
+     * Synchronized to prevent race with onDisconnect().
      */
-    public void onConnect(Channel channel) {
+    public synchronized void onConnect(Channel channel) {
         allChannels.add(channel);
         channelMarkets.put(channel, ConcurrentHashMap.newKeySet());
     }
@@ -102,16 +103,18 @@ public class SubscriptionManager {
 
     /**
      * Get total subscriber count for a market.
+     * Synchronized because marketSubscriptions is not thread-safe.
      */
-    public int getSubscriberCount(int marketId) {
+    public synchronized int getSubscriberCount(int marketId) {
         ChannelGroup group = marketSubscriptions.get(marketId);
         return group != null ? group.size() : 0;
     }
 
     /**
      * Get total connected clients.
+     * Synchronized for consistency with other synchronized methods.
      */
-    public int getTotalConnections() {
+    public synchronized int getTotalConnections() {
         return allChannels.size();
     }
 
@@ -126,15 +129,17 @@ public class SubscriptionManager {
 
     /**
      * Subscribe channel to admin operation updates.
+     * Synchronized to prevent race with onDisconnect().
      */
-    public void subscribeAdmin(Channel channel) {
+    public synchronized void subscribeAdmin(Channel channel) {
         adminSubscribers.add(channel);
     }
 
     /**
      * Unsubscribe channel from admin operation updates.
+     * Synchronized to prevent race with onDisconnect().
      */
-    public void unsubscribeAdmin(Channel channel) {
+    public synchronized void unsubscribeAdmin(Channel channel) {
         adminSubscribers.remove(channel);
     }
 

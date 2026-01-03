@@ -150,18 +150,28 @@ public class MatchEventPublisher {
 
         long tradeId = tradeIdGenerator.getAndIncrement();
 
-        // Check ring buffer capacity before blocking
+        // Check ring buffer capacity and apply backpressure if needed
         long remaining = ringBuffer.remainingCapacity();
         long bufferSize = ringBuffer.getBufferSize();
         if (remaining < bufferSize / 2) {
             logger.warn("RING BUFFER LOW: market=" + marketId + ", remaining=" + remaining + "/" + bufferSize);
         }
         if (remaining == 0) {
-            logger.error("RING BUFFER FULL - engine will block! market=" + marketId);
+            logger.error("RING BUFFER FULL - applying backpressure! market=" + marketId);
+            // Spin wait with limit to prevent indefinite blocking
+            int spinCount = 0;
+            final int MAX_SPINS = 1000;
+            while (ringBuffer.remainingCapacity() == 0 && spinCount < MAX_SPINS) {
+                Thread.onSpinWait();
+                spinCount++;
+            }
+            if (spinCount >= MAX_SPINS) {
+                logger.error("RING BUFFER still full after " + MAX_SPINS + " spins - forcing publish");
+            }
         }
 
         // Get next sequence - this may block briefly if buffer is full
-        // In a well-tuned system, this should never block
+        // In a well-tuned system with backpressure, this should rarely block
         long sequence = ringBuffer.next();
         try {
             PublishEvent event = ringBuffer.get(sequence);
