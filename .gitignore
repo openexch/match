@@ -27,3 +27,15 @@ target
 .vscode
 
 .claude
+
+# Aeron cluster backup/archive files
+backup/
+
+# Generated SBE files (should be generated at build time)
+match/src/main/java/com/match/infrastructure/generated/
+
+# Generated UI build assets
+match/src/main/resources/static/ui/assets/
+
+# SBE intermediate representation files
+*.sbeir

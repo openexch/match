@@ -4,6 +4,8 @@ import type { ConnectionStatus, WebSocketMessage } from '../types/market';
 interface UseWebSocketOptions {
   marketId: number;
   onMessage: (message: WebSocketMessage) => void;
+  onReconnecting?: () => void;  // Called when starting reconnect - use to reset state
+  onReconnected?: () => void;   // Called after successful reconnect
 }
 
 const MAX_RECONNECT_ATTEMPTS = 10;
@@ -15,12 +17,26 @@ const PING_INTERVAL = 30000;
 let messageCount = 0;
 let lastMessageLogTime = 0;
 
-export function useWebSocket({ marketId, onMessage }: UseWebSocketOptions) {
+export function useWebSocket({ marketId, onMessage, onReconnecting, onReconnected }: UseWebSocketOptions) {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const pingIntervalRef = useRef<number | null>(null);
+  const isReconnectRef = useRef(false);  // Track if this is a reconnection
+
+  // Use ref for onMessage to avoid reconnecting when handler changes
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
+
+  // Use refs for reconnection callbacks
+  const onReconnectingRef = useRef(onReconnecting);
+  const onReconnectedRef = useRef(onReconnected);
+  onReconnectingRef.current = onReconnecting;
+  onReconnectedRef.current = onReconnected;
+
+  // Use ref for marketId to send subscribe without reconnecting
+  const marketIdRef = useRef(marketId);
 
   const getWebSocketUrl = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -45,6 +61,12 @@ export function useWebSocket({ marketId, onMessage }: UseWebSocketOptions) {
       return;
     }
 
+    // Notify that reconnection is starting (if this is a reconnect)
+    if (isReconnectRef.current && onReconnectingRef.current) {
+      console.log('[WS] Reconnecting - resetting state');
+      onReconnectingRef.current();
+    }
+
     clearTimers();
     setStatus('connecting');
 
@@ -57,9 +79,21 @@ export function useWebSocket({ marketId, onMessage }: UseWebSocketOptions) {
         setStatus('connected');
         reconnectAttemptRef.current = 0;
 
-        // Subscribe to market
-        console.log('[WS] Subscribing to market', marketId);
-        ws.send(JSON.stringify({ action: 'subscribe', marketId }));
+        // Subscribe to market (use ref for current marketId)
+        console.log('[WS] Subscribing to market', marketIdRef.current);
+        ws.send(JSON.stringify({ action: 'subscribe', marketId: marketIdRef.current }));
+
+        // Request state refresh after reconnect
+        if (isReconnectRef.current) {
+          console.log('[WS] Requesting state refresh after reconnect');
+          ws.send(JSON.stringify({ action: 'refresh' }));
+          if (onReconnectedRef.current) {
+            onReconnectedRef.current();
+          }
+        }
+
+        // Mark future connects as reconnects
+        isReconnectRef.current = true;
 
         // Start ping interval
         pingIntervalRef.current = window.setInterval(() => {
@@ -80,7 +114,8 @@ export function useWebSocket({ marketId, onMessage }: UseWebSocketOptions) {
             messageCount = 0;
           }
           const message = JSON.parse(event.data) as WebSocketMessage;
-          onMessage(message);
+          // Use ref to always call latest handler without causing reconnects
+          onMessageRef.current(message);
         } catch (e) {
           console.error('Failed to parse WebSocket message:', e);
         }
@@ -114,7 +149,7 @@ export function useWebSocket({ marketId, onMessage }: UseWebSocketOptions) {
       console.error('Failed to create WebSocket:', e);
       setStatus('error');
     }
-  }, [getWebSocketUrl, marketId, onMessage, clearTimers]);
+  }, [getWebSocketUrl, clearTimers]);
 
   const disconnect = useCallback(() => {
     clearTimers();
@@ -126,6 +161,7 @@ export function useWebSocket({ marketId, onMessage }: UseWebSocketOptions) {
     setStatus('disconnected');
   }, [clearTimers]);
 
+  // Connect on mount, disconnect on unmount
   useEffect(() => {
     connect();
     return () => {
@@ -133,5 +169,27 @@ export function useWebSocket({ marketId, onMessage }: UseWebSocketOptions) {
     };
   }, [connect, disconnect]);
 
-  return { status, reconnect: connect, disconnect };
+  // Handle market changes by re-subscribing (without reconnecting)
+  useEffect(() => {
+    marketIdRef.current = marketId;
+    // If already connected, send new subscription
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      console.log('[WS] Re-subscribing to market', marketId);
+      wsRef.current.send(JSON.stringify({ action: 'subscribe', marketId }));
+    }
+  }, [marketId]);
+
+  // Force reconnect - explicitly triggers onReconnecting callback
+  const forceReconnect = useCallback(() => {
+    isReconnectRef.current = true;
+    reconnectAttemptRef.current = 0;
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    // connect() will be called by onclose handler, but we can also call directly for immediate effect
+    connect();
+  }, [connect]);
+
+  return { status, reconnect: connect, disconnect, forceReconnect };
 }

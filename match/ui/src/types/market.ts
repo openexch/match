@@ -59,9 +59,9 @@ export interface BookSnapshotMessage {
 }
 
 export interface OrderStatusMessage {
-  type: 'ORDER_STATUS';
-  marketId: number;
-  market: string;
+  type?: 'ORDER_STATUS';
+  marketId?: number;
+  market?: string;
   orderId: number;
   userId: number;
   status: OrderStatus;
@@ -69,6 +69,15 @@ export interface OrderStatusMessage {
   remainingQuantity: number;
   filledQuantity: number;
   side: 'BID' | 'ASK';
+  timestamp: number;
+}
+
+export interface OrderStatusBatchMessage {
+  type: 'ORDER_STATUS_BATCH';
+  marketId: number;
+  market: string;
+  orders: OrderStatusMessage[];
+  count: number;
   timestamp: number;
 }
 
@@ -88,8 +97,8 @@ export interface ErrorMessage {
   message: string;
 }
 
-// Cluster status types
-export type NodeStatus = 'LEADER' | 'FOLLOWER' | 'CANDIDATE' | 'OFFLINE' | 'STARTING';
+// Cluster status types - includes transitional states during rolling updates
+export type NodeStatus = 'LEADER' | 'FOLLOWER' | 'CANDIDATE' | 'OFFLINE' | 'STOPPING' | 'STARTING' | 'REJOINING' | 'ELECTION';
 
 export interface ClusterNode {
   id: number;
@@ -115,10 +124,33 @@ export interface ClusterEventMessage {
   timestamp: number;
 }
 
+// UI cluster state - aggregated from CLUSTER_STATUS and CLUSTER_EVENT messages
+export interface ClusterState {
+  leaderId: number;
+  leadershipTermId: number;
+  nodes: ClusterNode[];
+  gatewayConnected: boolean;
+  isRollingUpdate: boolean;
+  isElecting: boolean;
+  lastEvent: ClusterEventMessage | null;
+  lastUpdate: number;
+}
+
+// Extended connection status that includes cluster-aware states
+export type ExtendedConnectionStatus =
+  | 'connecting'
+  | 'connected'
+  | 'disconnected'
+  | 'error'
+  | 'cluster-updating'
+  | 'cluster-electing'
+  | 'cluster-reconnecting';
+
 export type WebSocketMessage =
   | TradesBatchMessage
   | BookSnapshotMessage
   | OrderStatusMessage
+  | OrderStatusBatchMessage
   | SubscriptionConfirmMessage
   | PongMessage
   | ErrorMessage

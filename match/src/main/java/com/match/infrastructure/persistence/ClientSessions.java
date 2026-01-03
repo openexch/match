@@ -18,15 +18,18 @@ package com.match.infrastructure.persistence;
 
 import io.aeron.cluster.service.ClientSession;
 
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Manages client sessions within the cluster
+ * Manages client sessions within the cluster.
+ * Thread-safe to allow MarketPublisher flush thread to check hasSubscribers().
  */
 public class ClientSessions
 {
-    private final List<ClientSession> allSessions = new ArrayList<>();
+    // CopyOnWriteArrayList is thread-safe for concurrent reads
+    // Session add/remove is infrequent, so copy-on-write overhead is acceptable
+    private final List<ClientSession> allSessions = new CopyOnWriteArrayList<>();
 
     /**
      * Adds a client session

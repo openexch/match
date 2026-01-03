@@ -91,7 +91,7 @@ public class LoadConfig {
         private List<String> clusterHosts = Arrays.asList("localhost", "localhost", "localhost");
         private int basePort = 9000;
         private String egressChannel = getDefaultEgressChannel();
-        private String ingressChannel = "aeron:udp?term-length=1m"; // Increased from 64k to 1MB
+        private String ingressChannel = "aeron:udp?term-length=16m|mtu=8k"; // Match cluster config
         private int maxRetries = 10; // Increased retries but with shorter delays
         private long retryDelayMs = 0; // Remove sleep - use busy retry instead
 

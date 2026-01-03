@@ -64,6 +64,21 @@ public class MarketPublisher implements MarketEventHandler {
     // Pre-allocated StringBuilder for JSON building (reused per event)
     private final StringBuilder jsonBuilder = new StringBuilder(512);
 
+    // ORDER_STATUS buffer for batching
+    private final java.util.List<OrderStatusEntry> orderStatusBuffer = new java.util.ArrayList<>(100);
+    private static class OrderStatusEntry {
+        int marketId;
+        String market;
+        long orderId;
+        long userId;  // userId is long, not String
+        int status;
+        long price;
+        long remainingQty;
+        long filledQty;
+        boolean isBuy;
+        long timestamp;
+    }
+
     // Change detection - avoid sending duplicate snapshots
     private long lastBestBid = -1;
     private long lastBestAsk = -1;
@@ -200,8 +215,8 @@ public class MarketPublisher implements MarketEventHandler {
             // Buffer trades - order book is fetched directly from engine at 50ms intervals
             bufferTrade(event);
         } else if (eventType == PublishEventType.ORDER_STATUS_UPDATE) {
-            // Send order status updates immediately (not buffered)
-            sendOrderStatus(event);
+            // Buffer order status for batched sending (reduces message count)
+            bufferOrderStatus(event);
         }
         // ORDER_BOOK_UPDATE not used - snapshots collected directly from engine
     }
@@ -299,7 +314,6 @@ public class MarketPublisher implements MarketEventHandler {
     private synchronized void flushBuffers() {
         flushCount++;
 
-
         try {
             // Check if we have any subscribers (either via broadcaster or WebSocket)
             boolean hasSubscribers;
@@ -312,9 +326,6 @@ public class MarketPublisher implements MarketEventHandler {
 
             if (!hasSubscribers) {
                 // No subscribers, clear buffers but don't serialize
-                if (flushCount % 100 == 0) {
-                    logger.warn("NO SUBSCRIBERS for market " + marketId + " - dropping updates");
-                }
                 clearBuffersWithoutSending();
                 return;
             }
@@ -324,6 +335,13 @@ public class MarketPublisher implements MarketEventHandler {
                 String tradesJson = serializeAggregatedTrades();
                 broadcastMessage(tradesJson);
                 clearTradesBuffer();
+            }
+
+            // Flush buffered order status updates as batch
+            if (!orderStatusBuffer.isEmpty()) {
+                String statusJson = serializeOrderStatusBatch();
+                broadcastMessage(statusJson);
+                orderStatusBuffer.clear();
             }
 
             // Get fresh order book snapshot from matching engine (runs on this thread, not matching engine thread)
@@ -345,6 +363,7 @@ public class MarketPublisher implements MarketEventHandler {
 
     private void clearBuffersWithoutSending() {
         clearTradesBuffer();
+        orderStatusBuffer.clear();
     }
 
     /**
@@ -373,22 +392,23 @@ public class MarketPublisher implements MarketEventHandler {
         tradesByPrice.clear();
     }
 
-    private void sendOrderStatus(PublishEvent event) {
-        // Check if we have any subscribers
-        boolean hasSubscribers;
-        if (broadcaster != null) {
-            hasSubscribers = broadcaster.hasSubscribers();
-        } else {
-            ChannelGroup subs = subscriptionManager.getSubscribers(marketId);
-            hasSubscribers = subs != null && !subs.isEmpty();
-        }
-
-        if (!hasSubscribers) {
-            return;
-        }
-
-        String json = serializeOrderStatus(event);
-        broadcastMessage(json);
+    /**
+     * Buffer order status for batched sending.
+     * Reduces message count by bundling multiple status updates together.
+     */
+    private synchronized void bufferOrderStatus(PublishEvent event) {
+        OrderStatusEntry entry = new OrderStatusEntry();
+        entry.marketId = event.getMarketId();
+        entry.market = marketName;
+        entry.orderId = event.getOrderId();
+        entry.userId = event.getUserId();
+        entry.status = event.getOrderStatus();
+        entry.price = event.getOrderPrice();
+        entry.remainingQty = event.getRemainingQty();
+        entry.filledQty = event.getFilledQty();
+        entry.isBuy = event.isOrderIsBuy();
+        entry.timestamp = event.getTimestamp();
+        orderStatusBuffer.add(entry);
     }
 
     /**
@@ -520,19 +540,33 @@ public class MarketPublisher implements MarketEventHandler {
         return json.toString();
     }
 
-    private String serializeOrderStatus(PublishEvent event) {
+    /**
+     * Serialize buffered order status entries as a batch.
+     * Reduces message count from N individual messages to 1 batch message.
+     */
+    private String serializeOrderStatusBatch() {
         JsonObject json = new JsonObject();
-        json.addProperty("type", "ORDER_STATUS");
-        json.addProperty("marketId", event.getMarketId());
+        json.addProperty("type", "ORDER_STATUS_BATCH");
+        json.addProperty("marketId", marketId);
         json.addProperty("market", marketName);
-        json.addProperty("orderId", event.getOrderId());
-        json.addProperty("userId", event.getUserId());
-        json.addProperty("status", getStatusName(event.getOrderStatus()));
-        json.addProperty("price", FixedPoint.toDouble(event.getOrderPrice()));
-        json.addProperty("remainingQuantity", FixedPoint.toDouble(event.getRemainingQty()));
-        json.addProperty("filledQuantity", FixedPoint.toDouble(event.getFilledQty()));
-        json.addProperty("side", event.isOrderIsBuy() ? "BID" : "ASK");
-        json.addProperty("timestamp", event.getTimestamp());
+        json.addProperty("timestamp", System.currentTimeMillis());
+        json.addProperty("count", orderStatusBuffer.size());
+
+        JsonArray orders = new JsonArray();
+        for (OrderStatusEntry entry : orderStatusBuffer) {
+            JsonObject o = new JsonObject();
+            o.addProperty("orderId", entry.orderId);
+            o.addProperty("userId", entry.userId);
+            o.addProperty("status", getStatusName(entry.status));
+            o.addProperty("price", FixedPoint.toDouble(entry.price));
+            o.addProperty("remainingQuantity", FixedPoint.toDouble(entry.remainingQty));
+            o.addProperty("filledQuantity", FixedPoint.toDouble(entry.filledQty));
+            o.addProperty("side", entry.isBuy ? "BID" : "ASK");
+            o.addProperty("timestamp", entry.timestamp);
+            orders.add(o);
+        }
+        json.add("orders", orders);
+
         return json.toString();
     }
 

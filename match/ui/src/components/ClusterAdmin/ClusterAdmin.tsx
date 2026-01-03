@@ -56,9 +56,7 @@ function ActionButton({ operation, label, description, progress, onClick }: Acti
   const isError = isActive && progress?.error;
   const isInProgress = isActive && !progress?.complete;
   const isDisabled = progress?.operation != null && !progress?.complete;
-
   const progressPercent = isActive ? progress?.progress || 0 : 0;
-  const statusText = isActive ? progress?.status : null;
 
   return (
     <button
@@ -72,13 +70,13 @@ function ActionButton({ operation, label, description, progress, onClick }: Acti
           {isInProgress && <span className="action-spinner" />}
           {isComplete && !isError && <span className="action-check">&#10003;</span>}
           {isError && <span className="action-error-icon">&#10007;</span>}
-          {isInProgress ? statusText : label}
+          {label}
         </span>
         <span className="action-desc">
           {isInProgress
-            ? `Step ${progress?.currentStep}/${progress?.totalSteps} (${progressPercent}%)`
+            ? `${progressPercent}%`
             : isComplete
-            ? (isError ? progress?.errorMessage : 'Completed')
+            ? (isError ? 'Failed' : 'Complete')
             : description}
         </span>
       </div>
@@ -86,139 +84,53 @@ function ActionButton({ operation, label, description, progress, onClick }: Acti
   );
 }
 
-// Helper to get cluster status - always returns a status for the banner
+// Helper to get cluster status - simplified to 4 states
 function getClusterBannerStatus(progress: OperationProgress | null, nodes: NodeStatus[]): {
-  isOperation: boolean;
-  isElecting: boolean;
-  status: string;
+  status: 'healthy' | 'electing' | 'unstable' | 'building';
+  title: string;
   detail: string;
 } {
-  const onlineNodes = nodes.filter(n => n.running || n.role !== 'OFFLINE').length;
+  // Check if building is in progress
+  const isBuilding = progress?.operation === 'rolling-update' &&
+    !progress.complete &&
+    (progress.status?.toLowerCase().includes('building') ?? false);
+
+  if (isBuilding) {
+    return {
+      status: 'building',
+      title: 'Building Application',
+      detail: progress?.status || 'Compiling...'
+    };
+  }
+
   const leader = nodes.find(n => n.role === 'LEADER');
-  const followers = nodes.filter(n => n.role === 'FOLLOWER');
-  const stoppingNodes = nodes.filter(n => n.role === 'STOPPING');
-  const startingNodes = nodes.filter(n => n.role === 'STARTING');
   const electingNodes = nodes.filter(n => n.role === 'ELECTION');
-  const rejoiningNodes = nodes.filter(n => n.role === 'REJOINING');
-  const offlineNodes = nodes.filter(n => n.role === 'OFFLINE' || !n.running);
+  const isElecting = electingNodes.length > 0 ||
+    (progress?.status?.includes('election') ?? false);
 
-  // Build node state summary with professional formatting
-  const buildNodeSummary = () => {
-    const parts: string[] = [];
-    if (leader) parts.push(`Leader: Node ${leader.id}`);
-    if (followers.length > 0) parts.push(`Followers: ${followers.map(n => n.id).join(', ')}`);
-    if (stoppingNodes.length > 0) parts.push(`Stopping: ${stoppingNodes.map(n => n.id).join(', ')}`);
-    if (startingNodes.length > 0) parts.push(`Starting: ${startingNodes.map(n => n.id).join(', ')}`);
-    if (rejoiningNodes.length > 0) parts.push(`Rejoining: ${rejoiningNodes.map(n => n.id).join(', ')}`);
-    if (electingNodes.length > 0) parts.push(`In Election: ${electingNodes.map(n => n.id).join(', ')}`);
-    if (offlineNodes.length > 0) parts.push(`Offline: ${offlineNodes.map(n => n.id).join(', ')}`);
-    return parts.join(' • ');
-  };
-
-  // During active operation
-  if (progress?.operation && !progress.complete) {
-    const statusText = progress.status || '';
-    const nodeSummary = buildNodeSummary();
-
-    // Election in progress
-    if (statusText.includes('election') || electingNodes.length > 0) {
-      return {
-        isOperation: true,
-        isElecting: true,
-        status: 'Leader Election Active',
-        detail: nodeSummary || 'Consensus algorithm selecting new leader'
-      };
-    }
-
-    // Stopping leader (election about to start)
-    if (statusText.includes('Stopping') && statusText.includes('Leader')) {
-      return {
-        isOperation: true,
-        isElecting: true,
-        status: 'Leader Transition Initiated',
-        detail: nodeSummary || 'Current leader stepping down for election'
-      };
-    }
-
-    // Stopping a follower
-    if (stoppingNodes.length > 0 || statusText.includes('Stopping')) {
-      const stoppingNode = stoppingNodes[0];
-      return {
-        isOperation: true,
-        isElecting: false,
-        status: `Node ${stoppingNode?.id ?? '?'} Shutting Down`,
-        detail: nodeSummary
-      };
-    }
-
-    // Starting a node
-    if (startingNodes.length > 0 || statusText.includes('Starting')) {
-      const startingNode = startingNodes[0];
-      return {
-        isOperation: true,
-        isElecting: false,
-        status: `Node ${startingNode?.id ?? '?'} Initializing`,
-        detail: nodeSummary
-      };
-    }
-
-    // Rejoining
-    if (rejoiningNodes.length > 0 || statusText.includes('rejoin')) {
-      const rejoiningNode = rejoiningNodes[0];
-      return {
-        isOperation: true,
-        isElecting: false,
-        status: `Node ${rejoiningNode?.id ?? '?'} Synchronizing`,
-        detail: nodeSummary
-      };
-    }
-
-    // Mark file timeout or cleaning - still show node states
-    if (statusText.includes('mark file')) {
-      return {
-        isOperation: true,
-        isElecting: false,
-        status: 'Awaiting Mark File Expiry',
-        detail: nodeSummary
-      };
-    }
-
-    if (statusText.includes('Cleaning')) {
-      return {
-        isOperation: true,
-        isElecting: false,
-        status: 'Clearing Shared Memory',
-        detail: nodeSummary
-      };
-    }
-
-    // Generic operation status
+  // No leader and not electing = unstable
+  if (!leader && !isElecting) {
     return {
-      isOperation: true,
-      isElecting: false,
-      status: `Operation Step ${progress.currentStep}/${progress.totalSteps}`,
-      detail: nodeSummary || statusText
+      status: 'unstable',
+      title: 'Cluster Unstable',
+      detail: 'No leader - Loss of quorum'
     };
   }
 
-  // No active operation - show cluster health with full state
-  const nodeSummary = buildNodeSummary();
-
-  if (leader) {
+  // Election in progress
+  if (isElecting) {
     return {
-      isOperation: false,
-      isElecting: false,
-      status: 'Cluster Healthy',
-      detail: nodeSummary
+      status: 'electing',
+      title: 'Election in Progress',
+      detail: 'Selecting new leader...'
     };
   }
 
-  // No leader found - election needed
+  // Leader exists = healthy
   return {
-    isOperation: false,
-    isElecting: true,
-    status: 'No Quorum Established',
-    detail: nodeSummary || `${onlineNodes} of 3 nodes available`
+    status: 'healthy',
+    title: 'Cluster Healthy',
+    detail: 'Leader elected'
   };
 }
 
@@ -229,6 +141,7 @@ export function ClusterAdmin({ isOpen, onClose }: ClusterAdminProps) {
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<OperationProgress | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
+  const [serviceOps, setServiceOps] = useState<{backup: boolean; gateway: boolean}>({backup: false, gateway: false});
   const wsRef = useRef<WebSocket | null>(null);
   const statusPollRef = useRef<number | null>(null);
 
@@ -358,9 +271,106 @@ export function ClusterAdmin({ isOpen, onClose }: ClusterAdminProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nodeId }),
       });
-      // Status update will come via WebSocket
     } catch (e) {
       setError('Failed to restart node');
+    }
+  };
+
+  const stopNode = async (nodeId: number) => {
+    if (progress?.operation && !progress.complete) return;
+    try {
+      await fetch('/api/admin/stop-node', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodeId }),
+      });
+    } catch (e) {
+      setError('Failed to stop node');
+    }
+  };
+
+  const startNode = async (nodeId: number) => {
+    if (progress?.operation && !progress.complete) return;
+    try {
+      await fetch('/api/admin/start-node', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodeId }),
+      });
+    } catch (e) {
+      setError('Failed to start node');
+    }
+  };
+
+  const stopBackup = async () => {
+    if (serviceOps.backup || (progress?.operation && !progress.complete)) return;
+    setServiceOps(prev => ({...prev, backup: true}));
+    try {
+      await fetch('/api/admin/stop-backup', { method: 'POST' });
+      setTimeout(() => { setServiceOps(prev => ({...prev, backup: false})); fetchStatus(); }, 3000);
+    } catch (e) {
+      setError('Failed to stop backup');
+      setServiceOps(prev => ({...prev, backup: false}));
+    }
+  };
+
+  const startBackup = async () => {
+    if (serviceOps.backup || (progress?.operation && !progress.complete)) return;
+    setServiceOps(prev => ({...prev, backup: true}));
+    try {
+      await fetch('/api/admin/start-backup', { method: 'POST' });
+      setTimeout(() => { setServiceOps(prev => ({...prev, backup: false})); fetchStatus(); }, 3000);
+    } catch (e) {
+      setError('Failed to start backup');
+      setServiceOps(prev => ({...prev, backup: false}));
+    }
+  };
+
+  const restartBackup = async () => {
+    if (serviceOps.backup || (progress?.operation && !progress.complete)) return;
+    setServiceOps(prev => ({...prev, backup: true}));
+    try {
+      await fetch('/api/admin/restart-backup', { method: 'POST' });
+      setTimeout(() => { setServiceOps(prev => ({...prev, backup: false})); fetchStatus(); }, 5000);
+    } catch (e) {
+      setError('Failed to restart backup');
+      setServiceOps(prev => ({...prev, backup: false}));
+    }
+  };
+
+  const stopGateway = async () => {
+    if (serviceOps.gateway || (progress?.operation && !progress.complete)) return;
+    setServiceOps(prev => ({...prev, gateway: true}));
+    try {
+      await fetch('/api/admin/stop-gateway', { method: 'POST' });
+      setTimeout(() => { setServiceOps(prev => ({...prev, gateway: false})); fetchStatus(); }, 3000);
+    } catch (e) {
+      setError('Failed to stop gateway');
+      setServiceOps(prev => ({...prev, gateway: false}));
+    }
+  };
+
+  const startGateway = async () => {
+    if (serviceOps.gateway || (progress?.operation && !progress.complete)) return;
+    setServiceOps(prev => ({...prev, gateway: true}));
+    try {
+      await fetch('/api/admin/start-gateway', { method: 'POST' });
+      setTimeout(() => { setServiceOps(prev => ({...prev, gateway: false})); fetchStatus(); }, 3000);
+    } catch (e) {
+      setError('Failed to start gateway');
+      setServiceOps(prev => ({...prev, gateway: false}));
+    }
+  };
+
+  const restartGateway = async () => {
+    if (serviceOps.gateway || (progress?.operation && !progress.complete)) return;
+    setServiceOps(prev => ({...prev, gateway: true}));
+    try {
+      await fetch('/api/admin/restart-gateway', { method: 'POST' });
+      setTimeout(() => { setServiceOps(prev => ({...prev, gateway: false})); fetchStatus(); }, 5000);
+    } catch (e) {
+      setError('Failed to restart gateway');
+      setServiceOps(prev => ({...prev, gateway: false}));
     }
   };
 
@@ -406,10 +416,10 @@ export function ClusterAdmin({ isOpen, onClose }: ClusterAdminProps) {
 
         <div className="admin-content">
           {/* Cluster Status Banner - Always visible */}
-          <div className={`election-banner ${bannerStatus.isElecting ? 'electing' : ''} ${bannerStatus.isOperation ? 'operation' : ''}`}>
-            <span className={`status-indicator ${bannerStatus.isElecting ? 'warning' : bannerStatus.isOperation ? 'active' : 'healthy'}`}></span>
+          <div className={`election-banner ${bannerStatus.status}`}>
+            <span className={`status-indicator ${bannerStatus.status}`}></span>
             <div className="election-info">
-              <div className="election-title">{bannerStatus.status}</div>
+              <div className="election-title">{bannerStatus.title}</div>
               <div className="election-detail">{bannerStatus.detail}</div>
             </div>
           </div>
@@ -453,13 +463,37 @@ export function ClusterAdmin({ isOpen, onClose }: ClusterAdminProps) {
                       <span className={`status-dot ${stateClass} ${isTransitioning ? 'pulsing' : ''}`}></span>
                       {getStatusLabel()}
                     </div>
-                    <button
-                      className="node-action-btn"
-                      onClick={() => restartNode(node.id)}
-                      disabled={!!(progress?.operation && !progress.complete)}
-                    >
-                      Restart
-                    </button>
+                    <div className="node-actions">
+                      {node.running && !isTransitioning ? (
+                        <>
+                          <button
+                            className="icon-btn stop"
+                            onClick={() => stopNode(node.id)}
+                            disabled={isTransitioning || !!(progress?.operation && !progress.complete)}
+                            title="Stop"
+                          >
+                            &#9632;
+                          </button>
+                          <button
+                            className="icon-btn restart"
+                            onClick={() => restartNode(node.id)}
+                            disabled={isTransitioning || !!(progress?.operation && !progress.complete)}
+                            title="Restart"
+                          >
+                            &#8635;
+                          </button>
+                        </>
+                      ) : !node.running && !isTransitioning ? (
+                        <button
+                          className="icon-btn start"
+                          onClick={() => startNode(node.id)}
+                          disabled={isTransitioning || !!(progress?.operation && !progress.complete)}
+                          title="Start"
+                        >
+                          &#9654;
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                 );
               })}
@@ -470,15 +504,85 @@ export function ClusterAdmin({ isOpen, onClose }: ClusterAdminProps) {
           <section className="admin-section">
             <h3>Services</h3>
             <div className="services-grid">
-              <div className="service-card">
-                <span className="service-name">Backup Node</span>
-                <span className={`status-dot ${status?.backup.running ? 'online' : 'offline'}`}></span>
-                {status?.backup.running ? `PID: ${status.backup.pid}` : 'Offline'}
+              <div className={`service-card ${serviceOps.backup ? 'operating' : ''}`}>
+                <div className="service-header">
+                  <span className="service-name">Backup Node</span>
+                  <span className={`status-dot ${serviceOps.backup ? 'pulsing' : ''} ${status?.backup.running ? 'online' : 'offline'}`}></span>
+                </div>
+                <span className="service-status">
+                  {serviceOps.backup ? 'Processing...' : status?.backup.running ? `PID: ${status.backup.pid}` : 'Offline'}
+                </span>
+                <div className="service-actions">
+                  {!serviceOps.backup && status?.backup.running ? (
+                    <>
+                      <button
+                        className="icon-btn stop"
+                        onClick={stopBackup}
+                        disabled={serviceOps.backup || !!(progress?.operation && !progress.complete)}
+                        title="Stop"
+                      >
+                        &#9632;
+                      </button>
+                      <button
+                        className="icon-btn restart"
+                        onClick={restartBackup}
+                        disabled={serviceOps.backup || !!(progress?.operation && !progress.complete)}
+                        title="Restart"
+                      >
+                        &#8635;
+                      </button>
+                    </>
+                  ) : !serviceOps.backup ? (
+                    <button
+                      className="icon-btn start"
+                      onClick={startBackup}
+                      disabled={serviceOps.backup || !!(progress?.operation && !progress.complete)}
+                      title="Start"
+                    >
+                      &#9654;
+                    </button>
+                  ) : null}
+                </div>
               </div>
-              <div className="service-card">
-                <span className="service-name">HTTP Gateway</span>
-                <span className="status-dot online"></span>
-                Port {status?.gateway.port}
+              <div className={`service-card ${serviceOps.gateway ? 'operating' : ''}`}>
+                <div className="service-header">
+                  <span className="service-name">HTTP Gateway</span>
+                  <span className={`status-dot ${serviceOps.gateway ? 'pulsing' : ''} ${status?.gateway.running ? 'online' : 'offline'}`}></span>
+                </div>
+                <span className="service-status">
+                  {serviceOps.gateway ? 'Processing...' : `Port ${status?.gateway.port}`}
+                </span>
+                <div className="service-actions">
+                  {!serviceOps.gateway && status?.gateway.running ? (
+                    <>
+                      <button
+                        className="icon-btn stop"
+                        onClick={stopGateway}
+                        disabled={serviceOps.gateway || !!(progress?.operation && !progress.complete)}
+                        title="Stop"
+                      >
+                        &#9632;
+                      </button>
+                      <button
+                        className="icon-btn restart"
+                        onClick={restartGateway}
+                        disabled={serviceOps.gateway || !!(progress?.operation && !progress.complete)}
+                        title="Restart"
+                      >
+                        &#8635;
+                      </button>
+                    </>
+                  ) : !serviceOps.gateway ? (
+                    <button
+                      className="icon-btn start"
+                      onClick={startGateway}
+                      disabled={serviceOps.gateway || !!(progress?.operation && !progress.complete)}
+                      title="Start"
+                    >
+                      &#9654;
+                    </button>
+                  ) : null}
+                </div>
               </div>
               <div className="service-card">
                 <span className="service-name">Archive (Apparent)</span>

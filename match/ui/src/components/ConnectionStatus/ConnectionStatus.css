@@ -57,3 +57,28 @@
 .reconnect-btn:hover {
   background: #0da870;
 }
+
+/* Cluster transition states (updating, electing, reconnecting) */
+.connection-status.cluster-transition {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.connection-status.cluster-transition .status-indicator {
+  background: #f59e0b;
+  animation: pulse 1.5s infinite;
+}
+
+.connection-status.cluster-transition .status-text {
+  color: #f59e0b;
+}
+
+/* Leader badge */
+.leader-badge {
+  font-size: 10px;
+  font-family: monospace;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: #7eb8f5;
+}

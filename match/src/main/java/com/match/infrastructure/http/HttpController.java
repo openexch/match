@@ -272,7 +272,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
     // Reconnection support
     private volatile boolean needsReconnect = false;
     private volatile long lastReconnectAttempt = 0;
-    private static final long RECONNECT_COOLDOWN_MS = 2000;
+    private static final long RECONNECT_COOLDOWN_MS = 500;  // Fast reconnection attempts
     private final String ingressEndpoints;
     private final String egressChannel;
     
@@ -362,6 +362,14 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
         // Cluster Admin API
         this.server.createContext("/api/admin/status", this::handleAdminStatus);
         this.server.createContext("/api/admin/restart-node", this::handleRestartNode);
+        this.server.createContext("/api/admin/stop-node", this::handleStopNode);
+        this.server.createContext("/api/admin/start-node", this::handleStartNode);
+        this.server.createContext("/api/admin/stop-backup", this::handleStopBackup);
+        this.server.createContext("/api/admin/start-backup", this::handleStartBackup);
+        this.server.createContext("/api/admin/restart-backup", this::handleRestartBackup);
+        this.server.createContext("/api/admin/stop-gateway", this::handleStopGateway);
+        this.server.createContext("/api/admin/start-gateway", this::handleStartGateway);
+        this.server.createContext("/api/admin/restart-gateway", this::handleRestartGateway);
         this.server.createContext("/api/admin/rolling-update", this::handleRollingUpdate);
         this.server.createContext("/api/admin/snapshot", this::handleSnapshot);
         this.server.createContext("/api/admin/compact", this::handleCompact);
@@ -520,7 +528,11 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
      */
     private void broadcastMarketData(String jsonMessage) {
         if (marketChannels != null && !marketChannels.isEmpty()) {
+            int clientCount = marketChannels.size();
             marketChannels.writeAndFlush(new TextWebSocketFrame(jsonMessage));
+            if (System.currentTimeMillis() % 5000 < 50) {
+                System.out.printf("[WS] Broadcast to %d clients: %d bytes%n", clientCount, jsonMessage.length());
+            }
         }
     }
 
@@ -776,16 +788,23 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
         final AeronCluster.Context clusterCtx = new AeronCluster.Context()
                 .egressListener(this)
                 .egressChannel(egressChannel)
-                .ingressChannel("aeron:udp?term-length=64k")
+                .ingressChannel("aeron:udp?term-length=16m|mtu=8k")
                 .aeronDirectoryName(mediaDriver.aeronDirectoryName())
                 .ingressEndpoints(ingressEndpoints)
-                .messageTimeoutNs(TimeUnit.SECONDS.toNanos(10));  // Longer timeout for failover
+                .messageTimeoutNs(TimeUnit.SECONDS.toNanos(2));  // 2-second failover detection
 
         System.out.println("Connecting to Aeron Cluster...");
         this.cluster = AeronCluster.connect(clusterCtx);
         System.out.println("Connected to Cluster");
         connectionState = ConnectionState.CONNECTED;
         needsReconnect = false;
+
+        // Get current leader from cluster
+        int currentLeader = cluster.leaderMemberId();
+        if (currentLeader >= 0) {
+            clusterStatus.updateLeader(currentLeader, cluster.leadershipTermId());
+            System.out.println("Current leader: Node " + currentLeader);
+        }
 
         // Broadcast gateway connection to UI
         clusterStatus.setGatewayConnected(true);
@@ -863,7 +882,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
      * Check cluster node status and broadcast to UI clients
      */
     private void checkAndBroadcastClusterStatus() {
-        // Quick check using PID files for node health
+        // Quick check using systemctl for node health
         // Skip status updates during operations - let rolling update control states
         if (operationProgress.operation != null) {
             return;
@@ -878,21 +897,14 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                     continue;
                 }
 
-                java.io.File pidFile = new java.io.File("/tmp/aeron-cluster/node" + i + ".pid");
-                if (pidFile.exists()) {
-                    String pidStr = new String(java.nio.file.Files.readAllBytes(pidFile.toPath())).trim();
-                    int pid = Integer.parseInt(pidStr);
-                    // Check if process is running
-                    boolean running = new java.io.File("/proc/" + pid).exists();
-                    if (running && currentStatus.equals("OFFLINE")) {
-                        clusterStatus.setNodeStatus(i, "FOLLOWER", true);
-                    } else if (!running && !currentStatus.equals("OFFLINE")) {
-                        clusterStatus.setNodeStatus(i, "OFFLINE", false);
-                    }
-                } else {
-                    if (!currentStatus.equals("OFFLINE")) {
-                        clusterStatus.setNodeStatus(i, "OFFLINE", false);
-                    }
+                // Use systemctl to check if service is active (fast, reliable)
+                String activeResult = executeCommand("systemctl", "--user", "is-active", "match-node" + i);
+                boolean running = "active".equals(activeResult.trim());
+
+                if (running && currentStatus.equals("OFFLINE")) {
+                    clusterStatus.setNodeStatus(i, "FOLLOWER", true);
+                } else if (!running && !currentStatus.equals("OFFLINE")) {
+                    clusterStatus.setNodeStatus(i, "OFFLINE", false);
                 }
             } catch (Exception e) {
                 // Ignore errors in status check
@@ -948,17 +960,21 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
 
     @Override
     public void onMessage(long clusterSessionId, long timestamp, DirectBuffer buffer, int offset, int length, Header header) {
-        final String response = buffer.getStringUtf8(offset);
+        final String response = buffer.getStringWithoutLengthUtf8(offset, length);
+
+        // Debug: log all incoming messages
+        System.out.printf("[EGRESS] Received %d bytes from cluster%n", length);
 
         // Check if this is market data (JSON with type field) and broadcast to WebSocket clients
         if (response.startsWith("{\"type\":")) {
-            // Market data messages: BOOK_SNAPSHOT, TRADES_BATCH, ORDER_STATUS
+            // Market data messages: BOOK_SNAPSHOT, TRADES_BATCH, ORDER_STATUS_BATCH
             if (response.contains("\"type\":\"BOOK_SNAPSHOT\"")) {
                 // Cache the latest book snapshot for new client connections
                 lastBookSnapshot = response;
                 broadcastMarketData(response);
                 return;
             } else if (response.contains("\"type\":\"TRADES_BATCH\"") ||
+                       response.contains("\"type\":\"ORDER_STATUS_BATCH\"") ||
                        response.contains("\"type\":\"ORDER_STATUS\"")) {
                 broadcastMarketData(response);
                 return;
@@ -991,21 +1007,10 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
 
         // Get cluster nodes status
         List<Map<String, Object>> nodes = new ArrayList<>();
-        int leaderNode = -1;
 
-        // Try to get leader from ClusterTool
-        try {
-            String result = executeCommand("java", "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
-                "-cp", "match/target/cluster-engine-1.0.jar", "io.aeron.cluster.ClusterTool",
-                "/tmp/aeron-cluster/node0/cluster", "list-members");
-
-            if (result.contains("leaderMemberId=")) {
-                String leaderStr = result.split("leaderMemberId=")[1].split(",")[0].trim();
-                leaderNode = Integer.parseInt(leaderStr);
-            }
-        } catch (Exception e) {
-            // Ignore - will show as unknown
-        }
+        // Use gateway's tracked leader (fast - no external calls needed)
+        // The gateway maintains a connection to the cluster and tracks the leader
+        int leaderNode = clusterStatus.leaderId;
 
         // Check each node - use clusterStatus for transitional states during operations
         for (int i = 0; i < 3; i++) {
@@ -1025,15 +1030,15 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                 node.put("role", "STOPPING");
             } else {
                 try {
-                    String pidResult = executeCommand("java", "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
-                        "-cp", "match/target/cluster-engine-1.0.jar", "io.aeron.cluster.ClusterTool",
-                        "/tmp/aeron-cluster/node" + i + "/cluster", "pid");
-                    int pid = Integer.parseInt(pidResult.trim());
+                    // Use systemctl to check if service is active (fast, no timeout issues)
+                    String activeResult = executeCommand("systemctl", "--user", "is-active", "match-node" + i);
+                    boolean isActive = "active".equals(activeResult.trim());
 
-                    // Verify process is actually running by checking /proc/[pid]
-                    boolean processRunning = new java.io.File("/proc/" + pid).exists();
+                    if (isActive) {
+                        // Get PID from systemctl (fast)
+                        String pidResult = executeCommand("systemctl", "--user", "show", "-p", "MainPID", "--value", "match-node" + i);
+                        int pid = Integer.parseInt(pidResult.trim());
 
-                    if (processRunning) {
                         node.put("running", true);
                         node.put("pid", pid);
                         // Use transitional state if set, otherwise use cluster role
@@ -1046,8 +1051,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                             clusterStatus.nodeHealthy[i] = true;
                         }
                     } else {
-                        // Process not running - treat as if ClusterTool failed
-                        throw new RuntimeException("Process " + pid + " not running");
+                        throw new RuntimeException("Service not active");
                     }
                 } catch (Exception e) {
                     node.put("running", false);
@@ -1128,16 +1132,271 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
             return;
         }
 
-        // Execute restart in background
+        // Set status to STOPPING before executing
+        clusterStatus.setNodeStatus(nodeId, "STOPPING", false);
+
+        // Execute restart in background with proper state tracking
         new Thread(() -> {
             try {
-                executeCommand("make", "-C", System.getProperty("user.dir"), "restart-node", "NODE=" + nodeId);
+                // Stop the node
+                executeCommand("systemctl", "--user", "stop", "match-node" + nodeId);
+                Thread.sleep(1000);
+
+                // Set status to STARTING
+                clusterStatus.setNodeStatus(nodeId, "STARTING", false);
+
+                // Start the node
+                executeCommand("systemctl", "--user", "start", "match-node" + nodeId);
+                Thread.sleep(2000);
+
+                // Set status to REJOINING
+                clusterStatus.setNodeStatus(nodeId, "REJOINING", true);
+
+                // Wait for node to fully rejoin (use systemctl to check)
+                for (int attempt = 0; attempt < 30; attempt++) {
+                    Thread.sleep(500);
+                    String activeResult = executeCommand("systemctl", "--user", "is-active", "match-node" + nodeId);
+                    if ("active".equals(activeResult.trim())) {
+                        clusterStatus.setNodeStatus(nodeId, "FOLLOWER", true);
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                clusterStatus.setNodeStatus(nodeId, "OFFLINE", false);
+            }
+        }).start();
+
+        sendJsonResponse(exchange, 202, Map.of("message", "Node " + nodeId + " restart initiated"));
+    }
+
+    private void handleStopNode(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendJsonResponse(exchange, 405, Map.of("error", "POST required"));
+            return;
+        }
+
+        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        Map<String, Object> request = gson.fromJson(body, Map.class);
+        int nodeId = ((Number) request.get("nodeId")).intValue();
+
+        if (nodeId < 0 || nodeId > 2) {
+            sendJsonResponse(exchange, 400, Map.of("error", "Invalid nodeId. Must be 0, 1, or 2"));
+            return;
+        }
+
+        // Set status to STOPPING before executing
+        clusterStatus.setNodeStatus(nodeId, "STOPPING", false);
+
+        new Thread(() -> {
+            try {
+                executeCommand("systemctl", "--user", "stop", "match-node" + nodeId);
+                Thread.sleep(500);
+                // After stop completes, set to OFFLINE
+                clusterStatus.setNodeStatus(nodeId, "OFFLINE", false);
+            } catch (Exception e) {
+                e.printStackTrace();
+                clusterStatus.setNodeStatus(nodeId, "OFFLINE", false);
+            }
+        }).start();
+
+        sendJsonResponse(exchange, 202, Map.of("message", "Node " + nodeId + " stop initiated"));
+    }
+
+    private void handleStartNode(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendJsonResponse(exchange, 405, Map.of("error", "POST required"));
+            return;
+        }
+
+        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        Map<String, Object> request = gson.fromJson(body, Map.class);
+        int nodeId = ((Number) request.get("nodeId")).intValue();
+
+        if (nodeId < 0 || nodeId > 2) {
+            sendJsonResponse(exchange, 400, Map.of("error", "Invalid nodeId. Must be 0, 1, or 2"));
+            return;
+        }
+
+        // Set status to STARTING before executing
+        clusterStatus.setNodeStatus(nodeId, "STARTING", false);
+
+        new Thread(() -> {
+            try {
+                executeCommand("systemctl", "--user", "start", "match-node" + nodeId);
+                Thread.sleep(2000);
+                // Set to REJOINING after start
+                clusterStatus.setNodeStatus(nodeId, "REJOINING", true);
+
+                // Wait for node to fully rejoin (use systemctl to check)
+                for (int attempt = 0; attempt < 30; attempt++) {
+                    Thread.sleep(500);
+                    String activeResult = executeCommand("systemctl", "--user", "is-active", "match-node" + nodeId);
+                    if ("active".equals(activeResult.trim())) {
+                        clusterStatus.setNodeStatus(nodeId, "FOLLOWER", true);
+                        break;
+                    }
+                }
             } catch (Exception e) {
                 e.printStackTrace();
             }
         }).start();
 
-        sendJsonResponse(exchange, 202, Map.of("message", "Node " + nodeId + " restart initiated"));
+        sendJsonResponse(exchange, 202, Map.of("message", "Node " + nodeId + " start initiated"));
+    }
+
+    private void handleStopBackup(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendJsonResponse(exchange, 405, Map.of("error", "POST required"));
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                executeCommand("systemctl", "--user", "stop", "match-backup");
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }).start();
+
+        sendJsonResponse(exchange, 202, Map.of("message", "Backup node stop initiated"));
+    }
+
+    private void handleStartBackup(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendJsonResponse(exchange, 405, Map.of("error", "POST required"));
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                executeCommand("systemctl", "--user", "start", "match-backup");
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }).start();
+
+        sendJsonResponse(exchange, 202, Map.of("message", "Backup node start initiated"));
+    }
+
+    private void handleRestartBackup(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendJsonResponse(exchange, 405, Map.of("error", "POST required"));
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                executeCommand("systemctl", "--user", "stop", "match-backup");
+                Thread.sleep(1000);
+                executeCommand("systemctl", "--user", "start", "match-backup");
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }).start();
+
+        sendJsonResponse(exchange, 202, Map.of("message", "Backup node restart initiated"));
+    }
+
+    private void handleStopGateway(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendJsonResponse(exchange, 405, Map.of("error", "POST required"));
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                executeCommand("systemctl", "--user", "stop", "match-gateway");
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }).start();
+
+        sendJsonResponse(exchange, 202, Map.of("message", "Gateway stop initiated"));
+    }
+
+    private void handleStartGateway(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendJsonResponse(exchange, 405, Map.of("error", "POST required"));
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                executeCommand("systemctl", "--user", "start", "match-gateway");
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }).start();
+
+        sendJsonResponse(exchange, 202, Map.of("message", "Gateway start initiated"));
+    }
+
+    private void handleRestartGateway(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendJsonResponse(exchange, 405, Map.of("error", "POST required"));
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                executeCommand("systemctl", "--user", "stop", "match-gateway");
+                Thread.sleep(1000);
+                executeCommand("systemctl", "--user", "start", "match-gateway");
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }).start();
+
+        sendJsonResponse(exchange, 202, Map.of("message", "Gateway restart initiated"));
     }
 
     private void handleRollingUpdate(HttpExchange exchange) throws IOException {
@@ -1161,12 +1420,21 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
         new Thread(() -> {
             try {
                 // Rolling update with granular steps and real-time node state broadcasting
-                // Total 16 steps for detailed progress tracking
-                operationProgress.start("rolling-update", 16);
+                // Total 17 steps for detailed progress tracking (including build step)
+                operationProgress.start("rolling-update", 17);
+
+                // Step 1: Build application
+                operationProgress.update(1, "Building application...");
+                String projectDir = System.getenv("MATCH_PROJECT_DIR");
+                if (projectDir == null || projectDir.isEmpty()) {
+                    projectDir = System.getProperty("user.dir");
+                }
+                executeCommand("bash", "-c", "cd " + projectDir + "/match && mvn clean package -DskipTests -q");
+
                 String jarPath = "match/target/cluster-engine-1.0.jar";
 
-                // Step 1: Find current leader
-                operationProgress.update(1, "Finding cluster leader...");
+                // Step 2: Find current leader
+                operationProgress.update(2, "Finding cluster leader...");
                 int leaderNode = -1;
                 String listResult = executeCommand("java", "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
                     "-cp", jarPath, "io.aeron.cluster.ClusterTool",
@@ -1190,29 +1458,18 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                     if (i != leaderNode) followers[idx++] = i;
                 }
 
-                // Steps 2-11: Update both followers (5 steps each)
-                int step = 2;
+                // Steps 3-12: Update both followers (5 steps each)
+                int step = 3;
                 for (int f = 0; f < 2; f++) {
                     int nodeId = followers[f];
                     String nodeLabel = "Node " + nodeId;
 
-                    // Step N: Stopping follower
+                    // Step N: Stopping follower via systemctl (single source of truth)
                     operationProgress.update(step, "Stopping " + nodeLabel + "...");
                     clusterStatus.setNodeStatus(nodeId, "STOPPING", false);
                     Thread.sleep(300); // Let UI show STOPPING state
-                    // Get PID from ClusterTool and kill the process
-                    String pidResult = executeCommand("java", "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
-                        "-cp", jarPath, "io.aeron.cluster.ClusterTool",
-                        "/tmp/aeron-cluster/node" + nodeId + "/cluster", "pid");
-                    if (pidResult != null && !pidResult.trim().isEmpty()) {
-                        try {
-                            int pid = Integer.parseInt(pidResult.trim());
-                            executeCommand("kill", "-9", String.valueOf(pid));
-                        } catch (Exception e) {
-                            // Try alternative kill method
-                            executeCommand("bash", "-c", "pkill -9 -f 'CLUSTER_NODE=" + nodeId + "' || true");
-                        }
-                    }
+                    // Stop via systemctl - preserves CPU pinning and enables proper service management
+                    executeCommand("systemctl", "--user", "stop", "match-node" + nodeId);
                     Thread.sleep(500);
                     step++;
 
@@ -1230,17 +1487,12 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                     Thread.sleep(300);
                     step++;
 
-                    // Step N+3: Starting follower
+                    // Step N+3: Starting follower via systemctl (single source of truth)
                     operationProgress.update(step, "Starting " + nodeLabel + "...");
                     clusterStatus.setNodeStatus(nodeId, "STARTING", false);
                     Thread.sleep(300); // Let UI show STARTING state
-                    // Start node using bash in background with PID file
-                    String javaOpts = "--add-opens java.base/jdk.internal.misc=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED";
-                    String startCmd = "CLUSTER_ADDRESSES=localhost,localhost,localhost CLUSTER_NODE=" + nodeId +
-                        " CLUSTER_PORT_BASE=9000 BASE_DIR=/tmp/aeron-cluster/node" + nodeId +
-                        " nohup java " + javaOpts + " -jar match/target/cluster-engine-1.0.jar > /tmp/aeron-cluster/node" + nodeId + ".log 2>&1 &" +
-                        " echo $! > /tmp/aeron-cluster/node" + nodeId + ".pid";
-                    executeCommand("bash", "-c", startCmd);
+                    // Start via systemctl - uses service definition with CPU pinning, proper env vars
+                    executeCommand("systemctl", "--user", "start", "match-node" + nodeId);
                     Thread.sleep(2000); // Give node time to start
                     step++;
 
@@ -1268,30 +1520,20 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                     Thread.sleep(500);
                 }
 
-                // Step 12: Stop old leader - triggers election immediately
-                operationProgress.update(12, "Stopping Node " + leaderNode + " (Leader)...");
+                // Step 13: Stop old leader via systemctl - triggers election immediately
+                operationProgress.update(13, "Stopping Node " + leaderNode + " (Leader)...");
                 clusterStatus.setNodeStatus(leaderNode, "STOPPING", false);
-                // Mark followers as in election state BEFORE killing leader
+                // Mark followers as in election state BEFORE stopping leader
                 for (int nodeId : followers) {
                     clusterStatus.setNodeStatus(nodeId, "ELECTION", true);
                 }
                 Thread.sleep(200); // Brief pause for UI
 
-                // Get PID from ClusterTool and kill the process
-                String leaderPidResult = executeCommand("java", "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
-                    "-cp", jarPath, "io.aeron.cluster.ClusterTool",
-                    "/tmp/aeron-cluster/node" + leaderNode + "/cluster", "pid");
-                if (leaderPidResult != null && !leaderPidResult.trim().isEmpty()) {
-                    try {
-                        int pid = Integer.parseInt(leaderPidResult.trim());
-                        executeCommand("kill", "-9", String.valueOf(pid));
-                    } catch (Exception e) {
-                        executeCommand("bash", "-c", "pkill -9 -f 'CLUSTER_NODE=" + leaderNode + "' || true");
-                    }
-                }
+                // Stop via systemctl (single source of truth)
+                executeCommand("systemctl", "--user", "stop", "match-node" + leaderNode);
 
-                // Step 13: Election in progress - poll immediately for new leader
-                operationProgress.update(13, "Leader election in progress...");
+                // Step 14: Election in progress - poll immediately for new leader
+                operationProgress.update(14, "Leader election in progress...");
 
                 // Wait for election to complete - poll frequently (cluster heartbeat timeout is 2s)
                 int newLeader = -1;
@@ -1313,7 +1555,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                                         clusterStatus.setNodeStatus(nodeId, "FOLLOWER", true);
                                     }
                                 }
-                                operationProgress.update(13, "New leader elected: Node " + newLeader);
+                                operationProgress.update(14, "New leader elected: Node " + newLeader);
                                 Thread.sleep(300); // Brief pause to show new leader
                                 break;
                             }
@@ -1321,28 +1563,23 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                     }
                 }
 
-                // Step 14: Mark file timeout for old leader
-                operationProgress.update(14, "Waiting for mark file timeout (10s)...");
+                // Step 15: Mark file timeout for old leader
+                operationProgress.update(15, "Waiting for mark file timeout (10s)...");
                 Thread.sleep(10000);
 
-                // Step 15: Clean old leader files
-                operationProgress.update(15, "Cleaning Node " + leaderNode + " shared memory...");
+                // Step 16: Clean old leader files
+                operationProgress.update(16, "Cleaning Node " + leaderNode + " shared memory...");
                 executeCommand("bash", "-c", "rm -rf /dev/shm/aeron-*" + leaderNode + "*");
                 executeCommand("bash", "-c", "rm -rf /tmp/aeron-cluster/node" + leaderNode + "/cluster/cluster-mark.dat");
                 executeCommand("bash", "-c", "rm -rf /tmp/aeron-cluster/node" + leaderNode + "/cluster/*.lck");
                 Thread.sleep(300);
 
-                // Step 16: Start old leader as follower
-                operationProgress.update(16, "Starting Node " + leaderNode + " as follower...");
+                // Step 17: Start old leader as follower via systemctl
+                operationProgress.update(17, "Starting Node " + leaderNode + " as follower...");
                 clusterStatus.setNodeStatus(leaderNode, "STARTING", false);
                 Thread.sleep(300); // Let UI show STARTING state
-                // Start node using bash in background with PID file
-                String javaOptsLeader = "--add-opens java.base/jdk.internal.misc=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED";
-                String startLeaderCmd = "CLUSTER_ADDRESSES=localhost,localhost,localhost CLUSTER_NODE=" + leaderNode +
-                    " CLUSTER_PORT_BASE=9000 BASE_DIR=/tmp/aeron-cluster/node" + leaderNode +
-                    " nohup java " + javaOptsLeader + " -jar match/target/cluster-engine-1.0.jar > /tmp/aeron-cluster/node" + leaderNode + ".log 2>&1 &" +
-                    " echo $! > /tmp/aeron-cluster/node" + leaderNode + ".pid";
-                executeCommand("bash", "-c", startLeaderCmd);
+                // Start via systemctl (single source of truth - uses service definition with CPU pinning)
+                executeCommand("systemctl", "--user", "start", "match-node" + leaderNode);
                 Thread.sleep(2000); // Give node time to start
 
                 // Wait for node to rejoin
@@ -1355,7 +1592,7 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
                         "/tmp/aeron-cluster/node" + leaderNode + "/cluster", "list-members");
                     if (result != null && result.contains("leaderMemberId=")) {
                         clusterStatus.setNodeStatus(leaderNode, "FOLLOWER", true);
-                        operationProgress.update(16, "Node " + leaderNode + " rejoined as follower");
+                        operationProgress.update(17, "Node " + leaderNode + " rejoined as follower");
                         rejoined = true;
                         break;
                     }

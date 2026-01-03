@@ -24,6 +24,7 @@ import org.agrona.collections.Int2ObjectHashMap;
 import com.match.infrastructure.Logger;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class AppClusteredService implements ClusteredService {
     private static final Logger logger = Logger.getLogger(AppClusteredService.class);
@@ -44,37 +45,72 @@ public class AppClusteredService implements ClusteredService {
     // Buffer for broadcasting market data via Aeron egress
     private final UnsafeBuffer broadcastBuffer = new UnsafeBuffer(new byte[32 * 1024]); // 32KB for JSON messages
 
+    // Queue for market data messages (thread-safe for producer on Disruptor thread)
+    private final ConcurrentLinkedQueue<String> marketDataQueue = new ConcurrentLinkedQueue<>();
+
+    // Timer ID for market data flush
+    private static final long MARKET_DATA_TIMER_ID = 1000;
+    private static final long MARKET_DATA_FLUSH_INTERVAL_MS = 50; // 50ms flush interval
+    private volatile boolean marketDataTimerScheduled = false;
+
     /**
-     * MarketDataBroadcaster implementation that sends via Aeron cluster egress.
-     * This broadcasts to all connected Aeron clients (including gateway).
+     * MarketDataBroadcaster implementation that queues messages for later sending.
+     * Messages are queued from the Disruptor thread and sent via cluster timer.
+     * This is required because Aeron Cluster only allows sending from the main service thread.
      */
     private final MarketDataBroadcaster aeronBroadcaster = new MarketDataBroadcaster() {
         @Override
         public void broadcast(String jsonMessage) {
+            // Queue the message - will be sent during timer callback
+            marketDataQueue.offer(jsonMessage);
+        }
+
+        @Override
+        public void flush() {
+            // Called from onTimerEvent - actually send the queued messages
             if (clientSessions.getAllSessions().isEmpty()) {
+                marketDataQueue.clear(); // No subscribers, discard
                 return;
             }
 
-            byte[] bytes = jsonMessage.getBytes(StandardCharsets.UTF_8);
-            broadcastBuffer.putBytes(0, bytes);
+            String message;
+            int messageCount = 0;
+            int successCount = 0;
+            int failCount = 0;
+            while ((message = marketDataQueue.poll()) != null) {
+                messageCount++;
+                byte[] bytes = message.getBytes(StandardCharsets.UTF_8);
+                broadcastBuffer.putBytes(0, bytes);
 
-            // Broadcast to all connected Aeron clients
-            for (ClientSession session : clientSessions.getAllSessions()) {
-                int retries = 0;
-                while (retries < 3) {
-                    long result = session.offer(broadcastBuffer, 0, bytes.length);
-                    if (result > 0) {
-                        break; // Success
-                    } else if (result == Publication.BACK_PRESSURED || result == Publication.ADMIN_ACTION) {
-                        retries++;
-                        if (cluster != null) {
-                            cluster.idleStrategy().idle();
+                // Broadcast to all connected Aeron clients
+                for (ClientSession session : clientSessions.getAllSessions()) {
+                    int retries = 0;
+                    long result = 0;
+                    while (retries < 3) {
+                        result = session.offer(broadcastBuffer, 0, bytes.length);
+                        if (result > 0) {
+                            successCount++;
+                            break; // Success
+                        } else if (result == Publication.BACK_PRESSURED || result == Publication.ADMIN_ACTION) {
+                            retries++;
+                            if (cluster != null) {
+                                cluster.idleStrategy().idle();
+                            }
+                        } else {
+                            // NOT_CONNECTED or other error - skip this session
+                            failCount++;
+                            System.out.printf("[FLUSH] session.offer failed: result=%d, sessionId=%d%n", result, session.id());
+                            break;
                         }
-                    } else {
-                        // NOT_CONNECTED or other error - skip this session
-                        break;
+                    }
+                    if (retries >= 3) {
+                        failCount++;
+                        System.out.printf("[FLUSH] session.offer backpressure exceeded: result=%d, sessionId=%d%n", result, session.id());
                     }
                 }
+            }
+            if (messageCount > 0) {
+                System.out.printf("[FLUSH] Sent %d messages: success=%d, fail=%d%n", messageCount, successCount, failCount);
             }
         }
 
@@ -97,6 +133,18 @@ public class AppClusteredService implements ClusteredService {
 
         // Initialize event publishing for BTC-USD market
         initializeEventPublishing();
+
+        // Note: Timer is scheduled on first session message, not here
+        // (Aeron Cluster doesn't allow scheduling timers from onStart)
+    }
+
+    /**
+     * Schedule the market data flush timer.
+     * This timer fires every 50ms to send queued market data messages.
+     */
+    private void scheduleMarketDataFlush() {
+        long deadlineMs = cluster.time() + MARKET_DATA_FLUSH_INTERVAL_MS;
+        cluster.scheduleTimer(MARKET_DATA_TIMER_ID, deadlineMs);
     }
 
     /**
@@ -205,6 +253,14 @@ public class AppClusteredService implements ClusteredService {
     public void onSessionOpen(final ClientSession session, final long timestamp) {
         context.setClusterTime(timestamp);
         clientSessions.addSession(session);
+        System.out.println("[SESSION] Opened session " + session.id() + ", total sessions: " + clientSessions.getAllSessions().size());
+
+        // Schedule market data timer on first session (not from onStart - that's not allowed)
+        if (!marketDataTimerScheduled) {
+            scheduleMarketDataFlush();
+            marketDataTimerScheduled = true;
+            System.out.println("[TIMER] Scheduled market data flush timer");
+        }
     }
 
     @Override
@@ -222,6 +278,7 @@ public class AppClusteredService implements ClusteredService {
         final int length,
         final Header header) {
         context.setSessionContext(session, timestamp);
+
         try {
             // Pass cluster timestamp (in nanoseconds) for order timing
             sbeDemuxer.dispatch(buffer, offset, length, timestamp);
@@ -234,6 +291,25 @@ public class AppClusteredService implements ClusteredService {
     @Override
     public void onTimerEvent(final long correlationId, final long timestamp) {
         context.setClusterTime(timestamp);
+
+        // Handle market data flush timer
+        if (correlationId == MARKET_DATA_TIMER_ID) {
+            int queueSize = marketDataQueue.size();
+            int sessionCount = clientSessions.getAllSessions().size();
+
+            // Flush queued market data messages
+            aeronBroadcaster.flush();
+
+            // Log periodically
+            if (System.currentTimeMillis() % 5000 < 50) {
+                System.out.printf("[TIMER] Flush: queueSize=%d, sessions=%d%n", queueSize, sessionCount);
+            }
+
+            // Reschedule for next interval
+            scheduleMarketDataFlush();
+            return;
+        }
+
         timerManager.onTimerEvent(correlationId, timestamp);
     }
 
