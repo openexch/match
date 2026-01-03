@@ -1388,9 +1388,8 @@ public class HttpController implements EgressListener, AutoCloseable, Agent {
 
         new Thread(() -> {
             try {
-                executeCommand("systemctl", "--user", "stop", "match-gateway");
-                Thread.sleep(1000);
-                executeCommand("systemctl", "--user", "start", "match-gateway");
+                // Use restart which is atomic - separate stop+start kills the process before start runs
+                executeCommand("systemctl", "--user", "restart", "match-gateway");
             } catch (Exception e) {
                 e.printStackTrace();
             }
