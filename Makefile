@@ -1,18 +1,21 @@
 # ==================== MATCHING ENGINE CLUSTER ====================
 # A high-performance, fault-tolerant order matching engine using Aeron Cluster
 #
+# IMPORTANT: Runtime cluster management is done via Admin Gateway API.
+# See docs/PRINCIPLES.md for single source of truth documentation.
+#
 # Quick Start:
 #   make install-deps    # Install system dependencies (once)
 #   make install         # Build and start everything fresh
-#   make status          # Check cluster health
-#   make stop            # Stop everything
 #
-# For production:
-#   make optimize-os     # Apply OS-level optimizations (requires sudo)
-#   make install         # Deploy the cluster
+# Runtime Management (use Admin API at http://localhost:8082):
+#   curl http://localhost:8082/api/admin/status
+#   curl -X POST http://localhost:8082/api/admin/rolling-update
+#   curl -X POST http://localhost:8082/api/admin/restart-gateway
+#
 # ==================================================================
 
-.PHONY: install install-deps optimize-os status stop start fresh help leader restart-node rolling-update install-services uninstall-services reinstall-services
+.PHONY: install install-deps optimize-os status logs help services leader install-services uninstall-services reinstall-services build build-java build-ui sbe
 
 # ==================== INSTALLATION ====================
 
@@ -77,39 +80,53 @@ install-deps:
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 
 # Full installation - build everything and start fresh
-install: stop
+install:
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
 	@echo "║           Installing Matching Engine Cluster                     ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@echo "→ Step 1/4: Building UI..."
+	@# Stop any existing services first
+	@systemctl --user stop match-ui match-admin-gateway match-order-gateway match-market-gateway match-backup match-node2 match-node1 match-node0 2>/dev/null || true
+	@echo "→ Step 1/5: Building UI..."
 	@cd match/ui && npm install --silent && npm run build --silent
 	@echo "  ✓ UI built"
 	@echo ""
-	@echo "→ Step 2/4: Building Java components..."
+	@echo "→ Step 2/5: Building Java components..."
 	@cd match && mvn clean package -DskipTests -q
 	@echo "  ✓ Java components built"
 	@echo ""
-	@echo "→ Step 3/4: Installing systemd services..."
+	@echo "→ Step 3/5: Installing systemd services..."
 	@$(MAKE) -s install-services
 	@echo ""
-	@echo "→ Step 4/4: Starting cluster via systemd..."
-	@$(MAKE) -s fresh
+	@echo "→ Step 4/5: Cleaning cluster state..."
+	@rm -rf /dev/shm/aeron-* 2>/dev/null || true
+	@rm -rf /tmp/aeron-cluster/node0/* /tmp/aeron-cluster/node1/* /tmp/aeron-cluster/node2/* 2>/dev/null || true
+	@rm -rf /tmp/aeron-cluster/backup/* 2>/dev/null || true
+	@mkdir -p /tmp/aeron-cluster/node0 /tmp/aeron-cluster/node1 /tmp/aeron-cluster/node2 /tmp/aeron-cluster/backup
+	@echo "  ✓ Cluster state cleaned"
+	@echo ""
+	@echo "→ Step 5/5: Starting cluster..."
+	@systemctl --user start match-node0
+	@sleep 3
+	@systemctl --user start match-node1 match-node2
+	@sleep 5
+	@systemctl --user start match-backup match-market-gateway match-order-gateway match-admin-gateway match-ui
+	@sleep 3
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
 	@echo "║  ✓ Installation Complete!                                        ║"
 	@echo "╠══════════════════════════════════════════════════════════════════╣"
 	@echo "║                                                                  ║"
-	@echo "║  Trading UI:     http://localhost:8080/ui/                       ║"
-	@echo "║  WebSocket:      ws://localhost:8081/ws                          ║"
-	@echo "║  Cluster nodes:  3 (ports 9000, 9100, 9200)                      ║"
-	@echo "║  Backup node:    1 (replicating)                                 ║"
+	@echo "║  Trading UI:     http://localhost                                ║"
+	@echo "║  Admin UI:       http://localhost:8082/ui/                       ║"
+	@echo "║  Order API:      http://localhost:8080/order                     ║"
+	@echo "║  Market WS:      ws://localhost:8081/ws                          ║"
 	@echo "║                                                                  ║"
-	@echo "║  Commands:                                                       ║"
-	@echo "║    make status     - Check cluster health                        ║"
-	@echo "║    make stop       - Stop everything                             ║"
-	@echo "║    make logs       - View cluster logs                           ║"
-	@echo "║    make snapshot   - Trigger cluster snapshot                    ║"
+	@echo "║  Runtime Management (Admin API):                                 ║"
+	@echo "║    curl http://localhost:8082/api/admin/status                   ║"
+	@echo "║    curl -X POST http://localhost:8082/api/admin/rolling-update   ║"
+	@echo "║                                                                  ║"
+	@echo "║  See docs/PRINCIPLES.md for full API documentation               ║"
 	@echo "║                                                                  ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 
@@ -181,7 +198,7 @@ optimize-os:
 	@echo "║  Run 'make os-check' to verify current settings.                 ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 
-# ==================== STATUS & MONITORING ====================
+# ==================== STATUS & MONITORING (READ-ONLY) ====================
 
 # Check overall system status
 status:
@@ -210,105 +227,79 @@ status:
 		echo "  ✗ Backup node not running"; \
 	fi
 	@echo ""
-	@echo "=== HTTP Gateway ==="
-	@if pgrep -f "HttpController" >/dev/null 2>&1; then \
-		echo "  ✓ Gateway running on http://localhost:8080"; \
+	@echo "=== Gateways ==="
+	@if pgrep -f "MarketGatewayMain" >/dev/null 2>&1; then \
+		echo "  ✓ Market Gateway on ws://localhost:8081"; \
 	else \
-		echo "  ✗ Gateway not running"; \
+		echo "  ✗ Market Gateway not running"; \
+	fi
+	@if pgrep -f "OrderGatewayMain" >/dev/null 2>&1; then \
+		echo "  ✓ Order Gateway on http://localhost:8080"; \
+	else \
+		echo "  ✗ Order Gateway not running"; \
+	fi
+	@if pgrep -f "AdminGatewayMain" >/dev/null 2>&1; then \
+		echo "  ✓ Admin API on http://localhost:8082"; \
+	else \
+		echo "  ✗ Admin API not running"; \
 	fi
 	@echo ""
-	@echo "=== WebSocket Server ==="
-	@if lsof -i :8081 >/dev/null 2>&1; then \
-		subs=$$(grep -o "subscribers=[0-9]*" /tmp/aeron-cluster/node0.log 2>/dev/null | tail -1 | cut -d= -f2); \
-		echo "  ✓ WebSocket on ws://localhost:8081 ($$subs subscribers)"; \
+	@echo "=== UI ==="
+	@if pgrep -f "vite preview" >/dev/null 2>&1; then \
+		echo "  ✓ Trading UI on http://localhost"; \
 	else \
-		echo "  ✗ WebSocket not available"; \
+		echo "  ✗ Trading UI not running"; \
 	fi
 	@echo ""
 	@echo "=== Archive Storage ==="
 	@total=$$(du -sh /tmp/aeron-cluster/node*/archive/ 2>/dev/null | awk '{sum+=$$1} END {print sum}'); \
 	echo "  → Total archive size: $$(du -sh /tmp/aeron-cluster/ 2>/dev/null | cut -f1)"
+	@echo ""
+	@echo "For management, use Admin API: http://localhost:8082/api/admin/"
 
 # View logs
 logs:
 	@tail -f /tmp/aeron-cluster/node0.log /tmp/aeron-cluster/backup.log 2>/dev/null
 
-# Stop all services
-stop:
-	@echo "→ Stopping all services..."
-	@systemctl --user stop match-gateway match-backup match-node2 match-node1 match-node0 2>/dev/null || true
-	@echo "  ✓ All services stopped"
-
-# Start all services
-start:
-	@echo "→ Starting all services..."
-	@systemctl --user start match-node0
-	@sleep 3
-	@systemctl --user start match-node1 match-node2
-	@sleep 3
-	@systemctl --user start match-backup match-gateway
-	@sleep 2
-	@$(MAKE) -s status
-
-# Clean start - wipe all cluster state and start fresh
-fresh:
-	@echo "╔══════════════════════════════════════════════════════════════════╗"
-	@echo "║           Fresh Cluster Start                                     ║"
-	@echo "╚══════════════════════════════════════════════════════════════════╝"
-	@echo ""
-	@echo "Step 1/4: Stopping all services..."
-	@systemctl --user stop match-gateway match-backup match-node0 match-node1 match-node2 2>/dev/null || true
-	@-pkill -9 -f "cluster-engine-1.0.jar" 2>/dev/null || true
-	@sleep 2
-	@echo "Step 2/4: Cleaning cluster state..."
-	@rm -rf /dev/shm/aeron-* 2>/dev/null || true
-	@rm -rf /tmp/aeron-cluster/node0/* /tmp/aeron-cluster/node1/* /tmp/aeron-cluster/node2/* 2>/dev/null || true
-	@rm -rf /tmp/aeron-cluster/backup/* 2>/dev/null || true
-	@mkdir -p /tmp/aeron-cluster/node0 /tmp/aeron-cluster/node1 /tmp/aeron-cluster/node2 /tmp/aeron-cluster/backup
-	@echo "Step 3/4: Starting cluster nodes..."
-	@systemctl --user start match-node0
-	@sleep 3
-	@systemctl --user start match-node1 match-node2
-	@sleep 5
-	@echo "Step 4/4: Starting backup and gateway..."
-	@systemctl --user start match-backup match-gateway
-	@sleep 3
-	@echo ""
-	@echo "✓ Fresh cluster started"
-	@$(MAKE) -s status
-
 # Help
 help:
 	@echo "Matching Engine Cluster - Available Commands"
 	@echo ""
-	@echo "Installation:"
+	@echo "Installation & Setup:"
 	@echo "  make install-deps       Install system dependencies (Java, Node.js, Maven)"
 	@echo "  make install            Build and start everything fresh"
 	@echo "  make optimize-os        Apply OS optimizations for low latency (sudo)"
+	@echo "  make build              Build Java and UI components"
+	@echo "  make build-java         Build Java components only"
+	@echo "  make build-ui           Build UI only"
 	@echo ""
-	@echo "Service Management:"
+	@echo "Systemd Service Management:"
 	@echo "  make install-services   Install and enable systemd services"
 	@echo "  make uninstall-services Uninstall systemd services"
-	@echo "  make reinstall-services Reinstall services (useful after config changes)"
+	@echo "  make reinstall-services Reinstall services (after config changes)"
+	@echo "  make setup-port-80      Allow node to bind to port 80 (sudo)"
 	@echo ""
-	@echo "Operations:"
-	@echo "  make start          Start all services"
-	@echo "  make stop           Stop all services"
-	@echo "  make fresh          Clean all state and start cluster fresh"
-	@echo "  make status         Check cluster health and component status"
-	@echo "  make services       Show systemd service status for all components"
-	@echo "  make logs           Tail cluster logs"
-	@echo "  make snapshot       Trigger cluster snapshot"
+	@echo "Status & Monitoring (read-only):"
+	@echo "  make status             Check cluster health and component status"
+	@echo "  make services           Show systemd service status"
+	@echo "  make logs               Tail cluster logs"
+	@echo "  make leader             Show current cluster leader"
+	@echo "  make os-check           Show current OS settings"
 	@echo ""
-	@echo "Rolling Updates:"
-	@echo "  make rolling-update        Update all nodes one-by-one (zero downtime)"
-	@echo "  make restart-node NODE=0   Restart a specific node (0, 1, or 2)"
-	@echo "  make restart-gateway       Restart HTTP gateway service"
-	@echo "  make leader                Show current cluster leader"
+	@echo "Code Generation:"
+	@echo "  make sbe                Generate SBE codec classes"
 	@echo ""
-	@echo "Testing:"
-	@echo "  make loadtest-quick   Run quick 10s load test (1K msg/s)"
-	@echo "  make loadtest-stress  Run 60s stress test (10K msg/s)"
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "RUNTIME MANAGEMENT - Use Admin Gateway API (http://localhost:8082)"
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "  Status:         curl http://localhost:8082/api/admin/status"
+	@echo "  Rolling Update: curl -X POST http://localhost:8082/api/admin/rolling-update"
+	@echo "  Restart Node:   curl -X POST http://localhost:8082/api/admin/restart-node -d '{\"nodeId\":0}'"
+	@echo "  Restart Gateways: curl -X POST http://localhost:8082/api/admin/restart-gateway"
+	@echo "  Snapshot:       curl -X POST http://localhost:8082/api/admin/snapshot"
+	@echo ""
+	@echo "See docs/PRINCIPLES.md for full API documentation."
 
 # Show systemd service status
 services:
@@ -316,7 +307,7 @@ services:
 	@echo "║                    Systemd Services Status                       ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@systemctl --user status match-node0 match-node1 match-node2 match-backup match-gateway --no-pager 2>/dev/null | grep -E "●|Active:|Main PID:" || echo "Services not installed"
+	@systemctl --user status match-node0 match-node1 match-node2 match-backup match-market-gateway match-order-gateway match-admin-gateway match-ui --no-pager 2>/dev/null | grep -E "●|Active:|Main PID:" || echo "Services not installed"
 
 # ==================== SERVICE MANAGEMENT ====================
 
@@ -327,6 +318,13 @@ install-services:
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@mkdir -p ~/.config/systemd/user
+	@mkdir -p ~/.config/user-tmpfiles.d
+	@echo "→ Installing tmpfiles config for /tmp/aeron-cluster..."
+	@printf '%s\n' \
+		'# Create aeron-cluster directory at boot for match engine logs' \
+		'd /tmp/aeron-cluster 0755 - - -' > ~/.config/user-tmpfiles.d/aeron-cluster.conf
+	@mkdir -p /tmp/aeron-cluster
+	@systemd-tmpfiles --user --create 2>/dev/null || true
 	@echo "→ Installing match-node0.service (CPU cores 0-3)..."
 	@printf '%s\n' \
 		'[Unit]' \
@@ -355,7 +353,7 @@ install-services:
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Cluster Node 1' \
-		'After=network.target match-node0.service' \
+		'After=network.target' \
 		'' \
 		'[Service]' \
 		'Type=simple' \
@@ -380,7 +378,7 @@ install-services:
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Cluster Node 2' \
-		'After=network.target match-node1.service' \
+		'After=network.target' \
 		'' \
 		'[Service]' \
 		'Type=simple' \
@@ -405,7 +403,7 @@ install-services:
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Cluster Backup Node' \
-		'After=network.target match-node0.service match-node1.service match-node2.service' \
+		'After=network.target' \
 		'' \
 		'[Service]' \
 		'Type=simple' \
@@ -422,32 +420,91 @@ install-services:
 		'' \
 		'[Install]' \
 		'WantedBy=default.target' > ~/.config/systemd/user/match-backup.service
-	@echo "→ Installing match-gateway.service (CPU cores 14-15)..."
+	@echo "→ Installing match-market-gateway.service (CPU core 14)..."
 	@printf '%s\n' \
 		'[Unit]' \
-		'Description=Match Engine HTTP Gateway' \
-		'After=network.target match-node0.service match-node1.service match-node2.service' \
+		'Description=Match Engine Market Gateway' \
+		'After=network.target' \
 		'' \
 		'[Service]' \
 		'Type=simple' \
 		'WorkingDirectory=$(PWD)' \
 		'Environment="MATCH_PROJECT_DIR=$(PWD)"' \
+		'Environment="EGRESS_PORT=9091"' \
 		'ExecStartPre=/bin/sleep 5' \
-		'ExecStart=/usr/bin/taskset -c $(CPU_GATEWAY) /usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.http.HttpController' \
+		'ExecStart=/usr/bin/taskset -c $(CPU_MARKET_GATEWAY) /usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.MarketGatewayMain' \
 		'Restart=on-failure' \
 		'RestartSec=5' \
 		'LimitNOFILE=1048576' \
 		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/tmp/aeron-cluster/gateway.log' \
-		'StandardError=append:/tmp/aeron-cluster/gateway.log' \
+		'StandardOutput=append:/tmp/aeron-cluster/market-gateway.log' \
+		'StandardError=append:/tmp/aeron-cluster/market-gateway.log' \
 		'' \
 		'[Install]' \
-		'WantedBy=default.target' > ~/.config/systemd/user/match-gateway.service
+		'WantedBy=default.target' > ~/.config/systemd/user/match-market-gateway.service
+	@echo "→ Installing match-order-gateway.service (CPU core 15)..."
+	@printf '%s\n' \
+		'[Unit]' \
+		'Description=Match Engine Order Gateway' \
+		'After=network.target' \
+		'' \
+		'[Service]' \
+		'Type=simple' \
+		'WorkingDirectory=$(PWD)' \
+		'Environment="MATCH_PROJECT_DIR=$(PWD)"' \
+		'Environment="EGRESS_PORT=9092"' \
+		'ExecStartPre=/bin/sleep 5' \
+		'ExecStart=/usr/bin/taskset -c $(CPU_ORDER_GATEWAY) /usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.OrderGatewayMain' \
+		'Restart=on-failure' \
+		'RestartSec=5' \
+		'LimitNOFILE=1048576' \
+		'LimitMEMLOCK=infinity' \
+		'StandardOutput=append:/tmp/aeron-cluster/order-gateway.log' \
+		'StandardError=append:/tmp/aeron-cluster/order-gateway.log' \
+		'' \
+		'[Install]' \
+		'WantedBy=default.target' > ~/.config/systemd/user/match-order-gateway.service
+	@echo "→ Installing match-admin-gateway.service..."
+	@printf '%s\n' \
+		'[Unit]' \
+		'Description=Match Engine Admin Gateway' \
+		'After=network.target' \
+		'' \
+		'[Service]' \
+		'Type=simple' \
+		'WorkingDirectory=$(PWD)' \
+		'Environment="MATCH_PROJECT_DIR=$(PWD)"' \
+		'ExecStart=/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.AdminGatewayMain' \
+		'Restart=on-failure' \
+		'RestartSec=5' \
+		'LimitNOFILE=1048576' \
+		'StandardOutput=append:/tmp/aeron-cluster/admin-gateway.log' \
+		'StandardError=append:/tmp/aeron-cluster/admin-gateway.log' \
+		'' \
+		'[Install]' \
+		'WantedBy=default.target' > ~/.config/systemd/user/match-admin-gateway.service
+	@echo "→ Installing match-ui.service (port 80)..."
+	@printf '%s\n' \
+		'[Unit]' \
+		'Description=Match Engine Trading UI' \
+		'After=network.target' \
+		'' \
+		'[Service]' \
+		'Type=simple' \
+		'WorkingDirectory=$(PWD)/match/ui' \
+		'ExecStart=/usr/bin/npx vite preview --port 80 --host' \
+		'Restart=on-failure' \
+		'RestartSec=5' \
+		'StandardOutput=append:/tmp/aeron-cluster/ui.log' \
+		'StandardError=append:/tmp/aeron-cluster/ui.log' \
+		'' \
+		'[Install]' \
+		'WantedBy=default.target' > ~/.config/systemd/user/match-ui.service
 	@echo ""
 	@echo "→ Reloading systemd..."
 	@systemctl --user daemon-reload
 	@echo "→ Enabling services..."
-	@systemctl --user enable match-node0 match-node1 match-node2 match-backup match-gateway
+	@systemctl --user enable match-node0 match-node1 match-node2 match-backup match-market-gateway match-order-gateway match-admin-gateway match-ui
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
 	@echo "║  ✓ Services installed and enabled!                               ║"
@@ -455,9 +512,10 @@ install-services:
 	@echo "║  CPU Core Allocation:                                            ║"
 	@echo "║    Node 0:  cores 0-3    Node 1:  cores 4-7                      ║"
 	@echo "║    Node 2:  cores 8-11   Backup:  cores 12-13                    ║"
-	@echo "║    Gateway: cores 14-15                                          ║"
+	@echo "║    Market Gateway: core 14   Order Gateway: core 15              ║"
+	@echo "║    Admin Gateway:  no pinning (lightweight)                      ║"
 	@echo "║                                                                  ║"
-	@echo "║  Next: Run 'make fresh' to start the cluster                     ║"
+	@echo "║  Next: Run 'make install' to build and start the cluster         ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 
 # Uninstall systemd services
@@ -467,15 +525,21 @@ uninstall-services:
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@echo "→ Stopping services..."
-	@systemctl --user stop match-gateway match-backup match-node2 match-node1 match-node0 2>/dev/null || true
+	@systemctl --user stop match-ui match-admin-gateway match-order-gateway match-market-gateway match-backup match-node2 match-node1 match-node0 2>/dev/null || true
 	@echo "→ Disabling services..."
-	@systemctl --user disable match-node0 match-node1 match-node2 match-backup match-gateway 2>/dev/null || true
+	@systemctl --user disable match-node0 match-node1 match-node2 match-backup match-market-gateway match-order-gateway match-admin-gateway match-ui 2>/dev/null || true
 	@echo "→ Removing service files..."
 	@rm -f ~/.config/systemd/user/match-node0.service
 	@rm -f ~/.config/systemd/user/match-node1.service
 	@rm -f ~/.config/systemd/user/match-node2.service
 	@rm -f ~/.config/systemd/user/match-backup.service
+	@rm -f ~/.config/systemd/user/match-market-gateway.service
+	@rm -f ~/.config/systemd/user/match-order-gateway.service
+	@rm -f ~/.config/systemd/user/match-admin-gateway.service
+	@rm -f ~/.config/systemd/user/match-ui.service
 	@rm -f ~/.config/systemd/user/match-gateway.service
+	@echo "→ Removing tmpfiles config..."
+	@rm -f ~/.config/user-tmpfiles.d/aeron-cluster.conf
 	@echo "→ Reloading systemd..."
 	@systemctl --user daemon-reload
 	@echo ""
@@ -486,10 +550,9 @@ reinstall-services: uninstall-services install-services
 	@echo ""
 	@echo "✓ Services reinstalled"
 
-# ==================== ROLLING UPDATES ====================
+# ==================== CLUSTER STATUS (READ-ONLY) ====================
 
-# Default node for restart-node
-NODE ?= 0
+JAR_PATH = match/target/cluster-engine-1.0.jar
 
 # Show current cluster leader
 leader:
@@ -515,241 +578,11 @@ leader:
 		echo "⚠ Could not determine leader - cluster may be starting"; \
 	fi
 
-# Restart a single node (make restart-node NODE=0)
-restart-node:
-	@echo "╔══════════════════════════════════════════════════════════════════╗"
-	@echo "║           Restarting Node $(NODE)                                     ║"
-	@echo "╚══════════════════════════════════════════════════════════════════╝"
-	@echo ""
-	@case $(NODE) in \
-		0|1|2) ;; \
-		*) echo "Invalid node: $(NODE). Use 0, 1, or 2."; exit 1;; \
-	esac
-	@echo "→ Step 1/4: Stopping node $(NODE) via systemctl..."
-	@systemctl --user stop match-node$(NODE) 2>/dev/null || true
-	@sleep 2
-	@echo "  ✓ Node stopped"
-	@echo ""
-	@echo "→ Step 2/4: Cleaning up mark files..."
-	@rm -rf /dev/shm/aeron-*$(NODE)* 2>/dev/null || true
-	@rm -f /tmp/aeron-cluster/node$(NODE)/cluster/*.lck 2>/dev/null || true
-	@rm -f /tmp/aeron-cluster/node$(NODE)/cluster/cluster-mark*.dat 2>/dev/null || true
-	@rm -f /tmp/aeron-cluster/node$(NODE)/archive/archive-mark.dat 2>/dev/null || true
-	@echo "  ✓ Mark files cleaned"
-	@echo ""
-	@echo "→ Step 3/4: Starting node $(NODE) via systemctl..."
-	@systemctl --user start match-node$(NODE)
-	@echo "  ✓ Node $(NODE) starting"
-	@echo ""
-	@echo "→ Step 4/4: Waiting for node to rejoin cluster..."
-	@sleep 5
-	@for i in 1 2 3 4 5; do \
-		result=$$(java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
-			-cp $(JAR_PATH) io.aeron.cluster.ClusterTool \
-			/tmp/aeron-cluster/node$(NODE)/cluster list-members 2>&1); \
-		if echo "$$result" | grep -q "leaderMemberId="; then \
-			leader=$$(echo "$$result" | grep -o "leaderMemberId=[0-9]*" | cut -d= -f2); \
-			if [ "$$leader" = "$(NODE)" ]; then \
-				echo "  ✓ Node $(NODE) rejoined as LEADER"; \
-			else \
-				echo "  ✓ Node $(NODE) rejoined as FOLLOWER"; \
-			fi; \
-			break; \
-		fi; \
-		echo "  Waiting... ($$i/5)"; \
-		sleep 1; \
-	done
-	@echo ""
-	@echo "╔══════════════════════════════════════════════════════════════════╗"
-	@echo "║  ✓ Node $(NODE) restart complete                                      ║"
-	@echo "╚══════════════════════════════════════════════════════════════════╝"
-
-# Rolling update - update all nodes one by one (zero downtime)
-rolling-update: build-java
-	@echo "╔══════════════════════════════════════════════════════════════════╗"
-	@echo "║           Rolling Update - Zero Downtime Deployment              ║"
-	@echo "╚══════════════════════════════════════════════════════════════════╝"
-	@echo ""
-	@echo "This will update all 3 nodes one at a time:"
-	@echo "  1. Find current leader"
-	@echo "  2. Update followers first (maintains quorum)"
-	@echo "  3. Update leader last (triggers election)"
-	@echo ""
-	@# Find leader and followers using list-members
-	@result=$$(java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
-		-cp $(JAR_PATH) io.aeron.cluster.ClusterTool \
-		/tmp/aeron-cluster/node0/cluster list-members 2>&1); \
-	if ! echo "$$result" | grep -q "leaderMemberId="; then \
-		echo "✗ Could not get cluster membership. Is cluster running?"; \
-		exit 1; \
-	fi; \
-	leader=$$(echo "$$result" | grep -o "leaderMemberId=[0-9]*" | cut -d= -f2); \
-	followers=""; \
-	for node in 0 1 2; do \
-		if [ "$$node" != "$$leader" ]; then \
-			followers="$$followers $$node"; \
-		fi; \
-	done; \
-	if [ -z "$$leader" ]; then \
-		echo "✗ No leader found. Cluster may be unhealthy."; \
-		exit 1; \
-	fi; \
-	echo "→ Found leader: Node $$leader"; \
-	echo "→ Followers:$$followers"; \
-	echo ""; \
-	echo "══════════════════════════════════════════════════════════════════"; \
-	echo "Phase 1: Updating followers"; \
-	echo "══════════════════════════════════════════════════════════════════"; \
-	for node in $$followers; do \
-		echo ""; \
-		echo "--- Updating Node $$node (follower) ---"; \
-		$(MAKE) -s _restart-node-internal NODE=$$node; \
-		echo ""; \
-		echo "Verifying cluster membership..."; \
-		sleep 3; \
-		healthy=0; \
-		for check in 1 2 3 4 5 6 7 8; do \
-			result=$$(java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
-				-cp $(JAR_PATH) io.aeron.cluster.ClusterTool \
-				/tmp/aeron-cluster/node0/cluster list-members 2>&1); \
-			if echo "$$result" | grep -q "leaderMemberId="; then \
-				member_count=$$(echo "$$result" | grep -o "ClusterMember{id=" | wc -l); \
-				if [ "$$member_count" -ge 3 ]; then \
-					echo "✓ Cluster healthy: leader elected, $$member_count active members"; \
-					healthy=1; \
-					break; \
-				else \
-					echo "  Cluster has leader, $$member_count members (waiting for 3)..."; \
-				fi; \
-			fi; \
-			echo "  Waiting for cluster consensus... ($$check/8)"; \
-			sleep 2; \
-		done; \
-		if [ "$$healthy" -eq 0 ]; then \
-			echo "⚠ Cluster may not be fully healthy. Check logs if issues persist."; \
-		fi; \
-	done; \
-	echo ""; \
-	echo "══════════════════════════════════════════════════════════════════"; \
-	echo "Phase 2: Updating leader (Node $$leader)"; \
-	echo "══════════════════════════════════════════════════════════════════"; \
-	echo ""; \
-	echo "--- Updating Node $$leader (leader) ---"; \
-	echo "This will trigger a leader election..."; \
-	$(MAKE) -s _restart-node-internal NODE=$$leader; \
-	echo ""; \
-	echo "Waiting for new leader election..."; \
-	sleep 5; \
-	new_leader=""; \
-	for check in 1 2 3 4 5 6 7 8 9 10; do \
-		for node in 0 1 2; do \
-			result=$$(java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
-				-cp $(JAR_PATH) io.aeron.cluster.ClusterTool \
-				/tmp/aeron-cluster/node$$node/cluster list-members 2>&1); \
-			if echo "$$result" | grep -q "leaderMemberId="; then \
-				new_leader=$$(echo "$$result" | grep -o "leaderMemberId=[0-9]*" | cut -d= -f2); \
-				if [ -n "$$new_leader" ]; then \
-					echo "✓ New leader elected: Node $$new_leader"; \
-					break 2; \
-				fi; \
-			fi; \
-		done; \
-		echo "Waiting for leader... ($$check/10)"; \
-		sleep 2; \
-	done; \
-	if [ -z "$$new_leader" ]; then \
-		echo "⚠ Leader election in progress..."; \
-	fi
-	@echo ""
-	@echo "╔══════════════════════════════════════════════════════════════════╗"
-	@echo "║  ✓ Rolling update complete!                                      ║"
-	@echo "╠══════════════════════════════════════════════════════════════════╣"
-	@echo "║  All nodes updated with new code. Zero downtime achieved.        ║"
-	@echo "╚══════════════════════════════════════════════════════════════════╝"
-	@$(MAKE) -s leader
-
-# Internal helper for restarting a node (used by rolling-update)
-_restart-node-internal:
-	@echo "Stopping node $(NODE) via systemctl..."
-	@systemctl --user stop match-node$(NODE) 2>/dev/null || true
-	@sleep 2
-	@echo "Cleaning up node $(NODE) files..."
-	@rm -rf /dev/shm/aeron-*$(NODE)* 2>/dev/null || true
-	@rm -f /tmp/aeron-cluster/node$(NODE)/cluster/cluster-mark*.dat 2>/dev/null || true
-	@rm -f /tmp/aeron-cluster/node$(NODE)/cluster/*.lck 2>/dev/null || true
-	@rm -f /tmp/aeron-cluster/node$(NODE)/archive/archive-mark.dat 2>/dev/null || true
-	@echo "Starting node $(NODE) via systemctl..."
-	@systemctl --user start match-node$(NODE)
-	@sleep 8
-	@for i in 1 2 3 4 5 6 7 8 9 10; do \
-		result=$$(java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
-			-cp $(JAR_PATH) io.aeron.cluster.ClusterTool \
-			/tmp/aeron-cluster/node$(NODE)/cluster list-members 2>&1); \
-		if echo "$$result" | grep -q "leaderMemberId="; then \
-			leader=$$(echo "$$result" | grep -o "leaderMemberId=[0-9]*" | cut -d= -f2); \
-			if [ "$$leader" = "$(NODE)" ]; then \
-				echo "✓ Node $(NODE) rejoined as LEADER"; \
-			else \
-				echo "✓ Node $(NODE) rejoined as FOLLOWER"; \
-			fi; \
-			break; \
-		fi; \
-		sleep 2; \
-	done
-
-# ==================== LOAD TESTING ====================
-
-loadtest-quick:
-	@./run-load-test.sh quick
-
-loadtest-stress:
-	@./run-load-test.sh stress
-
-# ==================== SBE CODE GENERATION ====================
-
-sbe:
-	java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED -Dsbe.generate.ir=true -Dsbe.target.language=Java -Dsbe.target.namespace=com.match.infrastructure.generated.sbe -Dsbe.output.dir=match/src/main/java -Dsbe.errorLog=yes -jar binaries/sbe-all-1.35.3.jar match/src/main/resources/sbe/order-schema.xml
-
-# ==================== CLUSTER CONFIGURATION ====================
-# JVM flags for ultra-low latency (server)
-JAVA_OPTS = -XX:+UseZGC -XX:+ZGenerational -XX:+UnlockDiagnosticVMOptions -XX:GuaranteedSafepointInterval=0 \
-	-XX:+AlwaysPreTouch -XX:+UseNUMA -XX:+PerfDisableSharedMem \
-	-XX:+TieredCompilation -XX:TieredStopAtLevel=4 \
-	--add-opens java.base/jdk.internal.misc=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
-	-Xmx2g -Xms2g
-
-# JVM flags for ultra-low latency load test client (ZGC)
-JAVA_OPTS_CLIENT = -XX:+UseZGC -XX:+ZGenerational -XX:+UnlockDiagnosticVMOptions \
-	-XX:+AlwaysPreTouch -XX:+UseNUMA -XX:+PerfDisableSharedMem \
-	-XX:+TieredCompilation -XX:TieredStopAtLevel=4 \
-	-XX:CompileThreshold=1000 \
-	--add-opens java.base/jdk.internal.misc=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
-	-Xmx4g -Xms4g
-
-# JVM flags for absolute lowest latency (Epsilon GC = no GC pauses)
-# WARNING: Will run out of memory eventually - only for short benchmarks
-JAVA_OPTS_EPSILON = -XX:+UnlockExperimentalVMOptions -XX:+UseEpsilonGC \
-	-XX:+AlwaysPreTouch -XX:+UseNUMA -XX:+PerfDisableSharedMem \
-	-XX:+TieredCompilation -XX:TieredStopAtLevel=4 \
-	-XX:CompileThreshold=500 \
-	--add-opens java.base/jdk.internal.misc=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
-	-Xmx8g -Xms8g
-
-JAR_PATH = match/target/cluster-engine-1.0.jar
-
-# CPU cores for pinning (24 cores available on i7-13700K)
-# Node0: cores 0-3, Node1: cores 4-7, Node2: cores 8-11
-# Backup: cores 12-13, Gateway: cores 14-15, LoadTest: cores 12-19 (shared)
-CPU_NODE0 = 0-3
-CPU_NODE1 = 4-7
-CPU_NODE2 = 8-11
-CPU_BACKUP = 12-13
-CPU_GATEWAY = 14-15
-CPU_LOADTEST = 12-19
+# ==================== BUILD ====================
 
 # Build the project (Java + UI)
-build: build-ui
-	cd match && mvn clean package -DskipTests -q
+build: build-ui build-java
+	@echo "✓ Build complete"
 
 # Build only Java
 build-java:
@@ -759,111 +592,37 @@ build-java:
 build-ui:
 	cd match/ui && npm install && npm run build
 
-# Dev mode for UI (with hot reload)
-dev-ui:
-	cd match/ui && npm run dev
+# ==================== SBE CODE GENERATION ====================
 
-# Clean cluster data directories
-clean-native:
-	rm -rf /tmp/aeron-cluster/node0/* /tmp/aeron-cluster/node1/* /tmp/aeron-cluster/node2/*
-	mkdir -p /tmp/aeron-cluster/node0 /tmp/aeron-cluster/node1 /tmp/aeron-cluster/node2
+sbe:
+	java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED -Dsbe.generate.ir=true -Dsbe.target.language=Java -Dsbe.target.namespace=com.match.infrastructure.generated.sbe -Dsbe.output.dir=match/src/main/java -Dsbe.errorLog=yes -jar binaries/sbe-all-1.35.3.jar match/src/main/resources/sbe/order-schema.xml
 
-# Stop HTTP gateway service
-stop-gateway:
-	@echo "Stopping HTTP Gateway service..."
-	@systemctl --user stop match-gateway 2>/dev/null || true
-	@echo "Gateway stopped"
+# ==================== CONFIGURATION ====================
 
-# Restart HTTP gateway service
-restart-gateway:
-	@echo "Restarting HTTP Gateway service..."
-	@systemctl --user restart match-gateway
-	@sleep 2
-	@echo "Gateway restarted. UI at http://localhost:8080/ui/"
+# JVM flags for ultra-low latency (server)
+JAVA_OPTS = -XX:+UseZGC -XX:+ZGenerational -XX:+UnlockDiagnosticVMOptions -XX:GuaranteedSafepointInterval=0 \
+	-XX:+AlwaysPreTouch -XX:+UseNUMA -XX:+PerfDisableSharedMem \
+	-XX:+TieredCompilation -XX:TieredStopAtLevel=4 \
+	--add-opens java.base/jdk.internal.misc=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
+	-Xmx2g -Xms2g
 
-# Take a snapshot on all cluster nodes (triggers log truncation)
-# Tries each node until it finds the leader
-snapshot:
-	@echo "Requesting snapshot from cluster leader..."
-	@for node in 0 1 2; do \
-		result=$$(java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
-			-cp $(JAR_PATH) io.aeron.cluster.ClusterTool \
-			/tmp/aeron-cluster/node$$node/cluster snapshot 2>&1); \
-		echo "Node $$node: $$result"; \
-		if echo "$$result" | grep -q "SNAPSHOT completed"; then \
-			echo "✓ Snapshot triggered successfully via node $$node"; \
-			break; \
-		fi; \
-	done
+# CPU cores for pinning (24 cores available on i7-13700K)
+CPU_NODE0 = 0-3
+CPU_NODE1 = 4-7
+CPU_NODE2 = 8-11
+CPU_BACKUP = 12-13
+CPU_MARKET_GATEWAY = 14
+CPU_ORDER_GATEWAY = 15
 
-# Show cluster status
-cluster-status:
-	@echo "=== Cluster Node Status ==="
-	@for node in 0 1 2; do \
-		echo "--- Node $$node ---"; \
-		java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
-			-cp $(JAR_PATH) io.aeron.cluster.ClusterTool \
-			/tmp/aeron-cluster/node$$node/cluster describe 2>/dev/null || echo "Node $$node not available"; \
-	done
+# ==================== PORT 80 SETUP ====================
+# Grant node permission to bind to privileged ports (run once after node install)
+setup-port-80:
+	@echo "→ Granting node permission to bind to port 80 (requires sudo)..."
+	@sudo setcap 'cap_net_bind_service=+ep' /usr/bin/node
+	@echo "  ✓ Node can now bind to port 80"
+	@echo "  Run 'make reinstall-services' then 'make install' to apply"
 
-# Show archive recording info
-archive-info:
-	@echo "=== Archive Recording Info ==="
-	@ls -lah /tmp/aeron-cluster/node*/archive/*.rec 2>/dev/null || echo "No recordings found"
-	@echo ""
-	@echo "=== Segment Sizes ==="
-	@du -sh /tmp/aeron-cluster/node*/archive/ 2>/dev/null || echo "No archive dirs"
-
-# Check backup status
-backup-status:
-	@echo "=== Backup Node Status ==="
-	@if pgrep -f "ClusterBackupApp" > /dev/null; then \
-		echo "✓ Backup node is running"; \
-		tail -5 /tmp/aeron-cluster/backup.log 2>/dev/null || true; \
-	else \
-		echo "✗ Backup node is not running"; \
-	fi
-	@echo ""
-	@echo "=== Backup Archive ==="
-	@ls -lah /tmp/aeron-cluster/backup/archive/*.rec 2>/dev/null || echo "No backup recordings yet"
-
-# Ultra-low latency test with built-in warmup (single JVM, no context switch overhead)
-loadtest-ultra:
-	@echo "=== Ultra-Low Latency Benchmark (ZGC) ===" && \
-	taskset -c $(CPU_LOADTEST) java $(JAVA_OPTS_CLIENT) \
-	-cp $(JAR_PATH) com.match.loadtest.LoadGenerator \
-	--rate 100000 --duration 60 --ultra --warmup 15
-
-# Maximum performance test with Epsilon GC (no GC pauses, 30s only to avoid OOM)
-loadtest-epsilon:
-	@echo "=== Maximum Performance Benchmark (Epsilon GC - No GC Pauses) ===" && \
-	taskset -c $(CPU_LOADTEST) java $(JAVA_OPTS_EPSILON) \
-	-cp $(JAR_PATH) com.match.loadtest.LoadGenerator \
-	--rate 100000 --duration 30 --ultra --warmup 10
-
-# ==================== OS TUNING ====================
-# Apply OS optimizations for ultra-low latency (requires sudo)
-os-tune:
-	@echo "Applying OS optimizations for ultra-low latency..."
-	@echo "Setting CPU governor to performance..."
-	sudo cpupower frequency-set -g performance || echo "cpupower not available, skipping"
-	@echo "Tuning network buffers..."
-	sudo sysctl -w net.core.rmem_max=16777216
-	sudo sysctl -w net.core.wmem_max=16777216
-	sudo sysctl -w net.core.rmem_default=1048576
-	sudo sysctl -w net.core.wmem_default=1048576
-	sudo sysctl -w net.core.netdev_max_backlog=30000
-	sudo sysctl -w net.core.somaxconn=4096
-	@echo "Tuning TCP settings..."
-	sudo sysctl -w net.ipv4.tcp_rmem="4096 1048576 16777216"
-	sudo sysctl -w net.ipv4.tcp_wmem="4096 1048576 16777216"
-	sudo sysctl -w net.ipv4.tcp_low_latency=1
-	sudo sysctl -w net.ipv4.tcp_fastopen=3
-	@echo "Tuning VM settings..."
-	sudo sysctl -w vm.swappiness=0
-	sudo sysctl -w vm.dirty_ratio=10
-	sudo sysctl -w vm.dirty_background_ratio=5
-	@echo "OS tuning complete!"
+# ==================== OS STATUS ====================
 
 # Show current OS settings
 os-check:

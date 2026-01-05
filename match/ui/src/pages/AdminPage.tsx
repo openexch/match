@@ -1,0 +1,957 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Link } from 'react-router-dom';
+import './AdminPage.css';
+
+type NodeStatusType = 'LEADER' | 'FOLLOWER' | 'OFFLINE' | 'STOPPING' | 'STARTING' | 'REJOINING' | 'ELECTION';
+
+interface NodeStatus {
+  id: number;
+  running: boolean;
+  pid?: number;
+  role: NodeStatusType;
+  status?: NodeStatusType;
+  healthy?: boolean;
+}
+
+interface GatewayStatus {
+  running: boolean;
+  port: number;
+}
+
+interface ClusterStatus {
+  nodes: NodeStatus[];
+  leader: number;
+  backup: { running: boolean; pid?: number };
+  gateway: { running: boolean; port: number };
+  gateways: {
+    market: GatewayStatus;
+    order: GatewayStatus;
+    admin: GatewayStatus;
+  };
+  archiveBytes: number;
+  archiveDiskBytes?: number;
+}
+
+interface OperationProgress {
+  operation: string | null;
+  status: string | null;
+  progress: number;
+  currentStep: number;
+  totalSteps: number;
+  complete: boolean;
+  error: boolean;
+  errorMessage: string | null;
+  elapsedMs: number;
+}
+
+type LogSource =
+  | { type: 'node'; id: number }
+  | { type: 'service'; name: 'backup' | 'market-gateway' | 'order-gateway' | 'admin-gateway' };
+
+type ConfirmAction = {
+  type: 'stop-node' | 'restart-node' | 'start-node' |
+        'stop-backup' | 'restart-backup' | 'start-backup' |
+        'stop-market-gateway' | 'restart-market-gateway' | 'start-market-gateway' |
+        'stop-order-gateway' | 'restart-order-gateway' | 'start-order-gateway' |
+        'rolling-update';
+  nodeId?: number;
+  title: string;
+  message: string;
+  confirmLabel: string;
+  confirmStyle: 'danger' | 'warning' | 'primary';
+};
+
+// Icons
+const Icons = {
+  back: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M19 12H5M12 19l-7-7 7-7"/>
+    </svg>
+  ),
+  server: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="2" y="2" width="20" height="8" rx="2"/>
+      <rect x="2" y="14" width="20" height="8" rx="2"/>
+      <circle cx="6" cy="6" r="1" fill="currentColor"/>
+      <circle cx="6" cy="18" r="1" fill="currentColor"/>
+    </svg>
+  ),
+  backup: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+    </svg>
+  ),
+  market: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polyline points="22,7 13.5,15.5 8.5,10.5 2,17"/>
+      <polyline points="16,7 22,7 22,13"/>
+    </svg>
+  ),
+  order: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <path d="M9 9h6M9 13h6M9 17h4"/>
+    </svg>
+  ),
+  admin: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+    </svg>
+  ),
+  folder: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+    </svg>
+  ),
+  database: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <ellipse cx="12" cy="5" rx="9" ry="3"/>
+      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+    </svg>
+  ),
+  stop: (
+    <svg viewBox="0 0 24 24" fill="currentColor">
+      <rect x="6" y="6" width="12" height="12" rx="1"/>
+    </svg>
+  ),
+  restart: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M1 4v6h6M23 20v-6h-6"/>
+      <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+    </svg>
+  ),
+  play: (
+    <svg viewBox="0 0 24 24" fill="currentColor">
+      <polygon points="5,3 19,12 5,21"/>
+    </svg>
+  ),
+  update: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/>
+    </svg>
+  ),
+  snapshot: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <circle cx="12" cy="12" r="3"/>
+    </svg>
+  ),
+  logs: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+      <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/>
+    </svg>
+  ),
+  x: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+      <line x1="18" y1="6" x2="6" y2="18"/>
+      <line x1="6" y1="6" x2="18" y2="18"/>
+    </svg>
+  ),
+};
+
+function getClusterStatus(progress: OperationProgress | null, nodes: NodeStatus[]): {
+  status: 'healthy' | 'electing' | 'unstable' | 'updating';
+  title: string;
+  detail: string;
+} {
+  if (progress?.operation === 'rolling-update' && !progress.complete) {
+    return {
+      status: 'updating',
+      title: 'Rolling Update',
+      detail: progress.status || 'Updating cluster...'
+    };
+  }
+
+  const leader = nodes.find(n => n.role === 'LEADER');
+  const electingNodes = nodes.filter(n => n.role === 'ELECTION');
+  const isElecting = electingNodes.length > 0;
+
+  if (!leader && !isElecting) {
+    return {
+      status: 'unstable',
+      title: 'Cluster Unstable',
+      detail: 'No leader elected'
+    };
+  }
+
+  if (isElecting) {
+    return {
+      status: 'electing',
+      title: 'Leader Election',
+      detail: 'Selecting new leader...'
+    };
+  }
+
+  return {
+    status: 'healthy',
+    title: 'Cluster Healthy',
+    detail: `Node ${leader?.id} is leader`
+  };
+}
+
+function getLogSourceLabel(source: LogSource | null): string {
+  if (!source) return 'Select a service or node to view logs';
+  if (source.type === 'node') return `Node ${source.id}`;
+  switch (source.name) {
+    case 'backup': return 'Backup Node';
+    case 'market-gateway': return 'Market Gateway';
+    case 'order-gateway': return 'Order Gateway';
+    case 'admin-gateway': return 'Admin Gateway';
+  }
+}
+
+export function AdminPage() {
+  const [status, setStatus] = useState<ClusterStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<OperationProgress | null>(null);
+  const [serviceOps, setServiceOps] = useState<{
+    backup: boolean;
+    marketGateway: boolean;
+    orderGateway: boolean;
+    snapshot: boolean;
+  }>({backup: false, marketGateway: false, orderGateway: false, snapshot: false});
+  const [logSource, setLogSource] = useState<LogSource | null>(null);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [logFilters, setLogFilters] = useState({ error: true, warn: true, info: true, debug: true });
+  const [pendingAction, setPendingAction] = useState<ConfirmAction | null>(null);
+  const statusPollRef = useRef<number | null>(null);
+  const logsRef = useRef<HTMLDivElement>(null);
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const response = await fetch('/api/admin/status');
+      if (response.ok) {
+        const data = await response.json() as ClusterStatus;
+        setStatus(data);
+        setError(null);
+      }
+    } catch {
+      setError('Failed to fetch cluster status');
+    }
+  }, []);
+
+  const fetchProgress = useCallback(async () => {
+    try {
+      const response = await fetch('/api/admin/progress');
+      if (response.ok) {
+        const data = await response.json() as OperationProgress;
+        if (data.operation || data.currentStep > 0) {
+          setProgress(data);
+          if (data.complete) {
+            setTimeout(async () => {
+              await fetch('/api/admin/progress?reset=true');
+              setProgress(null);
+            }, 3000);
+          }
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  }, []);
+
+  const fetchLogs = useCallback(async () => {
+    if (!logSource) return;
+    try {
+      let url = '/api/admin/logs?lines=200';
+      if (logSource.type === 'node') {
+        url += `&node=${logSource.id}`;
+      } else {
+        url += `&service=${logSource.name}`;
+      }
+      const response = await fetch(url);
+      if (response.ok) {
+        const data = await response.json();
+        setLogs(data.logs || []);
+      }
+    } catch {
+      // Ignore
+    }
+  }, [logSource]);
+
+  useEffect(() => {
+    if (progress?.operation && !progress.complete) {
+      statusPollRef.current = window.setInterval(() => {
+        fetchStatus();
+        fetchProgress();
+      }, 200);
+    } else if (statusPollRef.current) {
+      clearInterval(statusPollRef.current);
+      statusPollRef.current = null;
+    }
+    return () => {
+      if (statusPollRef.current) {
+        clearInterval(statusPollRef.current);
+      }
+    };
+  }, [progress?.operation, progress?.complete, fetchStatus, fetchProgress]);
+
+  useEffect(() => {
+    fetchStatus();
+    fetchProgress();
+    const interval = setInterval(() => {
+      fetchStatus();
+      fetchProgress();
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [fetchStatus, fetchProgress]);
+
+  useEffect(() => {
+    if (logSource) {
+      fetchLogs();
+      const interval = setInterval(fetchLogs, 2000);
+      return () => clearInterval(interval);
+    }
+  }, [logSource, fetchLogs]);
+
+  // Auto-scroll logs
+  useEffect(() => {
+    if (logsRef.current) {
+      logsRef.current.scrollTop = logsRef.current.scrollHeight;
+    }
+  }, [logs]);
+
+  const requestStopNode = (nodeId: number) => {
+    if (progress?.operation && !progress.complete) return;
+    setPendingAction({
+      type: 'stop-node',
+      nodeId,
+      title: `Stop Node ${nodeId}?`,
+      message: 'This will stop the cluster node. The cluster will continue with remaining nodes.',
+      confirmLabel: 'Stop Node',
+      confirmStyle: 'danger',
+    });
+  };
+
+  const requestRestartNode = (nodeId: number) => {
+    if (progress?.operation && !progress.complete) return;
+    setPendingAction({
+      type: 'restart-node',
+      nodeId,
+      title: `Restart Node ${nodeId}?`,
+      message: 'This will restart the cluster node. It will temporarily leave the cluster and rejoin.',
+      confirmLabel: 'Restart Node',
+      confirmStyle: 'warning',
+    });
+  };
+
+  const requestStartNode = (nodeId: number) => {
+    if (progress?.operation && !progress.complete) return;
+    setPendingAction({
+      type: 'start-node',
+      nodeId,
+      title: `Start Node ${nodeId}?`,
+      message: 'This will start the cluster node and it will attempt to rejoin the cluster.',
+      confirmLabel: 'Start Node',
+      confirmStyle: 'primary',
+    });
+  };
+
+  const executeNodeAction = async (action: string, nodeId: number) => {
+    try {
+      await fetch(`/api/admin/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodeId }),
+      });
+    } catch {
+      setError(`Failed to ${action.replace('-', ' ')}`);
+    }
+  };
+
+  const requestStopBackup = () => {
+    if (serviceOps.backup || (progress?.operation && !progress.complete)) return;
+    setPendingAction({
+      type: 'stop-backup',
+      title: 'Stop Backup Node?',
+      message: 'This will stop the backup node. Cluster snapshots will not be available until restarted.',
+      confirmLabel: 'Stop Backup',
+      confirmStyle: 'danger',
+    });
+  };
+
+  const requestStartBackup = () => {
+    if (serviceOps.backup || (progress?.operation && !progress.complete)) return;
+    setPendingAction({
+      type: 'start-backup',
+      title: 'Start Backup Node?',
+      message: 'This will start the backup node to enable cluster state backups.',
+      confirmLabel: 'Start Backup',
+      confirmStyle: 'primary',
+    });
+  };
+
+  const requestRestartBackup = () => {
+    if (serviceOps.backup || (progress?.operation && !progress.complete)) return;
+    setPendingAction({
+      type: 'restart-backup',
+      title: 'Restart Backup Node?',
+      message: 'This will restart the backup node. Backup service will be temporarily unavailable.',
+      confirmLabel: 'Restart Backup',
+      confirmStyle: 'warning',
+    });
+  };
+
+  const executeBackupAction = async (action: string) => {
+    setServiceOps(prev => ({...prev, backup: true}));
+    try {
+      await fetch(`/api/admin/${action}`, { method: 'POST' });
+      setTimeout(() => { setServiceOps(prev => ({...prev, backup: false})); fetchStatus(); }, action === 'restart-backup' ? 5000 : 3000);
+    } catch {
+      setError(`Failed to ${action.replace('-', ' ')}`);
+      setServiceOps(prev => ({...prev, backup: false}));
+    }
+  };
+
+  const takeSnapshot = async () => {
+    if (serviceOps.snapshot || (progress?.operation && !progress.complete)) return;
+    setServiceOps(prev => ({...prev, snapshot: true}));
+    try {
+      await fetch('/api/admin/snapshot', { method: 'POST' });
+      setTimeout(() => { setServiceOps(prev => ({...prev, snapshot: false})); }, 5000);
+    } catch {
+      setError('Failed to take snapshot');
+      setServiceOps(prev => ({...prev, snapshot: false}));
+    }
+  };
+
+  const requestStopMarketGateway = () => {
+    if (serviceOps.marketGateway || (progress?.operation && !progress.complete)) return;
+    setPendingAction({
+      type: 'stop-market-gateway',
+      title: 'Stop Market Gateway?',
+      message: 'This will stop the market data WebSocket. Clients will lose real-time market updates.',
+      confirmLabel: 'Stop Gateway',
+      confirmStyle: 'danger',
+    });
+  };
+
+  const requestStartMarketGateway = () => {
+    if (serviceOps.marketGateway || (progress?.operation && !progress.complete)) return;
+    setPendingAction({
+      type: 'start-market-gateway',
+      title: 'Start Market Gateway?',
+      message: 'This will start the market data WebSocket for real-time updates.',
+      confirmLabel: 'Start Gateway',
+      confirmStyle: 'primary',
+    });
+  };
+
+  const requestRestartMarketGateway = () => {
+    if (serviceOps.marketGateway || (progress?.operation && !progress.complete)) return;
+    setPendingAction({
+      type: 'restart-market-gateway',
+      title: 'Restart Market Gateway?',
+      message: 'This will restart the market gateway. Clients will be temporarily disconnected.',
+      confirmLabel: 'Restart Gateway',
+      confirmStyle: 'warning',
+    });
+  };
+
+  const executeMarketGatewayAction = async (action: string) => {
+    setServiceOps(prev => ({...prev, marketGateway: true}));
+    try {
+      await fetch(`/api/admin/${action}`, { method: 'POST' });
+      const timeout = action.includes('stop') ? 3000 : action.includes('restart') ? 10000 : 8000;
+      setTimeout(() => { setServiceOps(prev => ({...prev, marketGateway: false})); fetchStatus(); }, timeout);
+    } catch {
+      setError(`Failed to ${action.replace(/-/g, ' ')}`);
+      setServiceOps(prev => ({...prev, marketGateway: false}));
+    }
+  };
+
+  const requestStopOrderGateway = () => {
+    if (serviceOps.orderGateway || (progress?.operation && !progress.complete)) return;
+    setPendingAction({
+      type: 'stop-order-gateway',
+      title: 'Stop Order Gateway?',
+      message: 'This will stop the order API. Order submission will be unavailable.',
+      confirmLabel: 'Stop Gateway',
+      confirmStyle: 'danger',
+    });
+  };
+
+  const requestStartOrderGateway = () => {
+    if (serviceOps.orderGateway || (progress?.operation && !progress.complete)) return;
+    setPendingAction({
+      type: 'start-order-gateway',
+      title: 'Start Order Gateway?',
+      message: 'This will start the order API for order submission.',
+      confirmLabel: 'Start Gateway',
+      confirmStyle: 'primary',
+    });
+  };
+
+  const requestRestartOrderGateway = () => {
+    if (serviceOps.orderGateway || (progress?.operation && !progress.complete)) return;
+    setPendingAction({
+      type: 'restart-order-gateway',
+      title: 'Restart Order Gateway?',
+      message: 'This will restart the order gateway. Order submission will be temporarily unavailable.',
+      confirmLabel: 'Restart Gateway',
+      confirmStyle: 'warning',
+    });
+  };
+
+  const executeOrderGatewayAction = async (action: string) => {
+    setServiceOps(prev => ({...prev, orderGateway: true}));
+    try {
+      await fetch(`/api/admin/${action}`, { method: 'POST' });
+      const timeout = action.includes('stop') ? 3000 : action.includes('restart') ? 10000 : 8000;
+      setTimeout(() => { setServiceOps(prev => ({...prev, orderGateway: false})); fetchStatus(); }, timeout);
+    } catch {
+      setError(`Failed to ${action.replace(/-/g, ' ')}`);
+      setServiceOps(prev => ({...prev, orderGateway: false}));
+    }
+  };
+
+  const requestRollingUpdate = () => {
+    if (progress?.operation && !progress.complete) return;
+    setPendingAction({
+      type: 'rolling-update',
+      title: 'Start Rolling Update?',
+      message: 'This will rebuild the application and restart all cluster nodes one by one. The cluster will remain available during the update.',
+      confirmLabel: 'Start Update',
+      confirmStyle: 'warning',
+    });
+  };
+
+  const executeRollingUpdate = async () => {
+    try {
+      const response = await fetch('/api/admin/rolling-update', { method: 'POST' });
+      if (!response.ok) {
+        const data = await response.json();
+        setError(data.error || 'Rolling update failed');
+      }
+    } catch {
+      setError('Failed to trigger rolling update');
+    }
+  };
+
+  const confirmAction = async () => {
+    if (!pendingAction) return;
+    const action = pendingAction;
+    setPendingAction(null);
+
+    switch (action.type) {
+      case 'stop-node':
+      case 'restart-node':
+      case 'start-node':
+        if (action.nodeId !== undefined) {
+          await executeNodeAction(action.type, action.nodeId);
+        }
+        break;
+      case 'stop-backup':
+      case 'restart-backup':
+      case 'start-backup':
+        await executeBackupAction(action.type);
+        break;
+      case 'stop-market-gateway':
+      case 'restart-market-gateway':
+      case 'start-market-gateway':
+        await executeMarketGatewayAction(action.type);
+        break;
+      case 'stop-order-gateway':
+      case 'restart-order-gateway':
+      case 'start-order-gateway':
+        await executeOrderGatewayAction(action.type);
+        break;
+      case 'rolling-update':
+        await executeRollingUpdate();
+        break;
+    }
+  };
+
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  };
+
+  const isLogSelected = (source: LogSource) => {
+    if (!logSource) return false;
+    if (source.type === 'node' && logSource.type === 'node') {
+      return source.id === logSource.id;
+    }
+    if (source.type === 'service' && logSource.type === 'service') {
+      return source.name === logSource.name;
+    }
+    return false;
+  };
+
+  const getLogLevel = (line: string): 'error' | 'warn' | 'info' | 'debug' => {
+    const lower = line.toLowerCase();
+    if (lower.includes('[error]') || lower.includes('exception') || lower.includes('severe') || lower.includes('failed')) {
+      return 'error';
+    }
+    if (lower.includes('[warn]') || lower.includes('warning')) {
+      return 'warn';
+    }
+    if (lower.includes('[info]') || lower.includes('[gateway]') || lower.includes('started') || lower.includes('connected')) {
+      return 'info';
+    }
+    return 'debug';
+  };
+
+  const filteredLogs = logs.filter(line => {
+    const level = getLogLevel(line);
+    return logFilters[level];
+  });
+
+  const toggleFilter = (filter: 'error' | 'warn' | 'info' | 'debug') => {
+    setLogFilters(prev => ({ ...prev, [filter]: !prev[filter] }));
+  };
+
+  const clusterStatus = getClusterStatus(progress, status?.nodes || []);
+  const isUpdating = progress?.operation === 'rolling-update' && !progress.complete;
+  const updateProgress = isUpdating ? (progress?.progress || 0) : 0;
+
+  return (
+    <div className="admin-page">
+      {/* Header */}
+      <header className="admin-header">
+        <Link to="/" className="back-link">
+          {Icons.back}
+          <span>Trading</span>
+        </Link>
+        <h1>Cluster Admin</h1>
+      </header>
+
+      {/* Error Banner */}
+      {error && (
+        <div className="error-banner">
+          {Icons.x}
+          <span>{error}</span>
+          <button onClick={() => setError(null)}>Dismiss</button>
+        </div>
+      )}
+
+      {/* Cluster Status Bar */}
+      {!status ? (
+        <div className="skeleton skeleton-status-bar" />
+      ) : (
+        <div className={`status-bar ${clusterStatus.status}`}>
+          <div className="status-bar-progress" style={{ width: `${updateProgress}%` }} />
+          <div className="status-bar-content">
+            <div className="status-info">
+              <span className={`status-dot ${clusterStatus.status}`} />
+              <div className="status-text">
+                <span className="status-title">{clusterStatus.title}</span>
+                <span className="status-detail">{clusterStatus.detail}</span>
+              </div>
+            </div>
+            {isUpdating ? (
+              <div className="update-progress">
+                <span className="progress-text">{updateProgress}%</span>
+              </div>
+            ) : (
+              <button
+                className="update-btn"
+                onClick={requestRollingUpdate}
+                disabled={!!(progress?.operation && !progress.complete)}
+              >
+                {Icons.update}
+                <span>Rolling Update</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <main className="admin-main">
+        {/* Cluster Nodes */}
+        <section className="admin-section">
+          <div className="section-header">
+            {Icons.server}
+            <h2>Cluster Nodes</h2>
+          </div>
+          <div className="nodes-grid">
+            {!status ? (
+              <>
+                <div className="node-card skeleton skeleton-node" />
+                <div className="node-card skeleton skeleton-node" />
+                <div className="node-card skeleton skeleton-node" />
+              </>
+            ) : status.nodes.map((node) => {
+              const nodeState = node.status || node.role;
+              const isTransitioning = ['STOPPING', 'STARTING', 'REJOINING', 'ELECTION'].includes(nodeState);
+              const stateClass = nodeState.toLowerCase();
+              const logSelected = isLogSelected({ type: 'node', id: node.id });
+
+              return (
+                <div key={node.id} className={`node-card ${stateClass}`}>
+                  <div className="node-header">
+                    <span className="node-id">Node {node.id}</span>
+                    <span className={`node-role ${stateClass}`}>{nodeState}</span>
+                  </div>
+                  <div className="node-status">
+                    <span className={`status-dot ${stateClass} ${isTransitioning ? 'pulsing' : ''}`} />
+                    <span className="status-text">
+                      {nodeState === 'OFFLINE' ? 'Stopped' :
+                       isTransitioning ? nodeState.charAt(0) + nodeState.slice(1).toLowerCase() + '...' :
+                       node.pid ? `PID ${node.pid}` : 'Running'}
+                    </span>
+                  </div>
+                  <div className="node-actions">
+                    {node.running && !isTransitioning ? (
+                      <>
+                        <button className="btn-icon stop" onClick={() => requestStopNode(node.id)} disabled={isUpdating} title="Stop">
+                          {Icons.stop}
+                        </button>
+                        <button className="btn-icon restart" onClick={() => requestRestartNode(node.id)} disabled={isUpdating} title="Restart">
+                          {Icons.restart}
+                        </button>
+                      </>
+                    ) : !node.running && !isTransitioning ? (
+                      <button className="btn-icon start" onClick={() => requestStartNode(node.id)} disabled={isUpdating} title="Start">
+                        {Icons.play}
+                      </button>
+                    ) : null}
+                    <button
+                      className={`btn-icon logs ${logSelected ? 'active' : ''}`}
+                      onClick={() => setLogSource({ type: 'node', id: node.id })}
+                      title="View Logs"
+                    >
+                      {Icons.logs}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Services */}
+        <section className="admin-section">
+          <div className="section-header">
+            {Icons.server}
+            <h2>Services</h2>
+            <div className="storage-stats">
+              {Icons.folder}
+              <span>{status ? formatBytes(status.archiveBytes || 0) : '--'}</span>
+              <span className="separator">/</span>
+              {Icons.database}
+              <span>{status ? formatBytes(status.archiveDiskBytes || 0) : '--'}</span>
+            </div>
+          </div>
+          <div className="services-grid">
+            {!status ? (
+              <>
+                <div className="service-card skeleton skeleton-service" />
+                <div className="service-card skeleton skeleton-service" />
+                <div className="service-card skeleton skeleton-service" />
+                <div className="service-card skeleton skeleton-service" />
+              </>
+            ) : (
+              <>
+            {/* Backup */}
+            <div className={`service-card ${serviceOps.backup || serviceOps.snapshot ? 'operating' : ''}`}>
+              <div className="service-main">
+                <div className="service-icon">{Icons.backup}</div>
+                <div className="service-info">
+                  <span className="service-name">Backup Node</span>
+                  <span className="service-status">
+                    {serviceOps.backup ? 'Processing...' : status?.backup.running ? 'Running' : 'Stopped'}
+                  </span>
+                </div>
+                <span className={`status-dot ${serviceOps.backup ? 'pulsing' : ''} ${status?.backup.running ? 'online' : 'offline'}`} />
+              </div>
+              <div className="service-actions">
+                {!serviceOps.backup && status?.backup.running ? (
+                  <>
+                    <button className="btn-icon stop" onClick={requestStopBackup} disabled={isUpdating} title="Stop">{Icons.stop}</button>
+                    <button className="btn-icon restart" onClick={requestRestartBackup} disabled={isUpdating} title="Restart">{Icons.restart}</button>
+                    <button
+                      className={`btn-icon snapshot ${serviceOps.snapshot ? 'active' : ''}`}
+                      onClick={takeSnapshot}
+                      disabled={serviceOps.snapshot || isUpdating}
+                      title="Take Snapshot"
+                    >
+                      {Icons.snapshot}
+                    </button>
+                  </>
+                ) : !serviceOps.backup ? (
+                  <button className="btn-icon start" onClick={requestStartBackup} disabled={isUpdating} title="Start">{Icons.play}</button>
+                ) : null}
+                <button
+                  className={`btn-icon logs ${isLogSelected({ type: 'service', name: 'backup' }) ? 'active' : ''}`}
+                  onClick={() => setLogSource({ type: 'service', name: 'backup' })}
+                  title="View Logs"
+                >
+                  {Icons.logs}
+                </button>
+              </div>
+            </div>
+
+            {/* Market Gateway */}
+            <div className={`service-card ${serviceOps.marketGateway ? 'operating' : ''}`}>
+              <div className="service-main">
+                <div className="service-icon">{Icons.market}</div>
+                <div className="service-info">
+                  <span className="service-name">Market Gateway</span>
+                  <span className="service-status">
+                    {serviceOps.marketGateway ? 'Processing...' : status?.gateways?.market?.running ? `WebSocket :${status.gateways.market.port}` : 'Stopped'}
+                  </span>
+                </div>
+                <span className={`status-dot ${serviceOps.marketGateway ? 'pulsing' : ''} ${status?.gateways?.market?.running ? 'online' : 'offline'}`} />
+              </div>
+              <div className="service-actions">
+                {!serviceOps.marketGateway && status?.gateways?.market?.running ? (
+                  <>
+                    <button className="btn-icon stop" onClick={requestStopMarketGateway} disabled={isUpdating} title="Stop">{Icons.stop}</button>
+                    <button className="btn-icon restart" onClick={requestRestartMarketGateway} disabled={isUpdating} title="Restart">{Icons.restart}</button>
+                  </>
+                ) : !serviceOps.marketGateway ? (
+                  <button className="btn-icon start" onClick={requestStartMarketGateway} disabled={isUpdating} title="Start">{Icons.play}</button>
+                ) : null}
+                <button
+                  className={`btn-icon logs ${isLogSelected({ type: 'service', name: 'market-gateway' }) ? 'active' : ''}`}
+                  onClick={() => setLogSource({ type: 'service', name: 'market-gateway' })}
+                  title="View Logs"
+                >
+                  {Icons.logs}
+                </button>
+              </div>
+            </div>
+
+            {/* Order Gateway */}
+            <div className={`service-card ${serviceOps.orderGateway ? 'operating' : ''}`}>
+              <div className="service-main">
+                <div className="service-icon">{Icons.order}</div>
+                <div className="service-info">
+                  <span className="service-name">Order Gateway</span>
+                  <span className="service-status">
+                    {serviceOps.orderGateway ? 'Processing...' : status?.gateways?.order?.running ? `HTTP :${status.gateways.order.port}` : 'Stopped'}
+                  </span>
+                </div>
+                <span className={`status-dot ${serviceOps.orderGateway ? 'pulsing' : ''} ${status?.gateways?.order?.running ? 'online' : 'offline'}`} />
+              </div>
+              <div className="service-actions">
+                {!serviceOps.orderGateway && status?.gateways?.order?.running ? (
+                  <>
+                    <button className="btn-icon stop" onClick={requestStopOrderGateway} disabled={isUpdating} title="Stop">{Icons.stop}</button>
+                    <button className="btn-icon restart" onClick={requestRestartOrderGateway} disabled={isUpdating} title="Restart">{Icons.restart}</button>
+                  </>
+                ) : !serviceOps.orderGateway ? (
+                  <button className="btn-icon start" onClick={requestStartOrderGateway} disabled={isUpdating} title="Start">{Icons.play}</button>
+                ) : null}
+                <button
+                  className={`btn-icon logs ${isLogSelected({ type: 'service', name: 'order-gateway' }) ? 'active' : ''}`}
+                  onClick={() => setLogSource({ type: 'service', name: 'order-gateway' })}
+                  title="View Logs"
+                >
+                  {Icons.logs}
+                </button>
+              </div>
+            </div>
+
+            {/* Admin Gateway */}
+            <div className="service-card admin-self">
+              <div className="service-main">
+                <div className="service-icon">{Icons.admin}</div>
+                <div className="service-info">
+                  <span className="service-name">Admin Gateway</span>
+                  <span className="service-status">HTTP :8082</span>
+                </div>
+                <span className="status-dot online" />
+              </div>
+              <div className="service-actions">
+                <span className="self-label">Current</span>
+                <button
+                  className={`btn-icon logs ${isLogSelected({ type: 'service', name: 'admin-gateway' }) ? 'active' : ''}`}
+                  onClick={() => setLogSource({ type: 'service', name: 'admin-gateway' })}
+                  title="View Logs"
+                >
+                  {Icons.logs}
+                </button>
+              </div>
+            </div>
+              </>
+            )}
+          </div>
+        </section>
+
+        {/* Log Viewer */}
+        <section className="admin-section logs-section">
+          <div className="section-header">
+            {Icons.logs}
+            <h2>{getLogSourceLabel(logSource)}</h2>
+            {logSource && (
+              <>
+                <div className="log-filters">
+                  <button
+                    className={`log-filter-btn error ${logFilters.error ? 'active' : ''}`}
+                    onClick={() => toggleFilter('error')}
+                  >
+                    Error
+                  </button>
+                  <button
+                    className={`log-filter-btn warn ${logFilters.warn ? 'active' : ''}`}
+                    onClick={() => toggleFilter('warn')}
+                  >
+                    Warn
+                  </button>
+                  <button
+                    className={`log-filter-btn info ${logFilters.info ? 'active' : ''}`}
+                    onClick={() => toggleFilter('info')}
+                  >
+                    Info
+                  </button>
+                  <button
+                    className={`log-filter-btn debug ${logFilters.debug ? 'active' : ''}`}
+                    onClick={() => toggleFilter('debug')}
+                  >
+                    Debug
+                  </button>
+                </div>
+                <button className="clear-logs-btn" onClick={() => setLogSource(null)}>
+                  Clear
+                </button>
+              </>
+            )}
+          </div>
+          <div className="logs-container" ref={logsRef}>
+            {logSource ? (
+              filteredLogs.length > 0 ? (
+                filteredLogs.map((line, i) => {
+                  const level = getLogLevel(line);
+                  return (
+                    <div key={i} className={`log-line ${level}`}>
+                      {line}
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="log-line placeholder">No logs match the current filters</div>
+              )
+            ) : (
+              <div className="log-line placeholder">Click a log button on any node or service to view its logs</div>
+            )}
+          </div>
+        </section>
+      </main>
+
+      {/* Confirmation Modal */}
+      {pendingAction && (
+        <div className="confirm-overlay" onClick={() => setPendingAction(null)}>
+          <div className="confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>{pendingAction.title}</h3>
+            <p>{pendingAction.message}</p>
+            <div className="confirm-actions">
+              <button className="confirm-btn cancel" onClick={() => setPendingAction(null)}>
+                Cancel
+              </button>
+              <button className={`confirm-btn ${pendingAction.confirmStyle}`} onClick={confirmAction}>
+                {pendingAction.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

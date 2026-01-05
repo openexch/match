@@ -102,6 +102,10 @@ public class Engine {
         OrderType type = cmd.getOrderType();
 
         boolean isBuy = (side == OrderSide.BID);
+
+        // Debug: log all incoming orders
+        System.out.printf("[ORDER-IN] orderId=%d, side=%s, type=%s, price=%d, qty=%d%n",
+            orderId, side, type, price, quantity);
         int matchCount = 0;
 
         if (type == OrderType.MARKET) {
@@ -119,7 +123,13 @@ public class Engine {
                 0, filledQty, price, isBuy);
         } else if (type == OrderType.LIMIT) {
             // Limit order
+            // Debug: log order details before matching
+            long bestBid = engine.getBestBid();
+            long bestAsk = engine.getBestAsk();
             matchCount = engine.processLimitOrder(orderId, userId, isBuy, price, quantity);
+            // Debug: log every order for debugging
+            System.out.printf("[MATCH-DEBUG] orderId=%d, side=%s, price=%d, qty=%d, matchCount=%d, bestBid=%d, bestAsk=%d%n",
+                orderId, isBuy ? "BUY" : "SELL", price, quantity, matchCount, bestBid, bestAsk);
             // Publish trades
             publishTradeExecutions(engine, marketId, timestamp, orderId, userId, isBuy, matchCount);
             // Publish order status
@@ -175,7 +185,11 @@ public class Engine {
      */
     private void publishTradeExecutions(DirectMatchingEngine engine, int marketId, long timestamp,
             long takerOrderId, long takerUserId, boolean takerIsBuy, int matchCount) {
-        if (eventPublisher == null || matchCount == 0) {
+        if (eventPublisher == null) {
+            System.out.println("[TRADE-DEBUG] eventPublisher is NULL!");
+            return;
+        }
+        if (matchCount == 0) {
             return;
         }
 
@@ -186,12 +200,16 @@ public class Engine {
             long matchPrice = engine.getMatchPrice(i);
             long matchQty = engine.getMatchQuantity(i);
 
-            eventPublisher.publishTradeExecution(
+            System.out.printf("[TRADE-DEBUG] Publishing trade: taker=%d, maker=%d, price=%d, qty=%d%n",
+                takerOrderId, makerOrderId, matchPrice, matchQty);
+
+            boolean success = eventPublisher.publishTradeExecution(
                 marketId, timestamp,
                 takerOrderId, takerUserId,
                 makerOrderId, makerUserId,
                 matchPrice, matchQty, takerIsBuy
             );
+            System.out.printf("[TRADE-DEBUG] Published: success=%s%n", success);
         }
     }
 

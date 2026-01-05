@@ -80,6 +80,11 @@ public class DirectMatchingEngine {
         // Place remaining quantity on book
         if (takerRemainingQty > 0) {
             takerBook.addOrder(orderId, userId, price, takerRemainingQty);
+            System.out.printf("[ENGINE-ADD] orderId=%d, side=%s, price=%d, qty=%d, bidEmpty=%s, askEmpty=%s, bidBest=%d, askBest=%d%n",
+                orderId, isBuy ? "BID" : "ASK", price, takerRemainingQty,
+                bidBook.isEmpty(), askBook.isEmpty(),
+                bidBook.isEmpty() ? -1 : bidBook.getBasePrice() + (long)bidBook.getBestPriceIndex() * bidBook.getTickSize(),
+                askBook.isEmpty() ? -1 : askBook.getBasePrice() + (long)askBook.getBestPriceIndex() * askBook.getTickSize());
         }
 
         return matchCount;

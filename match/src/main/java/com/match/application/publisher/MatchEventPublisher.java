@@ -9,6 +9,7 @@ import com.match.infrastructure.Logger;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -308,9 +309,10 @@ public class MatchEventPublisher {
             Disruptor<PublishEvent> disruptor = disruptors.get(marketId);
 
             try {
-                disruptor.shutdown();
+                // Use halt() instead of shutdown() to avoid blocking on pending events
+                disruptor.halt();
             } catch (Exception e) {
-                logger.warn("Error shutting down disruptor: " + e.getMessage());
+                logger.warn("Error halting disruptor: " + e.getMessage());
             }
 
             // Call handler.onShutdown() to cleanup scheduler

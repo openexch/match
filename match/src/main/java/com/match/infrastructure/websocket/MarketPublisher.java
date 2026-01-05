@@ -80,13 +80,9 @@ public class MarketPublisher implements MarketEventHandler {
         long timestamp;
     }
 
-    // Change detection - avoid sending duplicate snapshots
-    private long lastBestBid = -1;
-    private long lastBestAsk = -1;
-    private long lastBidQty = -1;
-    private long lastAskQty = -1;
-    private int lastBidCount = -1;
-    private int lastAskCount = -1;
+    // Change detection - use engine version numbers to detect any book change
+    private long lastBidVersion = -1;
+    private long lastAskVersion = -1;
 
     // Diagnostic counters
     private long flushCount = 0;
@@ -222,6 +218,9 @@ public class MarketPublisher implements MarketEventHandler {
 
         int eventType = event.getEventType();
         if (eventType == PublishEventType.TRADE_EXECUTION) {
+            // DEBUG: Log ALL trade events
+            System.out.printf("[TRADE-RECEIVED] seq=%d, price=%d, qty=%d, takerIsBuy=%s%n",
+                sequence, event.getPrice(), event.getQuantity(), event.isTakerIsBuy());
             // Buffer trades - order book is fetched directly from engine at 50ms intervals
             bufferTrade(event);
         } else if (eventType == PublishEventType.ORDER_STATUS_UPDATE) {
@@ -251,6 +250,9 @@ public class MarketPublisher implements MarketEventHandler {
         }
 
         agg.add(event.getQuantity(), event.isTakerIsBuy(), event.getTimestamp());
+
+        // DEBUG: Confirm trade buffered
+        System.out.printf("[TRADE-BUFFERED] price=%d, tradesByPriceSize=%d%n", price, tradesByPrice.size());
 
         // Capture book version for correlation (read from both books)
         if (matchingEngine != null) {
@@ -339,12 +341,13 @@ public class MarketPublisher implements MarketEventHandler {
                 hasSubscribers = subs != null && !subs.isEmpty();
             }
 
-            // DEBUG: Log flush status every 5 seconds
-            if (flushCount % 100 == 1) {
+            // DEBUG: Log flush status when there are trades OR every 5 seconds
+            int tradeCount = tradesByPrice.size();
+            if (tradeCount > 0 || flushCount % 100 == 1) {
                 System.out.printf("[FLUSH-DEBUG] broadcaster=%s, hasSubscribers=%b, trades=%d, orderStatus=%d, engine=%s%n",
                     localBroadcaster != null ? "SET" : "NULL",
                     hasSubscribers,
-                    tradesByPrice.size(),
+                    tradeCount,
                     orderStatusBuffer.size(),
                     localEngine != null ? "SET" : "NULL");
             }
@@ -374,6 +377,11 @@ public class MarketPublisher implements MarketEventHandler {
                 String bookJson = serializeOrderBookFromEngine(localEngine);
                 if (bookJson != null) {
                     broadcastMessage(bookJson, localBroadcaster);
+                } else if (flushCount % 100 == 1) {
+                    // Debug: log why snapshot is null
+                    localEngine.collectTopLevels(20);
+                    System.out.printf("[BOOK-DEBUG] snapshot null: bidCount=%d, askCount=%d%n",
+                        localEngine.getTopBidCount(), localEngine.getTopAskCount());
                 }
             }
         } catch (Exception e) {
@@ -507,32 +515,23 @@ public class MarketPublisher implements MarketEventHandler {
         long collectedBidVersion = engine.getCollectedBidVersion();
         long collectedAskVersion = engine.getCollectedAskVersion();
 
-        // Change detection - check best bid/ask price, quantity, and count
-        long currentBestBid = bidCount > 0 ? bidPrices[0] : -1;
-        long currentBestAsk = askCount > 0 ? askPrices[0] : -1;
-        long currentBidQty = bidCount > 0 ? bidQuantities[0] : 0;
-        long currentAskQty = askCount > 0 ? askQuantities[0] : 0;
-        int currentBidCount = bidCount > 0 ? bidOrderCounts[0] : 0;
-        int currentAskCount = askCount > 0 ? askOrderCounts[0] : 0;
+        // Change detection using engine version numbers - detects ANY book change
+        boolean changed = (collectedBidVersion != lastBidVersion) ||
+                          (collectedAskVersion != lastAskVersion);
 
-        boolean changed = (currentBestBid != lastBestBid) ||
-                          (currentBestAsk != lastBestAsk) ||
-                          (currentBidQty != lastBidQty) ||
-                          (currentAskQty != lastAskQty) ||
-                          (currentBidCount != lastBidCount) ||
-                          (currentAskCount != lastAskCount);
+        // Debug: log version comparison every 100th call
+        if (flushCount % 100 == 1) {
+            System.out.printf("[VERSION-DEBUG] bid: %d->%d, ask: %d->%d, changed=%b%n",
+                lastBidVersion, collectedBidVersion, lastAskVersion, collectedAskVersion, changed);
+        }
 
         if (!changed) {
             return null;
         }
 
-        // Update last values for next comparison
-        lastBestBid = currentBestBid;
-        lastBestAsk = currentBestAsk;
-        lastBidQty = currentBidQty;
-        lastAskQty = currentAskQty;
-        lastBidCount = currentBidCount;
-        lastAskCount = currentAskCount;
+        // Update last versions for next comparison
+        lastBidVersion = collectedBidVersion;
+        lastAskVersion = collectedAskVersion;
 
         JsonObject json = new JsonObject();
         json.addProperty("type", "BOOK_SNAPSHOT");

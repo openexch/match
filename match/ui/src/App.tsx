@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
+import { Routes, Route, Link } from 'react-router-dom';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useOrderBook } from './hooks/useOrderBook';
 import { useTrades } from './hooks/useTrades';
@@ -13,15 +14,29 @@ import { MarketSelector } from './components/MarketSelector/MarketSelector';
 import { MarketStats } from './components/MarketStats/MarketStats';
 import { OrderForm } from './components/OrderForm/OrderForm';
 import { OpenOrders } from './components/OpenOrders/OpenOrders';
-import { ClusterAdmin } from './components/ClusterAdmin';
+import { AdminPage } from './pages/AdminPage';
 import type { WebSocketMessage, Market, OrderRequest, ClusterStatusMessage, ClusterEventMessage, ExtendedConnectionStatus } from './types/market';
 import { MARKETS } from './types/market';
 import './App.css';
 
-function App() {
+// Icons
+const Icons = {
+  settings: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  ),
+  activity: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+    </svg>
+  ),
+};
+
+function MarketPage() {
   // Market state
   const [selectedMarket, setSelectedMarket] = useState<Market>(MARKETS[0]);
-  const [showAdmin, setShowAdmin] = useState(false);
 
   // Data hooks
   const { orderBook, handleBookSnapshot, resetOrderBook } = useOrderBook();
@@ -31,25 +46,18 @@ function App() {
   const { clusterState, handleClusterStatus, handleClusterEvent } = useClusterState();
   const { submitOrder, cancelOrder, loading: apiLoading } = useApi();
 
-  // Combined reset function for all state
   const resetAllState = useCallback(() => {
-    console.log('[App] Resetting all state');
     resetOrderBook();
     resetTrades();
     resetOrders();
     resetStats();
   }, [resetOrderBook, resetTrades, resetOrders, resetStats]);
 
-  // Handle reconnection start - reset state before new data arrives
   const handleReconnecting = useCallback(() => {
-    console.log('[App] WebSocket reconnecting - resetting state');
     resetAllState();
   }, [resetAllState]);
 
-  // Handle successful reconnection
-  const handleReconnected = useCallback(() => {
-    console.log('[App] WebSocket reconnected successfully');
-  }, []);
+  const handleReconnected = useCallback(() => {}, []);
 
   const handleMessage = useCallback(
     (message: WebSocketMessage) => {
@@ -69,23 +77,18 @@ function App() {
           handleOrderStatusBatch(message);
           break;
         case 'SUBSCRIPTION_CONFIRMED':
-          console.log('Subscribed to market', message.marketId);
           break;
         case 'PONG':
-          // Heartbeat received
           break;
         case 'ERROR':
           console.error('Server error:', message.message);
           break;
-        // Handle cluster messages
         case 'CLUSTER_STATUS':
           handleClusterStatus(message as ClusterStatusMessage);
           break;
         case 'CLUSTER_EVENT':
           handleClusterEvent(message as ClusterEventMessage);
-          // On leader change, reset orders to avoid stale state
           if ((message as ClusterEventMessage).event === 'LEADER_CHANGE') {
-            console.log('[App] Leader changed - resetting order state');
             resetOrders();
           }
           break;
@@ -102,7 +105,6 @@ function App() {
     onReconnected: handleReconnected,
   });
 
-  // Compute effective connection status based on cluster state
   const effectiveStatus: ExtendedConnectionStatus = useMemo(() => {
     if (status !== 'connected') return status;
     if (clusterState.isElecting) return 'cluster-electing';
@@ -116,7 +118,7 @@ function App() {
   }, [resetAllState]);
 
   const handleReconnect = useCallback(() => {
-    forceReconnect(); // This triggers onReconnecting which resets state
+    forceReconnect();
   }, [forceReconnect]);
 
   const handleSubmitOrder = useCallback(async (order: OrderRequest) => {
@@ -132,7 +134,6 @@ function App() {
 
   return (
     <div className="app">
-      {/* Top Navigation */}
       <header className="app-header">
         <div className="header-left">
           <div className="logo">
@@ -146,23 +147,18 @@ function App() {
           />
         </div>
         <div className="header-right">
-          <button className="admin-btn" onClick={() => setShowAdmin(true)} title="Cluster Admin">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-              <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
-            </svg>
-          </button>
+          <Link to="/admin" className="admin-btn" title="Cluster Admin">
+            {Icons.settings}
+          </Link>
           <ConnectionStatus status={effectiveStatus} clusterState={clusterState} onReconnect={handleReconnect} />
         </div>
       </header>
 
-      {/* Market Stats Bar */}
       <div className="stats-bar">
         <MarketStats market={selectedMarket} stats={stats} orderBook={orderBook} />
       </div>
 
-      {/* Main Trading Interface */}
       <main className="app-main">
-        {/* Left Column: Order Form */}
         <aside className="left-panel">
           <OrderForm
             market={selectedMarket}
@@ -173,18 +169,15 @@ function App() {
           />
         </aside>
 
-        {/* Center Column: Order Book */}
         <section className="center-panel">
           <OrderBook orderBook={orderBook} />
         </section>
 
-        {/* Right Column: Trades */}
         <aside className="right-panel">
           <TradeList trades={trades} />
         </aside>
       </main>
 
-      {/* Bottom: Open Orders */}
       <section className="orders-panel">
         <OpenOrders
           orders={openOrders}
@@ -193,22 +186,28 @@ function App() {
         />
       </section>
 
-      {/* Footer */}
       <footer className="app-footer">
         <div className="footer-left">
+          <span className="footer-icon">{Icons.activity}</span>
           <span>Match Trading Engine</span>
           <span className="separator">|</span>
           <span className="version">v1.0.0</span>
         </div>
         <div className="footer-right">
           <span className="update-indicator" />
-          <span className="update-rate">Live updates • 50ms</span>
+          <span className="update-rate">Live updates</span>
         </div>
       </footer>
-
-      {/* Cluster Admin Panel */}
-      <ClusterAdmin isOpen={showAdmin} onClose={() => setShowAdmin(false)} />
     </div>
+  );
+}
+
+function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<MarketPage />} />
+      <Route path="/admin" element={<AdminPage />} />
+    </Routes>
   );
 }
 

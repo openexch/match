@@ -99,10 +99,12 @@ public class Order {
 
     public OrderSide toOrderSide() {
         if (orderSide == null) return OrderSide.BID;
-        switch (orderSide) {
+        switch (orderSide.toUpperCase()) {
             case "ASK":
+            case "SELL":
                 return OrderSide.ASK;
             case "BID":
+            case "BUY":
                 return OrderSide.BID;
             default:
                 return OrderSide.BID;
