@@ -219,7 +219,7 @@ status:
 	@echo "=== Backup Node ==="
 	@if pgrep -f "ClusterBackupApp" >/dev/null 2>&1; then \
 		echo "  ✓ Backup node running"; \
-		log_pos=$$(grep -o "logPosition=[0-9]*" /tmp/aeron-cluster/backup.log 2>/dev/null | tail -1 | cut -d= -f2); \
+		log_pos=$$(grep -o "logPosition=[0-9]*" /var/log/cluster/backup.log 2>/dev/null | tail -1 | cut -d= -f2); \
 		if [ -n "$$log_pos" ]; then \
 			echo "  → Replicated: $$(echo "scale=2; $$log_pos/1048576" | bc) MB"; \
 		fi; \
@@ -259,7 +259,7 @@ status:
 
 # View logs
 logs:
-	@tail -f /tmp/aeron-cluster/node0.log /tmp/aeron-cluster/backup.log 2>/dev/null
+	@tail -f /var/log/cluster/node0.log /var/log/cluster/backup.log 2>/dev/null
 
 # Help
 help:
@@ -311,6 +311,13 @@ services:
 
 # ==================== SERVICE MANAGEMENT ====================
 
+# Setup log directory (requires sudo, run once)
+setup-logs:
+	@echo "→ Creating /var/log/cluster directory..."
+	sudo mkdir -p /var/log/cluster
+	sudo chown $(USER):$(USER) /var/log/cluster
+	@echo "✓ Log directory created: /var/log/cluster"
+
 # Install systemd services with CPU pinning
 install-services:
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
@@ -318,13 +325,6 @@ install-services:
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@mkdir -p ~/.config/systemd/user
-	@mkdir -p ~/.config/user-tmpfiles.d
-	@echo "→ Installing tmpfiles config for /tmp/aeron-cluster..."
-	@printf '%s\n' \
-		'# Create aeron-cluster directory at boot for match engine logs' \
-		'd /tmp/aeron-cluster 0755 - - -' > ~/.config/user-tmpfiles.d/aeron-cluster.conf
-	@mkdir -p /tmp/aeron-cluster
-	@systemd-tmpfiles --user --create 2>/dev/null || true
 	@echo "→ Installing match-node0.service (CPU cores 0-3)..."
 	@printf '%s\n' \
 		'[Unit]' \
@@ -338,14 +338,15 @@ install-services:
 		'Environment="CLUSTER_NODE=0"' \
 		'Environment="CLUSTER_PORT_BASE=9000"' \
 		'Environment="BASE_DIR=/tmp/aeron-cluster/node0"' \
+		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/node0.log && mv /var/log/cluster/node0.log /var/log/cluster/node0.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
 		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node0' \
 		'ExecStart=/usr/bin/taskset -c $(CPU_NODE0) /usr/bin/java $(JAVA_OPTS) -jar match/target/cluster-engine-1.0.jar' \
 		'Restart=on-failure' \
 		'RestartSec=10' \
 		'LimitNOFILE=1048576' \
 		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/tmp/aeron-cluster/node0.log' \
-		'StandardError=append:/tmp/aeron-cluster/node0.log' \
+		'StandardOutput=append:/var/log/cluster/node0.log' \
+		'StandardError=append:/var/log/cluster/node0.log' \
 		'' \
 		'[Install]' \
 		'WantedBy=default.target' > ~/.config/systemd/user/match-node0.service
@@ -362,6 +363,7 @@ install-services:
 		'Environment="CLUSTER_NODE=1"' \
 		'Environment="CLUSTER_PORT_BASE=9000"' \
 		'Environment="BASE_DIR=/tmp/aeron-cluster/node1"' \
+		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/node1.log && mv /var/log/cluster/node1.log /var/log/cluster/node1.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
 		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node1' \
 		'ExecStartPre=/bin/sleep 2' \
 		'ExecStart=/usr/bin/taskset -c $(CPU_NODE1) /usr/bin/java $(JAVA_OPTS) -jar match/target/cluster-engine-1.0.jar' \
@@ -369,8 +371,8 @@ install-services:
 		'RestartSec=10' \
 		'LimitNOFILE=1048576' \
 		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/tmp/aeron-cluster/node1.log' \
-		'StandardError=append:/tmp/aeron-cluster/node1.log' \
+		'StandardOutput=append:/var/log/cluster/node1.log' \
+		'StandardError=append:/var/log/cluster/node1.log' \
 		'' \
 		'[Install]' \
 		'WantedBy=default.target' > ~/.config/systemd/user/match-node1.service
@@ -387,6 +389,7 @@ install-services:
 		'Environment="CLUSTER_NODE=2"' \
 		'Environment="CLUSTER_PORT_BASE=9000"' \
 		'Environment="BASE_DIR=/tmp/aeron-cluster/node2"' \
+		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/node2.log && mv /var/log/cluster/node2.log /var/log/cluster/node2.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
 		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node2' \
 		'ExecStartPre=/bin/sleep 2' \
 		'ExecStart=/usr/bin/taskset -c $(CPU_NODE2) /usr/bin/java $(JAVA_OPTS) -jar match/target/cluster-engine-1.0.jar' \
@@ -394,12 +397,12 @@ install-services:
 		'RestartSec=10' \
 		'LimitNOFILE=1048576' \
 		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/tmp/aeron-cluster/node2.log' \
-		'StandardError=append:/tmp/aeron-cluster/node2.log' \
+		'StandardOutput=append:/var/log/cluster/node2.log' \
+		'StandardError=append:/var/log/cluster/node2.log' \
 		'' \
 		'[Install]' \
 		'WantedBy=default.target' > ~/.config/systemd/user/match-node2.service
-	@echo "→ Installing match-backup.service (CPU cores 12-13)..."
+	@echo "→ Installing match-backup.service..."
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Cluster Backup Node' \
@@ -408,19 +411,20 @@ install-services:
 		'[Service]' \
 		'Type=simple' \
 		'WorkingDirectory=$(PWD)' \
+		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/backup.log && mv /var/log/cluster/backup.log /var/log/cluster/backup.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
 		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/backup' \
 		'ExecStartPre=/bin/sleep 3' \
-		'ExecStart=/usr/bin/taskset -c $(CPU_BACKUP) /usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.persistence.ClusterBackupApp' \
+		'ExecStart=/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.persistence.ClusterBackupApp' \
 		'Restart=on-failure' \
 		'RestartSec=10' \
 		'LimitNOFILE=1048576' \
 		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/tmp/aeron-cluster/backup.log' \
-		'StandardError=append:/tmp/aeron-cluster/backup.log' \
+		'StandardOutput=append:/var/log/cluster/backup.log' \
+		'StandardError=append:/var/log/cluster/backup.log' \
 		'' \
 		'[Install]' \
 		'WantedBy=default.target' > ~/.config/systemd/user/match-backup.service
-	@echo "→ Installing match-market-gateway.service (CPU core 14)..."
+	@echo "→ Installing match-market-gateway.service..."
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Market Gateway' \
@@ -431,18 +435,19 @@ install-services:
 		'WorkingDirectory=$(PWD)' \
 		'Environment="MATCH_PROJECT_DIR=$(PWD)"' \
 		'Environment="EGRESS_PORT=9091"' \
+		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/market-gateway.log && mv /var/log/cluster/market-gateway.log /var/log/cluster/market-gateway.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
 		'ExecStartPre=/bin/sleep 5' \
-		'ExecStart=/usr/bin/taskset -c $(CPU_MARKET_GATEWAY) /usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.MarketGatewayMain' \
+		'ExecStart=/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.MarketGatewayMain' \
 		'Restart=on-failure' \
 		'RestartSec=5' \
 		'LimitNOFILE=1048576' \
 		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/tmp/aeron-cluster/market-gateway.log' \
-		'StandardError=append:/tmp/aeron-cluster/market-gateway.log' \
+		'StandardOutput=append:/var/log/cluster/market-gateway.log' \
+		'StandardError=append:/var/log/cluster/market-gateway.log' \
 		'' \
 		'[Install]' \
 		'WantedBy=default.target' > ~/.config/systemd/user/match-market-gateway.service
-	@echo "→ Installing match-order-gateway.service (CPU core 15)..."
+	@echo "→ Installing match-order-gateway.service..."
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Order Gateway' \
@@ -453,14 +458,15 @@ install-services:
 		'WorkingDirectory=$(PWD)' \
 		'Environment="MATCH_PROJECT_DIR=$(PWD)"' \
 		'Environment="EGRESS_PORT=9092"' \
+		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/order-gateway.log && mv /var/log/cluster/order-gateway.log /var/log/cluster/order-gateway.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
 		'ExecStartPre=/bin/sleep 5' \
-		'ExecStart=/usr/bin/taskset -c $(CPU_ORDER_GATEWAY) /usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.OrderGatewayMain' \
+		'ExecStart=/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.OrderGatewayMain' \
 		'Restart=on-failure' \
 		'RestartSec=5' \
 		'LimitNOFILE=1048576' \
 		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/tmp/aeron-cluster/order-gateway.log' \
-		'StandardError=append:/tmp/aeron-cluster/order-gateway.log' \
+		'StandardOutput=append:/var/log/cluster/order-gateway.log' \
+		'StandardError=append:/var/log/cluster/order-gateway.log' \
 		'' \
 		'[Install]' \
 		'WantedBy=default.target' > ~/.config/systemd/user/match-order-gateway.service
@@ -474,12 +480,13 @@ install-services:
 		'Type=simple' \
 		'WorkingDirectory=$(PWD)' \
 		'Environment="MATCH_PROJECT_DIR=$(PWD)"' \
+		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/admin-gateway.log && mv /var/log/cluster/admin-gateway.log /var/log/cluster/admin-gateway.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
 		'ExecStart=/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.AdminGatewayMain' \
 		'Restart=on-failure' \
 		'RestartSec=5' \
 		'LimitNOFILE=1048576' \
-		'StandardOutput=append:/tmp/aeron-cluster/admin-gateway.log' \
-		'StandardError=append:/tmp/aeron-cluster/admin-gateway.log' \
+		'StandardOutput=append:/var/log/cluster/admin-gateway.log' \
+		'StandardError=append:/var/log/cluster/admin-gateway.log' \
 		'' \
 		'[Install]' \
 		'WantedBy=default.target' > ~/.config/systemd/user/match-admin-gateway.service
@@ -492,11 +499,12 @@ install-services:
 		'[Service]' \
 		'Type=simple' \
 		'WorkingDirectory=$(PWD)/match/ui' \
+		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/ui.log && mv /var/log/cluster/ui.log /var/log/cluster/ui.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
 		'ExecStart=/usr/bin/npx vite preview --port 80 --host' \
 		'Restart=on-failure' \
 		'RestartSec=5' \
-		'StandardOutput=append:/tmp/aeron-cluster/ui.log' \
-		'StandardError=append:/tmp/aeron-cluster/ui.log' \
+		'StandardOutput=append:/var/log/cluster/ui.log' \
+		'StandardError=append:/var/log/cluster/ui.log' \
 		'' \
 		'[Install]' \
 		'WantedBy=default.target' > ~/.config/systemd/user/match-ui.service
@@ -511,9 +519,8 @@ install-services:
 	@echo "║                                                                  ║"
 	@echo "║  CPU Core Allocation:                                            ║"
 	@echo "║    Node 0:  cores 0-3    Node 1:  cores 4-7                      ║"
-	@echo "║    Node 2:  cores 8-11   Backup:  cores 12-13                    ║"
-	@echo "║    Market Gateway: core 14   Order Gateway: core 15              ║"
-	@echo "║    Admin Gateway:  no pinning (lightweight)                      ║"
+	@echo "║    Node 2:  cores 8-11                                           ║"
+	@echo "║    Gateways & Backup: no pinning (SHARED threading mode)         ║"
 	@echo "║                                                                  ║"
 	@echo "║  Next: Run 'make install' to build and start the cluster         ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
@@ -538,8 +545,6 @@ uninstall-services:
 	@rm -f ~/.config/systemd/user/match-admin-gateway.service
 	@rm -f ~/.config/systemd/user/match-ui.service
 	@rm -f ~/.config/systemd/user/match-gateway.service
-	@echo "→ Removing tmpfiles config..."
-	@rm -f ~/.config/user-tmpfiles.d/aeron-cluster.conf
 	@echo "→ Reloading systemd..."
 	@systemctl --user daemon-reload
 	@echo ""
@@ -610,9 +615,6 @@ JAVA_OPTS = -XX:+UseZGC -XX:+ZGenerational -XX:+UnlockDiagnosticVMOptions -XX:Gu
 CPU_NODE0 = 0-3
 CPU_NODE1 = 4-7
 CPU_NODE2 = 8-11
-CPU_BACKUP = 12-13
-CPU_MARKET_GATEWAY = 14
-CPU_ORDER_GATEWAY = 15
 
 # ==================== PORT 80 SETUP ====================
 # Grant node permission to bind to privileged ports (run once after node install)

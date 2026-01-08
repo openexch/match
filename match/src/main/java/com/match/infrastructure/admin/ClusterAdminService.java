@@ -620,7 +620,7 @@ public class ClusterAdminService {
     public Map<String, Object> getLogs(int nodeId, int lines) {
         Map<String, Object> response = new HashMap<>();
         try {
-            Path logPath = Path.of("/tmp/aeron-cluster/node" + nodeId + ".log");
+            Path logPath = Path.of("/var/log/cluster/node" + nodeId + ".log");
             if (Files.exists(logPath)) {
                 List<String> allLines = Files.readAllLines(logPath);
                 int start = Math.max(0, allLines.size() - lines);
