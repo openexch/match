@@ -15,7 +15,13 @@
 #
 # ==================================================================
 
-.PHONY: install install-deps optimize-os status logs help services leader install-services uninstall-services reinstall-services build build-java build-ui sbe
+.PHONY: install install-deps optimize-os status logs help services leader install-services uninstall-services reinstall-services build build-java build-ui sbe migrate-services setup-sudoers
+
+# ==================== CONFIGURATION ====================
+# Absolute project directory (captured at make time)
+PROJECT_DIR := $(shell pwd)
+# Current user for running services
+SERVICE_USER := $(shell whoami)
 
 # ==================== INSTALLATION ====================
 
@@ -86,7 +92,7 @@ install:
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@# Stop any existing services first
-	@systemctl --user stop match-ui match-admin-gateway match-order-gateway match-market-gateway match-backup match-node2 match-node1 match-node0 2>/dev/null || true
+	@sudo systemctl stop ui admin order market backup node2 node1 node0 2>/dev/null || true
 	@echo "→ Step 1/5: Building UI..."
 	@cd match/ui && npm install --silent && npm run build --silent
 	@echo "  ✓ UI built"
@@ -106,11 +112,11 @@ install:
 	@echo "  ✓ Cluster state cleaned"
 	@echo ""
 	@echo "→ Step 5/5: Starting cluster..."
-	@systemctl --user start match-node0
+	@sudo systemctl start node0
 	@sleep 3
-	@systemctl --user start match-node1 match-node2
+	@sudo systemctl start node1 node2
 	@sleep 5
-	@systemctl --user start match-backup match-market-gateway match-order-gateway match-admin-gateway match-ui
+	@sudo systemctl start backup market order admin ui
 	@sleep 3
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
@@ -307,7 +313,7 @@ services:
 	@echo "║                    Systemd Services Status                       ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@systemctl --user status match-node0 match-node1 match-node2 match-backup match-market-gateway match-order-gateway match-admin-gateway match-ui --no-pager 2>/dev/null | grep -E "●|Active:|Main PID:" || echo "Services not installed"
+	@sudo systemctl status node0 node1 node2 backup market order admin ui --no-pager 2>/dev/null | grep -E "●|Active:|Main PID:" || echo "Services not installed"
 
 # ==================== SERVICE MANAGEMENT ====================
 
@@ -318,14 +324,13 @@ setup-logs:
 	sudo chown $(USER):$(USER) /var/log/cluster
 	@echo "✓ Log directory created: /var/log/cluster"
 
-# Install systemd services with CPU pinning
+# Install system-wide systemd services (requires sudo)
 install-services:
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
-	@echo "║           Installing Systemd Services                            ║"
+	@echo "║           Installing System-Wide Systemd Services                ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@mkdir -p ~/.config/systemd/user
-	@echo "→ Installing match-node0.service (CPU cores 0-3)..."
+	@echo "→ Installing node0.service (CPU cores 0-3)..."
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Cluster Node 0' \
@@ -333,7 +338,9 @@ install-services:
 		'' \
 		'[Service]' \
 		'Type=simple' \
-		'WorkingDirectory=$(PWD)' \
+		'User=$(SERVICE_USER)' \
+		'Group=$(SERVICE_USER)' \
+		'WorkingDirectory=$(PROJECT_DIR)' \
 		'Environment="CLUSTER_ADDRESSES=localhost,localhost,localhost"' \
 		'Environment="CLUSTER_NODE=0"' \
 		'Environment="CLUSTER_PORT_BASE=9000"' \
@@ -349,8 +356,8 @@ install-services:
 		'StandardError=append:/var/log/cluster/node0.log' \
 		'' \
 		'[Install]' \
-		'WantedBy=default.target' > ~/.config/systemd/user/match-node0.service
-	@echo "→ Installing match-node1.service (CPU cores 4-7)..."
+		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/node0.service > /dev/null
+	@echo "→ Installing node1.service (CPU cores 4-7)..."
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Cluster Node 1' \
@@ -358,7 +365,9 @@ install-services:
 		'' \
 		'[Service]' \
 		'Type=simple' \
-		'WorkingDirectory=$(PWD)' \
+		'User=$(SERVICE_USER)' \
+		'Group=$(SERVICE_USER)' \
+		'WorkingDirectory=$(PROJECT_DIR)' \
 		'Environment="CLUSTER_ADDRESSES=localhost,localhost,localhost"' \
 		'Environment="CLUSTER_NODE=1"' \
 		'Environment="CLUSTER_PORT_BASE=9000"' \
@@ -375,8 +384,8 @@ install-services:
 		'StandardError=append:/var/log/cluster/node1.log' \
 		'' \
 		'[Install]' \
-		'WantedBy=default.target' > ~/.config/systemd/user/match-node1.service
-	@echo "→ Installing match-node2.service (CPU cores 8-11)..."
+		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/node1.service > /dev/null
+	@echo "→ Installing node2.service (CPU cores 8-11)..."
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Cluster Node 2' \
@@ -384,7 +393,9 @@ install-services:
 		'' \
 		'[Service]' \
 		'Type=simple' \
-		'WorkingDirectory=$(PWD)' \
+		'User=$(SERVICE_USER)' \
+		'Group=$(SERVICE_USER)' \
+		'WorkingDirectory=$(PROJECT_DIR)' \
 		'Environment="CLUSTER_ADDRESSES=localhost,localhost,localhost"' \
 		'Environment="CLUSTER_NODE=2"' \
 		'Environment="CLUSTER_PORT_BASE=9000"' \
@@ -401,8 +412,8 @@ install-services:
 		'StandardError=append:/var/log/cluster/node2.log' \
 		'' \
 		'[Install]' \
-		'WantedBy=default.target' > ~/.config/systemd/user/match-node2.service
-	@echo "→ Installing match-backup.service..."
+		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/node2.service > /dev/null
+	@echo "→ Installing backup.service..."
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Cluster Backup Node' \
@@ -410,7 +421,9 @@ install-services:
 		'' \
 		'[Service]' \
 		'Type=simple' \
-		'WorkingDirectory=$(PWD)' \
+		'User=$(SERVICE_USER)' \
+		'Group=$(SERVICE_USER)' \
+		'WorkingDirectory=$(PROJECT_DIR)' \
 		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/backup.log && mv /var/log/cluster/backup.log /var/log/cluster/backup.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
 		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/backup' \
 		'ExecStartPre=/bin/sleep 3' \
@@ -423,8 +436,8 @@ install-services:
 		'StandardError=append:/var/log/cluster/backup.log' \
 		'' \
 		'[Install]' \
-		'WantedBy=default.target' > ~/.config/systemd/user/match-backup.service
-	@echo "→ Installing match-market-gateway.service..."
+		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/backup.service > /dev/null
+	@echo "→ Installing market.service..."
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Market Gateway' \
@@ -432,22 +445,24 @@ install-services:
 		'' \
 		'[Service]' \
 		'Type=simple' \
-		'WorkingDirectory=$(PWD)' \
-		'Environment="MATCH_PROJECT_DIR=$(PWD)"' \
+		'User=$(SERVICE_USER)' \
+		'Group=$(SERVICE_USER)' \
+		'WorkingDirectory=$(PROJECT_DIR)' \
+		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' \
 		'Environment="EGRESS_PORT=9091"' \
-		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/market-gateway.log && mv /var/log/cluster/market-gateway.log /var/log/cluster/market-gateway.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
+		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/market.log && mv /var/log/cluster/market.log /var/log/cluster/market.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
 		'ExecStartPre=/bin/sleep 5' \
 		'ExecStart=/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.MarketGatewayMain' \
 		'Restart=on-failure' \
 		'RestartSec=5' \
 		'LimitNOFILE=1048576' \
 		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/var/log/cluster/market-gateway.log' \
-		'StandardError=append:/var/log/cluster/market-gateway.log' \
+		'StandardOutput=append:/var/log/cluster/market.log' \
+		'StandardError=append:/var/log/cluster/market.log' \
 		'' \
 		'[Install]' \
-		'WantedBy=default.target' > ~/.config/systemd/user/match-market-gateway.service
-	@echo "→ Installing match-order-gateway.service..."
+		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/market.service > /dev/null
+	@echo "→ Installing order.service..."
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Order Gateway' \
@@ -455,22 +470,24 @@ install-services:
 		'' \
 		'[Service]' \
 		'Type=simple' \
-		'WorkingDirectory=$(PWD)' \
-		'Environment="MATCH_PROJECT_DIR=$(PWD)"' \
+		'User=$(SERVICE_USER)' \
+		'Group=$(SERVICE_USER)' \
+		'WorkingDirectory=$(PROJECT_DIR)' \
+		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' \
 		'Environment="EGRESS_PORT=9092"' \
-		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/order-gateway.log && mv /var/log/cluster/order-gateway.log /var/log/cluster/order-gateway.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
+		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/order.log && mv /var/log/cluster/order.log /var/log/cluster/order.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
 		'ExecStartPre=/bin/sleep 5' \
 		'ExecStart=/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.OrderGatewayMain' \
 		'Restart=on-failure' \
 		'RestartSec=5' \
 		'LimitNOFILE=1048576' \
 		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/var/log/cluster/order-gateway.log' \
-		'StandardError=append:/var/log/cluster/order-gateway.log' \
+		'StandardOutput=append:/var/log/cluster/order.log' \
+		'StandardError=append:/var/log/cluster/order.log' \
 		'' \
 		'[Install]' \
-		'WantedBy=default.target' > ~/.config/systemd/user/match-order-gateway.service
-	@echo "→ Installing match-admin-gateway.service..."
+		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/order.service > /dev/null
+	@echo "→ Installing admin.service..."
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Admin Gateway' \
@@ -478,19 +495,21 @@ install-services:
 		'' \
 		'[Service]' \
 		'Type=simple' \
-		'WorkingDirectory=$(PWD)' \
-		'Environment="MATCH_PROJECT_DIR=$(PWD)"' \
-		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/admin-gateway.log && mv /var/log/cluster/admin-gateway.log /var/log/cluster/admin-gateway.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
+		'User=$(SERVICE_USER)' \
+		'Group=$(SERVICE_USER)' \
+		'WorkingDirectory=$(PROJECT_DIR)' \
+		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' \
+		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/admin.log && mv /var/log/cluster/admin.log /var/log/cluster/admin.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
 		'ExecStart=/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.AdminGatewayMain' \
 		'Restart=on-failure' \
 		'RestartSec=5' \
 		'LimitNOFILE=1048576' \
-		'StandardOutput=append:/var/log/cluster/admin-gateway.log' \
-		'StandardError=append:/var/log/cluster/admin-gateway.log' \
+		'StandardOutput=append:/var/log/cluster/admin.log' \
+		'StandardError=append:/var/log/cluster/admin.log' \
 		'' \
 		'[Install]' \
-		'WantedBy=default.target' > ~/.config/systemd/user/match-admin-gateway.service
-	@echo "→ Installing match-ui.service (port 80)..."
+		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/admin.service > /dev/null
+	@echo "→ Installing ui.service (port 80)..."
 	@printf '%s\n' \
 		'[Unit]' \
 		'Description=Match Engine Trading UI' \
@@ -498,7 +517,9 @@ install-services:
 		'' \
 		'[Service]' \
 		'Type=simple' \
-		'WorkingDirectory=$(PWD)/match/ui' \
+		'User=$(SERVICE_USER)' \
+		'Group=$(SERVICE_USER)' \
+		'WorkingDirectory=$(PROJECT_DIR)/match/ui' \
 		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/ui.log && mv /var/log/cluster/ui.log /var/log/cluster/ui.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
 		'ExecStart=/usr/bin/npx vite preview --port 80 --host' \
 		'Restart=on-failure' \
@@ -507,15 +528,21 @@ install-services:
 		'StandardError=append:/var/log/cluster/ui.log' \
 		'' \
 		'[Install]' \
-		'WantedBy=default.target' > ~/.config/systemd/user/match-ui.service
+		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/ui.service > /dev/null
 	@echo ""
 	@echo "→ Reloading systemd..."
-	@systemctl --user daemon-reload
+	@sudo systemctl daemon-reload
 	@echo "→ Enabling services..."
-	@systemctl --user enable match-node0 match-node1 match-node2 match-backup match-market-gateway match-order-gateway match-admin-gateway match-ui
+	@sudo systemctl enable node0 node1 node2 backup market order admin ui
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
-	@echo "║  ✓ Services installed and enabled!                               ║"
+	@echo "║  ✓ System services installed and enabled!                        ║"
+	@echo "║                                                                  ║"
+	@echo "║  Service Management:                                             ║"
+	@echo "║    sudo systemctl start|stop|restart node0                       ║"
+	@echo "║    sudo service node0 start|stop|restart                         ║"
+	@echo "║                                                                  ║"
+	@echo "║  Services: node0 node1 node2 backup market order admin ui        ║"
 	@echo "║                                                                  ║"
 	@echo "║  CPU Core Allocation:                                            ║"
 	@echo "║    Node 0:  cores 0-3    Node 1:  cores 4-7                      ║"
@@ -525,17 +552,46 @@ install-services:
 	@echo "║  Next: Run 'make install' to build and start the cluster         ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 
-# Uninstall systemd services
+# Uninstall system-wide systemd services (requires sudo)
 uninstall-services:
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
 	@echo "║           Uninstalling Systemd Services                          ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@echo "→ Stopping services..."
-	@systemctl --user stop match-ui match-admin-gateway match-order-gateway match-market-gateway match-backup match-node2 match-node1 match-node0 2>/dev/null || true
+	@sudo systemctl stop ui admin order market backup node2 node1 node0 2>/dev/null || true
 	@echo "→ Disabling services..."
-	@systemctl --user disable match-node0 match-node1 match-node2 match-backup match-market-gateway match-order-gateway match-admin-gateway match-ui 2>/dev/null || true
+	@sudo systemctl disable node0 node1 node2 backup market order admin ui 2>/dev/null || true
 	@echo "→ Removing service files..."
+	@sudo rm -f /etc/systemd/system/node0.service
+	@sudo rm -f /etc/systemd/system/node1.service
+	@sudo rm -f /etc/systemd/system/node2.service
+	@sudo rm -f /etc/systemd/system/backup.service
+	@sudo rm -f /etc/systemd/system/market.service
+	@sudo rm -f /etc/systemd/system/order.service
+	@sudo rm -f /etc/systemd/system/admin.service
+	@sudo rm -f /etc/systemd/system/ui.service
+	@echo "→ Reloading systemd..."
+	@sudo systemctl daemon-reload
+	@echo ""
+	@echo "✓ Services uninstalled"
+
+# Reinstall systemd services (uninstall + install)
+reinstall-services: uninstall-services install-services
+	@echo ""
+	@echo "✓ Services reinstalled"
+
+# Migrate from old user services to new system services
+migrate-services:
+	@echo "╔══════════════════════════════════════════════════════════════════╗"
+	@echo "║           Migrating from User to System Services                 ║"
+	@echo "╚══════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@echo "→ Stopping old user services..."
+	@systemctl --user stop match-ui match-admin-gateway match-order-gateway match-market-gateway match-backup match-node2 match-node1 match-node0 2>/dev/null || true
+	@echo "→ Disabling old user services..."
+	@systemctl --user disable match-node0 match-node1 match-node2 match-backup match-market-gateway match-order-gateway match-admin-gateway match-ui 2>/dev/null || true
+	@echo "→ Removing old service files..."
 	@rm -f ~/.config/systemd/user/match-node0.service
 	@rm -f ~/.config/systemd/user/match-node1.service
 	@rm -f ~/.config/systemd/user/match-node2.service
@@ -545,15 +601,60 @@ uninstall-services:
 	@rm -f ~/.config/systemd/user/match-admin-gateway.service
 	@rm -f ~/.config/systemd/user/match-ui.service
 	@rm -f ~/.config/systemd/user/match-gateway.service
-	@echo "→ Reloading systemd..."
+	@rm -f ~/.config/user-tmpfiles.d/aeron-cluster.conf 2>/dev/null || true
+	@echo "→ Reloading user systemd..."
 	@systemctl --user daemon-reload
 	@echo ""
-	@echo "✓ Services uninstalled"
+	@echo "✓ Old user services removed"
+	@echo "→ Run 'make install-services' to install new system services"
 
-# Reinstall systemd services (uninstall + install)
-reinstall-services: uninstall-services install-services
+# Setup sudoers for passwordless service management (requires sudo, run once)
+setup-sudoers:
+	@echo "╔══════════════════════════════════════════════════════════════════╗"
+	@echo "║           Setting up Sudoers for Service Management              ║"
+	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@echo "✓ Services reinstalled"
+	@echo "→ Creating /etc/sudoers.d/match-services..."
+	@printf '%s\n' \
+		'# Allow $(SERVICE_USER) to manage match engine services without password' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl start node0' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop node0' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart node0' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active node0' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl show *' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl start node1' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop node1' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart node1' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active node1' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl start node2' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop node2' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart node2' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active node2' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl start backup' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop backup' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart backup' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active backup' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl start market' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop market' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart market' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active market' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl start order' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop order' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart order' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active order' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl start admin' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop admin' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart admin' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active admin' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl start ui' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop ui' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart ui' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active ui' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/systemctl daemon-reload' \
+		'$(SERVICE_USER) ALL=(ALL) NOPASSWD: /usr/bin/journalctl *' | sudo tee /etc/sudoers.d/match-services > /dev/null
+	@sudo chmod 440 /etc/sudoers.d/match-services
+	@echo ""
+	@echo "✓ Sudoers configured - admin gateway can now manage services"
 
 # ==================== CLUSTER STATUS (READ-ONLY) ====================
 

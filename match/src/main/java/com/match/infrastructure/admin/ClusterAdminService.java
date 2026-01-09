@@ -79,11 +79,11 @@ public class ClusterAdminService {
                 node.put("role", "STOPPING");
             } else {
                 try {
-                    String activeResult = executeCommand("systemctl", "--user", "is-active", "match-node" + i);
+                    String activeResult = executeCommand("sudo", "systemctl", "is-active", "node" + i);
                     boolean isActive = "active".equals(activeResult.trim());
 
                     if (isActive) {
-                        String pidResult = executeCommand("systemctl", "--user", "show", "-p", "MainPID", "--value", "match-node" + i);
+                        String pidResult = executeCommand("sudo", "systemctl", "show", "-p", "MainPID", "--value", "node" + i);
                         int pid = Integer.parseInt(pidResult.trim());
 
                         node.put("running", true);
@@ -128,13 +128,13 @@ public class ClusterAdminService {
         // Market Gateway (WebSocket on port 8081)
         Map<String, Object> marketGw = new HashMap<>();
         marketGw.put("port", 8081);
-        marketGw.put("running", isServiceActive("match-market-gateway"));
+        marketGw.put("running", isServiceActive("market"));
         gateways.put("market", marketGw);
 
         // Order Gateway (HTTP on port 8080)
         Map<String, Object> orderGw = new HashMap<>();
         orderGw.put("port", 8080);
-        orderGw.put("running", isServiceActive("match-order-gateway"));
+        orderGw.put("running", isServiceActive("order"));
         gateways.put("order", orderGw);
 
         // Admin Gateway (HTTP on port 8082) - always running since we're it
@@ -147,7 +147,7 @@ public class ClusterAdminService {
 
         // Legacy single gateway field for backward compatibility
         Map<String, Object> gateway = new HashMap<>();
-        gateway.put("running", isServiceActive("match-order-gateway"));
+        gateway.put("running", isServiceActive("order"));
         gateway.put("port", 8080);
         status.put("gateway", gateway);
 
@@ -196,7 +196,7 @@ public class ClusterAdminService {
      */
     private boolean isServiceActive(String serviceName) {
         try {
-            String result = executeCommand("systemctl", "--user", "is-active", serviceName);
+            String result = executeCommand("sudo", "systemctl", "is-active", serviceName);
             return "active".equals(result.trim());
         } catch (Exception e) {
             return false;
@@ -214,19 +214,19 @@ public class ClusterAdminService {
 
         new Thread(() -> {
             try {
-                executeCommand("systemctl", "--user", "stop", "match-node" + nodeId);
+                executeCommand("sudo", "systemctl", "stop", "node" + nodeId);
                 Thread.sleep(1000);
 
                 clusterStatus.setNodeStatus(nodeId, "STARTING", false);
 
-                executeCommand("systemctl", "--user", "start", "match-node" + nodeId);
+                executeCommand("sudo", "systemctl", "start", "node" + nodeId);
                 Thread.sleep(2000);
 
                 clusterStatus.setNodeStatus(nodeId, "REJOINING", true);
 
                 for (int attempt = 0; attempt < 30; attempt++) {
                     Thread.sleep(500);
-                    String activeResult = executeCommand("systemctl", "--user", "is-active", "match-node" + nodeId);
+                    String activeResult = executeCommand("sudo", "systemctl", "is-active", "node" + nodeId);
                     if ("active".equals(activeResult.trim())) {
                         clusterStatus.setNodeStatus(nodeId, "FOLLOWER", true);
                         break;
@@ -248,7 +248,7 @@ public class ClusterAdminService {
 
         new Thread(() -> {
             try {
-                executeCommand("systemctl", "--user", "stop", "match-node" + nodeId);
+                executeCommand("sudo", "systemctl", "stop", "node" + nodeId);
                 Thread.sleep(500);
                 clusterStatus.setNodeStatus(nodeId, "OFFLINE", false);
             } catch (Exception e) {
@@ -267,14 +267,14 @@ public class ClusterAdminService {
 
         new Thread(() -> {
             try {
-                executeCommand("systemctl", "--user", "start", "match-node" + nodeId);
+                executeCommand("sudo", "systemctl", "start", "node" + nodeId);
                 Thread.sleep(2000);
 
                 clusterStatus.setNodeStatus(nodeId, "REJOINING", true);
 
                 for (int attempt = 0; attempt < 30; attempt++) {
                     Thread.sleep(500);
-                    String activeResult = executeCommand("systemctl", "--user", "is-active", "match-node" + nodeId);
+                    String activeResult = executeCommand("sudo", "systemctl", "is-active", "node" + nodeId);
                     if ("active".equals(activeResult.trim())) {
                         clusterStatus.setNodeStatus(nodeId, "FOLLOWER", true);
                         break;
@@ -291,7 +291,7 @@ public class ClusterAdminService {
     public void stopBackup() {
         new Thread(() -> {
             try {
-                executeCommand("systemctl", "--user", "stop", "match-backup");
+                executeCommand("sudo", "systemctl", "stop", "backup");
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -301,7 +301,7 @@ public class ClusterAdminService {
     public void startBackup() {
         new Thread(() -> {
             try {
-                executeCommand("systemctl", "--user", "start", "match-backup");
+                executeCommand("sudo", "systemctl", "start", "backup");
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -311,9 +311,9 @@ public class ClusterAdminService {
     public void restartBackup() {
         new Thread(() -> {
             try {
-                executeCommand("systemctl", "--user", "stop", "match-backup");
+                executeCommand("sudo", "systemctl", "stop", "backup");
                 Thread.sleep(1000);
-                executeCommand("systemctl", "--user", "start", "match-backup");
+                executeCommand("sudo", "systemctl", "start", "backup");
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -324,16 +324,16 @@ public class ClusterAdminService {
     // Now manages 3 separate gateways: market, order, admin
 
     private static final String[] GATEWAY_SERVICES = {
-        "match-market-gateway",
-        "match-order-gateway"
-        // Note: admin-gateway excluded since it would stop itself
+        "market",
+        "order"
+        // Note: admin excluded since it would stop itself
     };
 
     public void stopGateway() {
         new Thread(() -> {
             try {
                 for (String service : GATEWAY_SERVICES) {
-                    executeCommand("systemctl", "--user", "stop", service);
+                    executeCommand("sudo", "systemctl", "stop", service);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -345,7 +345,7 @@ public class ClusterAdminService {
         new Thread(() -> {
             try {
                 for (String service : GATEWAY_SERVICES) {
-                    executeCommand("systemctl", "--user", "start", service);
+                    executeCommand("sudo", "systemctl", "start", service);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -357,7 +357,7 @@ public class ClusterAdminService {
         new Thread(() -> {
             try {
                 for (String service : GATEWAY_SERVICES) {
-                    executeCommand("systemctl", "--user", "restart", service);
+                    executeCommand("sudo", "systemctl", "restart", service);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -367,27 +367,27 @@ public class ClusterAdminService {
 
     // Individual gateway operations
     public void stopMarketGateway() {
-        executeAsync("systemctl", "--user", "stop", "match-market-gateway");
+        executeAsync("sudo", "systemctl", "stop", "market");
     }
 
     public void startMarketGateway() {
-        executeAsync("systemctl", "--user", "start", "match-market-gateway");
+        executeAsync("sudo", "systemctl", "start", "market");
     }
 
     public void restartMarketGateway() {
-        executeAsync("systemctl", "--user", "restart", "match-market-gateway");
+        executeAsync("sudo", "systemctl", "restart", "market");
     }
 
     public void stopOrderGateway() {
-        executeAsync("systemctl", "--user", "stop", "match-order-gateway");
+        executeAsync("sudo", "systemctl", "stop", "order");
     }
 
     public void startOrderGateway() {
-        executeAsync("systemctl", "--user", "start", "match-order-gateway");
+        executeAsync("sudo", "systemctl", "start", "order");
     }
 
     public void restartOrderGateway() {
-        executeAsync("systemctl", "--user", "restart", "match-order-gateway");
+        executeAsync("sudo", "systemctl", "restart", "order");
     }
 
     private void executeAsync(String... command) {
@@ -445,7 +445,7 @@ public class ClusterAdminService {
 
                     operationProgress.update(step, "Stopping " + nodeLabel + "...");
                     clusterStatus.setNodeStatus(nodeId, "STOPPING", false);
-                    executeCommand("systemctl", "--user", "stop", "match-node" + nodeId);
+                    executeCommand("sudo", "systemctl", "stop", "node" + nodeId);
                     Thread.sleep(1000);
                     step++;
 
@@ -459,7 +459,7 @@ public class ClusterAdminService {
                     operationProgress.update(step, "Starting " + nodeLabel + "...");
                     clusterStatus.setNodeStatus(nodeId, "STARTING", false);
                     Thread.sleep(300);
-                    executeCommand("systemctl", "--user", "start", "match-node" + nodeId);
+                    executeCommand("sudo", "systemctl", "start", "node" + nodeId);
                     Thread.sleep(2000);
                     step++;
 
@@ -479,7 +479,7 @@ public class ClusterAdminService {
                 for (int nodeId : followers) {
                     clusterStatus.setNodeStatus(nodeId, "ELECTION", true);
                 }
-                executeCommand("systemctl", "--user", "stop", "match-node" + leaderNode);
+                executeCommand("sudo", "systemctl", "stop", "node" + leaderNode);
                 Thread.sleep(1000);
 
                 // Step 12: Election - wait for new leader to emerge
@@ -510,7 +510,7 @@ public class ClusterAdminService {
                 // Step 14: Start old leader as follower
                 operationProgress.update(14, "Starting Node " + leaderNode + " as follower...");
                 clusterStatus.setNodeStatus(leaderNode, "STARTING", false);
-                executeCommand("systemctl", "--user", "start", "match-node" + leaderNode);
+                executeCommand("sudo", "systemctl", "start", "node" + leaderNode);
                 Thread.sleep(2000);
 
                 clusterStatus.setNodeStatus(leaderNode, "REJOINING", true);
@@ -648,16 +648,19 @@ public class ClusterAdminService {
         String unitName;
         switch (service) {
             case "backup":
-                unitName = "match-backup";
+                unitName = "backup";
                 break;
             case "market-gateway":
-                unitName = "match-market-gateway";
+            case "market":
+                unitName = "market";
                 break;
             case "order-gateway":
-                unitName = "match-order-gateway";
+            case "order":
+                unitName = "order";
                 break;
             case "admin-gateway":
-                unitName = "match-admin-gateway";
+            case "admin":
+                unitName = "admin";
                 break;
             default:
                 response.put("logs", List.of());
@@ -666,7 +669,7 @@ public class ClusterAdminService {
         }
 
         try {
-            String result = executeCommand("journalctl", "--user", "-u", unitName,
+            String result = executeCommand("sudo", "journalctl", "-u", unitName,
                 "--no-pager", "-n", String.valueOf(lines), "--output=short-iso");
             String[] logLines = result.split("\n");
             response.put("logs", Arrays.asList(logLines));
