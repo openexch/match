@@ -11,6 +11,8 @@ import org.agrona.concurrent.ManyToOneConcurrentArrayQueue;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.BusySpinIdleStrategy;
 
+import static com.match.infrastructure.InfrastructureConstants.SOCKET_BUFFER_LENGTH;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
@@ -76,17 +78,21 @@ public class LoadGenerator {
         }
 
         // Initialize Media Driver with ultra-low latency settings
+        // Use unique directory to prevent conflicts with cluster nodes
+        String loadTestAeronDir = "/dev/shm/aeron-loadtest-" + System.nanoTime();
+
         this.mediaDriver = MediaDriver.launchEmbedded(
             new MediaDriver.Context()
+                .aeronDirectoryName(loadTestAeronDir)  // Unique dir to avoid conflicts
                 .threadingMode(ThreadingMode.DEDICATED)  // Separate threads for sender/receiver/conductor
                 .conductorIdleStrategy(new BusySpinIdleStrategy())
                 .senderIdleStrategy(new BusySpinIdleStrategy())
                 .receiverIdleStrategy(new BusySpinIdleStrategy())
                 .dirDeleteOnStart(true)
                 .dirDeleteOnShutdown(true)
-                .socketSndbufLength(2 * 1024 * 1024)
-                .socketRcvbufLength(2 * 1024 * 1024)
-                .publicationLingerTimeoutNs(5_000_000_000L)
+                .socketSndbufLength(SOCKET_BUFFER_LENGTH)  // 4MB to match cluster
+                .socketRcvbufLength(SOCKET_BUFFER_LENGTH)  // 4MB to match cluster
+                .publicationLingerTimeoutNs(1_000_000_000L)  // 1s instead of 5s for faster cleanup
         );
 
         if (!useUI) {

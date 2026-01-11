@@ -2,8 +2,8 @@ package com.match.infrastructure.gateway;
 
 import com.match.infrastructure.admin.ClusterStatus;
 import com.match.infrastructure.generated.*;
-import com.match.infrastructure.http.ConnectionState;
-import io.aeron.Image;
+
+import static com.match.infrastructure.InfrastructureConstants.*;
 import io.aeron.Publication;
 import io.aeron.cluster.client.AeronCluster;
 import io.aeron.cluster.client.EgressListener;
@@ -15,9 +15,8 @@ import io.aeron.samples.cluster.ClusterConfig;
 import org.agrona.CloseHelper;
 import org.agrona.DirectBuffer;
 import org.agrona.ExpandableDirectByteBuffer;
+import org.agrona.concurrent.BackoffIdleStrategy;
 import org.agrona.concurrent.IdleStrategy;
-import org.agrona.concurrent.SleepingMillisIdleStrategy;
-import org.agrona.concurrent.SystemEpochClock;
 
 import java.util.Arrays;
 import java.util.List;
@@ -26,7 +25,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Core Aeron Cluster client connection manager.
- * Handles cluster connection, reconnection, heartbeats, and egress polling.
+ *
+ * IMPORTANT: Following official Aeron best practices:
+ * - Single-threaded model: all cluster operations (pollEgress, sendKeepAlive, offer) happen on same thread
+ * - MediaDriver is kept alive across reconnections for faster recovery
+ * - AeronCluster has internal state machine - we trust isClosed() as primary indicator
+ * - Exponential backoff prevents reconnection storms
+ *
+ * References:
+ * - https://theaeronfiles.com/aeron-cluster/messages/egress/
+ * - https://aeron.io/docs/aeron-cluster/cluster-clients/
  */
 public class AeronGateway implements EgressListener, AutoCloseable {
 
@@ -38,19 +46,13 @@ public class AeronGateway implements EgressListener, AutoCloseable {
         void onNewLeader(int leaderMemberId, long leadershipTermId);
     }
 
-    private static final long HEARTBEAT_INTERVAL_MS = 250;
-    private static final long RECONNECT_COOLDOWN_MS = 500;
-    // Stale connection timeout - 60 seconds
-    // If no egress received for this long, force reconnect to detect dead sessions
-    // The cluster sends timer-based flushes every 50ms, so no egress for 60s means session is dead
-    private static final long STALE_CONNECTION_TIMEOUT_MS = 60_000;
-
     private volatile MediaDriver mediaDriver;
     private volatile AeronCluster cluster;
-    private volatile ConnectionState connectionState = ConnectionState.NOT_CONNECTED;
-    private volatile boolean needsReconnect = false;
     private volatile long lastReconnectAttempt = 0;
-    private volatile long lastEgressTime = System.currentTimeMillis();
+    private volatile long reconnectBackoffMs = RECONNECT_COOLDOWN_MS;
+    private static final long MAX_RECONNECT_BACKOFF_MS = 4000;
+    private volatile int consecutiveReconnectFailures = 0;
+    private static final int MAX_FAILURES_BEFORE_DRIVER_RESET = 3;
 
     // Cluster connection config
     private final String ingressEndpoints;
@@ -60,28 +62,27 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     private final ExpandableDirectByteBuffer buffer = new ExpandableDirectByteBuffer(512);
     private final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
     private final CreateOrderEncoder createOrderEncoder = new CreateOrderEncoder();
-    private final GatewayHeartbeatEncoder heartbeatEncoder = new GatewayHeartbeatEncoder();
-    private final ExpandableDirectByteBuffer heartbeatBuffer = new ExpandableDirectByteBuffer(64);
-    private final long gatewayId = System.nanoTime();
 
     // External dependencies
     private volatile EgressMessageListener egressListener;
     private volatile ClusterStatus clusterStatus;
-    private final boolean sendHeartbeats;
 
-    // Dedicated heartbeat thread - prevents session timeout when egress processing is slow
-    private volatile Thread heartbeatThread;
-    private final AtomicBoolean heartbeatRunning = new AtomicBoolean(false);
+    // Shutdown flag for polling loop
+    private final AtomicBoolean pollingRunning = new AtomicBoolean(false);
+
+    // Heartbeat interval in nanoseconds for single-threaded heartbeat
+    private static final long HEARTBEAT_INTERVAL_NS = TimeUnit.MILLISECONDS.toNanos(HEARTBEAT_INTERVAL_MS);
+
+    // Stats tracking
+    private volatile long heartbeatCount = 0;
+    private volatile long egressMessageCount = 0;
+    private volatile long lastStatsLogMs = 0;
+    private static final long STATS_LOG_INTERVAL_MS = 10_000;
 
     public AeronGateway() {
-        this(true); // Default: send heartbeats
-    }
-
-    public AeronGateway(boolean sendHeartbeats) {
-        this.sendHeartbeats = sendHeartbeats;
-        // Use environment variable or default to localhost for development
-        final String clusterAddresses = System.getenv().getOrDefault("CLUSTER_ADDRESSES", "localhost,localhost,localhost");
-        final String egressHost = System.getenv().getOrDefault("EGRESS_HOST", "localhost");
+        // Use environment variable or default to 127.0.0.1 for development (avoids IPv6 issues)
+        final String clusterAddresses = System.getenv().getOrDefault("CLUSTER_ADDRESSES", "127.0.0.1,127.0.0.1,127.0.0.1");
+        final String egressHost = System.getenv().getOrDefault("EGRESS_HOST", "127.0.0.1");
         final int egressPort = Integer.parseInt(System.getenv().getOrDefault("EGRESS_PORT", "9091"));
 
         final List<String> hostnames = Arrays.asList(clusterAddresses.split(","));
@@ -102,15 +103,13 @@ public class AeronGateway implements EgressListener, AutoCloseable {
      * Initialize connection with retries on startup.
      */
     public void connect() throws Exception {
-        this.mediaDriver = MediaDriver.launchEmbedded(new MediaDriver.Context()
-            .threadingMode(ThreadingMode.SHARED)
-            .dirDeleteOnStart(true)
-            .dirDeleteOnShutdown(true));
+        createMediaDriver();
 
         int maxStartupRetries = 30;
         for (int attempt = 1; attempt <= maxStartupRetries; attempt++) {
             try {
                 connectToCluster();
+                System.out.println("Connected to cluster on attempt " + attempt);
                 break;
             } catch (Exception e) {
                 System.err.println("Startup connection attempt " + attempt + "/" + maxStartupRetries + " failed: " + e.getMessage());
@@ -123,29 +122,38 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     }
 
     /**
-     * Create or recreate the MediaDriver with clean state.
+     * Create MediaDriver with settings optimized for cluster client.
+     * Uses /dev/shm for pure memory operations (lower latency than /tmp).
+     * Uses unique directory name to avoid conflicts with stale images from previous sessions.
      */
-    private void ensureMediaDriver() {
+    private void createMediaDriver() {
         if (mediaDriver != null) {
-            CloseHelper.quietClose(mediaDriver);
+            return; // Already have a MediaDriver
         }
+
+        // Use /dev/shm for pure memory operations (tmpfs in RAM)
+        // Unique directory name based on nanoTime to avoid stale image conflicts
+        String uniqueDir = "/dev/shm/aeron-gateway-" + System.nanoTime();
+
         mediaDriver = MediaDriver.launchEmbedded(new MediaDriver.Context()
             .threadingMode(ThreadingMode.SHARED)
+            .aeronDirectoryName(uniqueDir)
             .dirDeleteOnStart(true)
             .dirDeleteOnShutdown(true));
+
         System.out.println("MediaDriver created: " + mediaDriver.aeronDirectoryName());
     }
 
-    private synchronized void connectToCluster() {
+    /**
+     * Connect to the Aeron Cluster.
+     * Per Aeron docs: AeronCluster has internal state machine that handles leader changes.
+     * We only need to reconnect when isClosed() returns true.
+     */
+    private void connectToCluster() {
         // Close existing cluster connection cleanly
         if (cluster != null) {
             CloseHelper.quietClose(cluster);
             cluster = null;
-        }
-
-        // Ensure we have a valid MediaDriver
-        if (mediaDriver == null) {
-            ensureMediaDriver();
         }
 
         final AeronCluster.Context clusterCtx = new AeronCluster.Context()
@@ -154,232 +162,180 @@ public class AeronGateway implements EgressListener, AutoCloseable {
             .ingressChannel("aeron:udp?term-length=16m|mtu=8k")
             .aeronDirectoryName(mediaDriver.aeronDirectoryName())
             .ingressEndpoints(ingressEndpoints)
-            .messageTimeoutNs(TimeUnit.SECONDS.toNanos(5)); // Increased timeout for stability
+            .messageTimeoutNs(TimeUnit.SECONDS.toNanos(5));
 
-        System.out.println("Connecting to Aeron Cluster...");
         this.cluster = AeronCluster.connect(clusterCtx);
-        System.out.println("Connected to Cluster");
-        connectionState = ConnectionState.CONNECTED;
-        needsReconnect = false;
-        lastEgressTime = System.currentTimeMillis(); // Reset stale connection timer
+        System.out.println("AeronCluster.connect() completed, sessionId=" + cluster.clusterSessionId() +
+                          ", leader=" + cluster.leaderMemberId() + ", term=" + cluster.leadershipTermId());
 
-        // Get current leader from cluster
         int currentLeader = cluster.leaderMemberId();
         if (currentLeader >= 0 && clusterStatus != null) {
             clusterStatus.updateLeader(currentLeader, cluster.leadershipTermId());
-            System.out.println("Current leader: Node " + currentLeader);
         }
 
-        // Broadcast gateway connection
         if (clusterStatus != null) {
             clusterStatus.setGatewayConnected(true);
         }
+
+        // Reset backoff and failure counter on successful connection
+        reconnectBackoffMs = RECONNECT_COOLDOWN_MS;
+        consecutiveReconnectFailures = 0;
     }
 
-    private synchronized void tryReconnectIfNeeded() {
-        if (!needsReconnect) return;
-
+    /**
+     * Attempt to reconnect with exponential backoff.
+     * Recreates MediaDriver after consecutive failures to clear stale state.
+     */
+    private void tryReconnect() {
         long now = System.currentTimeMillis();
-        if (now - lastReconnectAttempt < RECONNECT_COOLDOWN_MS) return;
+        if (now - lastReconnectAttempt < reconnectBackoffMs) {
+            return; // Still in backoff period
+        }
 
         lastReconnectAttempt = now;
-        System.out.println("Attempting to reconnect to cluster...");
 
-        try {
-            // Always recreate MediaDriver on reconnect for clean state
-            ensureMediaDriver();
-            connectToCluster();
-            System.out.println("Reconnected to cluster successfully!");
-        } catch (Throwable e) {
-            // Catch Throwable to handle both Exception and Error
-            System.err.println("Reconnection failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
-            connectionState = ConnectionState.NOT_CONNECTED;
-            if (clusterStatus != null) {
-                clusterStatus.setGatewayConnected(false);
-            }
-            // Clear MediaDriver for fresh start on next attempt
+        // Close old cluster connection
+        CloseHelper.quietClose(cluster);
+        cluster = null;
+
+        if (clusterStatus != null) {
+            clusterStatus.setGatewayConnected(false);
+        }
+
+        // After consecutive failures, recreate MediaDriver to clear stale state
+        // This handles cases where publications/subscriptions have stale images
+        if (consecutiveReconnectFailures >= MAX_FAILURES_BEFORE_DRIVER_RESET) {
+            System.out.println("Resetting MediaDriver after " + consecutiveReconnectFailures + " consecutive failures");
             CloseHelper.quietClose(mediaDriver);
             mediaDriver = null;
+            consecutiveReconnectFailures = 0;
         }
-    }
 
-    /**
-     * Start dedicated heartbeat thread.
-     * This thread runs independently of egress processing to prevent session timeouts
-     * when the main polling loop is busy processing many egress messages.
-     */
-    // Counter for heartbeat logging
-    private volatile long heartbeatCount = 0;
+        try {
+            // Ensure MediaDriver exists (create if needed)
+            if (mediaDriver == null) {
+                createMediaDriver();
+            }
 
-    private void startHeartbeatThread() {
-        if (heartbeatRunning.compareAndSet(false, true)) {
-            heartbeatThread = new Thread(() -> {
-                System.out.println("[HEARTBEAT] Dedicated heartbeat thread started");
-                while (heartbeatRunning.get()) {
-                    try {
-                        Thread.sleep(HEARTBEAT_INTERVAL_MS);
+            connectToCluster();
+            System.out.println("Reconnected to cluster successfully");
+            consecutiveReconnectFailures = 0; // Reset on success
+        } catch (Throwable e) {
+            consecutiveReconnectFailures++;
+            System.err.println("Reconnection failed (attempt " + consecutiveReconnectFailures +
+                ", next in " + reconnectBackoffMs + "ms): " +
+                e.getClass().getSimpleName() + ": " + e.getMessage());
 
-                        if (connectionState == ConnectionState.CONNECTED && cluster != null && !cluster.isClosed()) {
-                            try {
-                                cluster.sendKeepAlive();
-                                if (sendHeartbeats) {
-                                    sendGatewayHeartbeat(SystemEpochClock.INSTANCE.time());
-                                }
-                                heartbeatCount++;
-                                // Log every 40 heartbeats (~10 seconds)
-                                if (heartbeatCount % 40 == 1) {
-                                    System.out.printf("[HEARTBEAT] Sent %d heartbeats, connected=%s%n",
-                                        heartbeatCount, connectionState);
-                                }
-                            } catch (Exception e) {
-                                System.err.println("[HEARTBEAT] Error sending heartbeat: " + e.getMessage());
-                                needsReconnect = true;
-                            }
-                        } else {
-                            // Log why we're not sending
-                            if (heartbeatCount % 40 == 0) {
-                                System.out.printf("[HEARTBEAT] Not sending: state=%s, cluster=%s, closed=%s%n",
-                                    connectionState, cluster != null, cluster != null && cluster.isClosed());
-                            }
-                        }
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                }
-                System.out.println("[HEARTBEAT] Dedicated heartbeat thread stopped");
-            }, "gateway-heartbeat");
-            heartbeatThread.setDaemon(true);
-            heartbeatThread.start();
-        }
-    }
+            // Exponential backoff: 500ms -> 1s -> 2s -> 4s (max)
+            reconnectBackoffMs = Math.min(reconnectBackoffMs * 2, MAX_RECONNECT_BACKOFF_MS);
 
-    /**
-     * Stop the heartbeat thread.
-     */
-    private void stopHeartbeatThread() {
-        heartbeatRunning.set(false);
-        if (heartbeatThread != null) {
-            heartbeatThread.interrupt();
-            try {
-                heartbeatThread.join(1000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            // Also reset MediaDriver if error indicates publication/connection issues
+            String msg = e.getMessage();
+            if (msg != null && (msg.contains("ingressPublication=null") ||
+                               msg.contains("AWAIT_PUBLICATION") ||
+                               msg.contains("MediaDriver"))) {
+                System.out.println("Publication connection issue detected, will reset MediaDriver");
+                CloseHelper.quietClose(mediaDriver);
+                mediaDriver = null;
             }
         }
     }
 
     /**
-     * Main polling loop - runs forever polling egress.
-     * Heartbeats are now handled by a dedicated thread to prevent session timeouts.
+     * Main polling loop - SINGLE THREADED as per Aeron best practices.
+     *
+     * Per official docs: "The client should not be used from another thread,
+     * e.g. a separate thread calling AeronCluster#sendKeepAlive() - which is
+     * described as 'awful design'."
+     *
+     * All operations (pollEgress, sendKeepAlive, heartbeats) happen in this thread.
      */
     public void startPolling() {
-        // Start dedicated heartbeat thread
-        startHeartbeatThread();
+        if (!pollingRunning.compareAndSet(false, true)) {
+            System.err.println("Polling already running");
+            return;
+        }
 
-        final IdleStrategy idleStrategy = new SleepingMillisIdleStrategy(100);
-        while (true) {
-            // Handle reconnection
-            if (needsReconnect || cluster == null || cluster.isClosed()) {
-                needsReconnect = true;
-                connectionState = ConnectionState.NOT_CONNECTED;
-                if (clusterStatus != null) {
-                    clusterStatus.setGatewayConnected(false);
-                }
-                tryReconnectIfNeeded();
+        // BackoffIdleStrategy: minimal spinning, progressive backoff to 100us max
+        final IdleStrategy idleStrategy = new BackoffIdleStrategy(1, 1, 1_000, 100_000);
+
+        // Heartbeat tracking - done in same thread as polling
+        long lastHeartbeatNs = System.nanoTime();
+
+        System.out.println("Starting single-threaded polling loop (Aeron best practice)");
+        System.out.println("Egress channel: " + egressChannel);
+        if (cluster != null) {
+            var ingressPub = cluster.ingressPublication();
+            System.out.println("Ingress publication: connected=" + ingressPub.isConnected() +
+                              ", channel=" + ingressPub.channel() +
+                              ", sessionId=" + ingressPub.sessionId());
+            System.out.println("Egress subscription connected: " + cluster.egressSubscription().isConnected());
+            System.out.println("Egress subscription imageCount: " + cluster.egressSubscription().imageCount());
+            for (int i = 0; i < cluster.egressSubscription().imageCount(); i++) {
+                var img = cluster.egressSubscription().imageAtIndex(i);
+                System.out.println("Image[" + i + "]: sessionId=" + img.sessionId() + ", pos=" + img.position() + ", closed=" + img.isClosed());
+            }
+            System.out.println("Cluster sessionId: " + cluster.clusterSessionId());
+            System.out.println("Leader memberId: " + cluster.leaderMemberId());
+        }
+
+        while (pollingRunning.get()) {
+            final AeronCluster currentCluster = cluster;
+
+            // Check if reconnection needed
+            // Per Aeron docs: AeronCluster will close itself if connection lost for > newLeaderTimeoutNs
+            if (currentCluster == null || currentCluster.isClosed()) {
+                tryReconnect();
                 idleStrategy.idle(0);
                 continue;
             }
 
             try {
-                int work = cluster.pollEgress();
-                final long now = SystemEpochClock.INSTANCE.time();
+                // Poll egress - this handles leader changes internally
+                int work = currentCluster.pollEgress();
 
-                // Check egress image health - detect silent connection loss
-                if (cluster.egressSubscription() != null && cluster.egressSubscription().imageCount() > 0) {
-                    Image egressImage = cluster.egressSubscription().imageAtIndex(0);
-                    if (egressImage != null && egressImage.isClosed()) {
-                        System.out.println("Egress image closed, triggering reconnect");
-                        needsReconnect = true;
-                        connectionState = ConnectionState.NOT_CONNECTED;
-                        continue;
+                // Debug: log first few poll results with work > 0
+                if (work > 0 && heartbeatCount < 10) {
+                    System.out.println("POLL work=" + work + ", egressSub=" + currentCluster.egressSubscription().isConnected());
+                }
+
+                // Send keepalive in SAME thread (single-threaded model)
+                // Using Aeron's built-in sendKeepAlive() - has 3-attempt retry
+                // No custom heartbeat needed - cluster broadcasts to ALL sessions
+                long nowNs = System.nanoTime();
+                if (nowNs - lastHeartbeatNs >= HEARTBEAT_INTERVAL_NS) {
+                    if (!currentCluster.isClosed()) {
+                        currentCluster.sendKeepAlive();
                     }
+                    lastHeartbeatNs = nowNs;
+                    heartbeatCount++;
+                    work++;
                 }
 
-                // Check for stale connection - no egress for too long
-                long egressAge = now - lastEgressTime;
-                if (egressAge > STALE_CONNECTION_TIMEOUT_MS) {
-                    System.out.println("[STALE] No egress for " + egressAge + "ms, forcing reconnect");
-                    needsReconnect = true;
-                    connectionState = ConnectionState.NOT_CONNECTED;
-                    continue;
-                } else if (egressAge > 30_000 && egressAge % 10_000 < 100) {
-                    // Warn when approaching stale threshold
-                    System.out.printf("[STALE-WARN] No egress for %dms (threshold: %dms)%n",
-                        egressAge, STALE_CONNECTION_TIMEOUT_MS);
+                // Periodic stats logging
+                long nowMs = System.currentTimeMillis();
+                if (nowMs - lastStatsLogMs > STATS_LOG_INTERVAL_MS) {
+                    var sub = currentCluster.egressSubscription();
+                    System.out.println("GATEWAY STATS: egress=" + egressMessageCount +
+                                      ", heartbeats=" + heartbeatCount +
+                                      ", connected=" + isConnected() +
+                                      ", subConnected=" + sub.isConnected() +
+                                      ", images=" + sub.imageCount() +
+                                      ", sessionId=" + currentCluster.clusterSessionId());
+                    lastStatsLogMs = nowMs;
                 }
 
-                // Note: Heartbeats are now sent by dedicated heartbeat thread
                 idleStrategy.idle(work);
-            } catch (Throwable e) {
-                // Catch Throwable to handle both Exception and Error
-                System.err.println("Polling error, will reconnect: " + e.getClass().getSimpleName() + ": " + e.getMessage());
-                needsReconnect = true;
-                connectionState = ConnectionState.NOT_CONNECTED;
-                if (clusterStatus != null) {
-                    clusterStatus.setGatewayConnected(false);
+            } catch (Throwable t) {
+                System.err.println("POLL ERROR: " + t.getClass().getSimpleName() + ": " + t.getMessage());
+                if (t instanceof Error) {
+                    t.printStackTrace();
                 }
+                // On error, the cluster may be in bad state - let next iteration handle reconnect
             }
         }
-    }
 
-    // Lock for heartbeat sending - prevents concurrent access from heartbeat thread and polling thread
-    private final Object heartbeatLock = new Object();
-
-    // Counter for tracking consecutive offer failures
-    private volatile int consecutiveOfferFailures = 0;
-    private static final int MAX_OFFER_FAILURES = 100;
-
-    private void sendGatewayHeartbeat(long timestamp) {
-        synchronized (heartbeatLock) {
-            if (cluster == null || cluster.isClosed()) {
-                return;
-            }
-            heartbeatEncoder.wrapAndApplyHeader(heartbeatBuffer, 0, headerEncoder);
-            heartbeatEncoder.gatewayId(gatewayId);
-            heartbeatEncoder.timestamp(timestamp);
-
-            final int length = MessageHeaderEncoder.ENCODED_LENGTH + heartbeatEncoder.encodedLength();
-            long result = cluster.offer(heartbeatBuffer, 0, length);
-
-            if (result < 0) {
-                consecutiveOfferFailures++;
-                // Log all failures periodically
-                if (consecutiveOfferFailures % 10 == 1) {
-                    System.err.printf("[HEARTBEAT-OFFER] Failed: result=%d (%s), consecutive=%d%n",
-                        result, getOfferResultName(result), consecutiveOfferFailures);
-                }
-                if (result == Publication.CLOSED || result == Publication.NOT_CONNECTED) {
-                    System.err.println("[HEARTBEAT-OFFER] Connection lost, triggering reconnect");
-                    needsReconnect = true;
-                } else if (consecutiveOfferFailures >= MAX_OFFER_FAILURES) {
-                    // Too many consecutive failures - force reconnect
-                    System.err.println("[HEARTBEAT-OFFER] Too many consecutive failures, forcing reconnect");
-                    needsReconnect = true;
-                    consecutiveOfferFailures = 0;
-                }
-            } else {
-                // Success - reset counter
-                if (consecutiveOfferFailures > 0) {
-                    System.out.printf("[HEARTBEAT-OFFER] Recovered after %d failures%n", consecutiveOfferFailures);
-                }
-                consecutiveOfferFailures = 0;
-                // Log success periodically (every 100 successful offers)
-                if (heartbeatCount % 100 == 0) {
-                    System.out.printf("[HEARTBEAT-OFFER] Success: position=%d, count=%d%n", result, heartbeatCount);
-                }
-            }
-        }
+        System.out.println("Polling loop exited gracefully");
     }
 
     private String getOfferResultName(long result) {
@@ -391,52 +347,50 @@ public class AeronGateway implements EgressListener, AutoCloseable {
         return "UNKNOWN(" + result + ")";
     }
 
-    // ==================== Offer Methods for Sending Messages ====================
+    // ==================== Public API ====================
 
+    /**
+     * Check if connected to cluster.
+     * Uses AeronCluster's internal state as the source of truth.
+     */
     public boolean isConnected() {
-        return connectionState == ConnectionState.CONNECTED && !needsReconnect && cluster != null && !cluster.isClosed();
+        AeronCluster c = cluster;
+        return c != null && !c.isClosed();
     }
 
     /**
      * Offer raw buffer to cluster.
+     * Should be called from the same thread as polling for best results,
+     * but supports cross-thread calls with proper error handling.
      */
     public void offer(DirectBuffer buffer, int offset, int length) {
-        if (!isConnected()) {
-            needsReconnect = true;
-            throw new IllegalStateException("Cluster is not connected. Reconnecting...");
+        AeronCluster c = cluster;
+        if (c == null || c.isClosed()) {
+            throw new IllegalStateException("Cluster is not connected");
         }
 
         long result;
         int retryCount = 0;
         final int maxRetries = 3;
-        final long retryDelayMs = 10;
 
-        while ((result = cluster.offer(buffer, offset, length)) < 0) {
+        while ((result = c.offer(buffer, offset, length)) < 0) {
             if (result == Publication.CLOSED || result == Publication.NOT_CONNECTED) {
-                needsReconnect = true;
-                throw new IllegalStateException("Cluster connection lost. Reconnecting...");
+                throw new IllegalStateException("Cluster connection lost: " + getOfferResultName(result));
             }
 
             if (result == Publication.BACK_PRESSURED || result == Publication.ADMIN_ACTION) {
                 if (++retryCount > maxRetries) {
                     throw new RuntimeException("Message rejected due to backpressure after " + maxRetries + " retries");
                 }
-                try {
-                    Thread.sleep(retryDelayMs);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new RuntimeException("Interrupted while handling backpressure", e);
-                }
+                // Poll egress while waiting to help process any pending responses
+                c.pollEgress();
+                Thread.yield();
             } else {
-                throw new RuntimeException("Failed to send message to cluster: " + result);
+                throw new RuntimeException("Failed to send message to cluster: " + getOfferResultName(result));
             }
         }
-        }
+    }
 
-    /**
-     * Get buffer and encoder for creating orders.
-     * Caller is responsible for encoding and then calling offer().
-     */
     public ExpandableDirectByteBuffer getBuffer() {
         return buffer;
     }
@@ -449,35 +403,31 @@ public class AeronGateway implements EgressListener, AutoCloseable {
         return createOrderEncoder;
     }
 
-    // ==================== Egress Listener Implementation ====================
-
-    // DEBUG: Message counter for egress
-    private long egressMsgCount = 0;
+    // ==================== EgressListener Implementation ====================
 
     @Override
     public void onMessage(long clusterSessionId, long timestamp, DirectBuffer buffer, int offset, int length, Header header) {
-        egressMsgCount++;
-        lastEgressTime = System.currentTimeMillis(); // Track last egress for stale detection
+        egressMessageCount++;
+
         final String response = buffer.getStringWithoutLengthUtf8(offset, length);
 
-        // DEBUG: Log every 10th message or any message with trades/book
-        if (egressMsgCount % 10 == 1 || response.contains("TRADES") || response.contains("BOOK")) {
-            System.out.printf("[EGRESS-MSG] count=%d, len=%d, startsWithType=%s, hasListener=%s, preview=%.50s%n",
-                egressMsgCount, length, response.startsWith("{\"type\":"), egressListener != null,
-                response.length() > 50 ? response.substring(0, 50) : response);
+        // Debug: log first few egress messages
+        if (egressMessageCount <= 5) {
+            System.out.println("EGRESS[" + egressMessageCount + "]: " + response.substring(0, Math.min(100, response.length())));
         }
 
-        // Check if this is market data (JSON with type field) and forward to listener
+        // Forward market data (JSON with type field) to listener
         if (response.startsWith("{\"type\":") && egressListener != null) {
             egressListener.onMessage(response);
         }
     }
 
     /**
-     * CRITICAL: Handle session events from the cluster.
-     * This is how we detect session errors and closures that require reconnection.
-     * Per Aeron documentation: "if it loses the connection for whatever reason, it will not reconnect -
-     * this needs to be done in application code."
+     * Handle session events from the cluster.
+     * Per Aeron docs: EventCode indicates connection state.
+     * - OK: successful connection
+     * - ERROR/CLOSED: session terminated, need to reconnect
+     * - REDIRECT: connected to follower, AeronCluster handles this internally
      */
     @Override
     public void onSessionEvent(
@@ -488,40 +438,32 @@ public class AeronGateway implements EgressListener, AutoCloseable {
             EventCode code,
             String detail) {
 
-        System.out.printf("Session event: code=%s, detail=%s, correlationId=%d, sessionId=%d, term=%d, leader=%d%n",
-            code, detail, correlationId, clusterSessionId, leadershipTermId, leaderMemberId);
-
-        // OK means successful connection or operation
         if (code == EventCode.OK) {
-            lastEgressTime = System.currentTimeMillis();
+            System.out.println("Session connected: leader=" + leaderMemberId + ", term=" + leadershipTermId);
             return;
         }
 
-        // Any non-OK event means we need to reconnect
-        // CLOSED: Session was closed by cluster
-        // ERROR: An error occurred
-        // REDIRECT: Being redirected to leader (handled automatically, but log it)
-        System.out.println("Session event requires reconnection: " + code);
-        needsReconnect = true;
-        connectionState = ConnectionState.NOT_CONNECTED;
-        if (clusterStatus != null) {
+        System.err.println("SESSION EVENT: " + code + " - " + detail);
+
+        // Update cluster status for UI
+        if (clusterStatus != null && (code == EventCode.ERROR || code == EventCode.CLOSED)) {
             clusterStatus.setGatewayConnected(false);
         }
     }
 
+    /**
+     * Handle leader change events.
+     * Per Aeron docs: AeronCluster handles reconnection to new leader automatically.
+     * We just need to update our local state.
+     */
     @Override
     public void onNewLeader(long clusterSessionId, long leadershipTermId, int leaderMemberId, String ingressEndpoints) {
-        System.out.printf("New cluster leader: memberId=%d, termId=%d, endpoints=%s%n",
-            leaderMemberId, leadershipTermId, ingressEndpoints);
+        System.out.println("New leader elected: member=" + leaderMemberId + ", term=" + leadershipTermId);
 
-        lastEgressTime = System.currentTimeMillis(); // Leader change is egress activity
-
-        // Update cluster status
         if (clusterStatus != null) {
             clusterStatus.updateLeader(leaderMemberId, leadershipTermId);
         }
 
-        // Notify listener
         if (egressListener != null) {
             egressListener.onNewLeader(leaderMemberId, leadershipTermId);
         }
@@ -529,7 +471,9 @@ public class AeronGateway implements EgressListener, AutoCloseable {
 
     @Override
     public void close() {
-        stopHeartbeatThread();
+        // Signal polling loop to exit
+        pollingRunning.set(false);
+
         CloseHelper.quietClose(cluster);
         CloseHelper.quietClose(mediaDriver);
         cluster = null;

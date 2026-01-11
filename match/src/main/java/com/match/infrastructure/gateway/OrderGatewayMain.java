@@ -7,23 +7,22 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 
+import static com.match.infrastructure.InfrastructureConstants.*;
+
 /**
  * Order Gateway - accepts HTTP order submissions and forwards to cluster.
  * Runs as a separate process on port 8080.
  */
 public class OrderGatewayMain implements AutoCloseable {
 
-    private static final int HTTP_PORT = 8080;
-
     private final AeronGateway aeronGateway;
     private final HttpServer httpServer;
 
     public OrderGatewayMain() throws IOException {
-        // Order gateway doesn't need to send heartbeats - only market gateway does
-        this.aeronGateway = new AeronGateway(false);
+        this.aeronGateway = new AeronGateway();
 
         // Create HTTP server
-        this.httpServer = HttpServer.create(new InetSocketAddress(HTTP_PORT), 0);
+        this.httpServer = HttpServer.create(new InetSocketAddress(ORDER_GATEWAY_PORT), 0);
 
         // Register order endpoint
         HttpOrderApi orderApi = new HttpOrderApi(aeronGateway);
@@ -63,10 +62,7 @@ public class OrderGatewayMain implements AutoCloseable {
         // Connect to cluster
         aeronGateway.connect();
 
-        // Start HTTP server
         httpServer.start();
-
-        System.out.println("Order Gateway started on http://localhost:" + HTTP_PORT);
     }
 
     public void startPolling() {
@@ -84,14 +80,21 @@ public class OrderGatewayMain implements AutoCloseable {
     }
 
     public static void main(String[] args) {
+        // Set global uncaught exception handler to prevent silent JVM death
+        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+            System.err.println("FATAL: Uncaught exception in thread " + thread.getName());
+            throwable.printStackTrace();
+            System.err.flush();
+        });
+
         try {
             OrderGatewayMain gateway = new OrderGatewayMain();
             Runtime.getRuntime().addShutdownHook(new Thread(gateway::close));
             gateway.start();
             gateway.startPolling();
-        } catch (Exception e) {
-            System.err.println("Failed to start order gateway: " + e.getMessage());
-            e.printStackTrace();
+        } catch (Throwable t) {
+            System.err.println("Failed to start order gateway: " + t.getMessage());
+            t.printStackTrace();
             System.exit(1);
         }
     }

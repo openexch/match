@@ -24,10 +24,12 @@ import com.match.infrastructure.Logger;
 import com.match.infrastructure.generated.MessageHeaderDecoder;
 import com.match.infrastructure.generated.GatewayHeartbeatDecoder;
 
+import static com.match.infrastructure.InfrastructureConstants.*;
+
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class AppClusteredService implements ClusteredService {
@@ -40,8 +42,6 @@ public class AppClusteredService implements ClusteredService {
     private final SbeDemuxer sbeDemuxer = new SbeDemuxer(engine);
 
     // Gateway heartbeat tracking - only broadcast to active gateway
-    // Increased from 5s to 30s to handle processing delays during load tests
-    private static final long GATEWAY_TIMEOUT_MS = 30_000; // 30 seconds without heartbeat = dead
     private volatile long gatewaySessionId = -1;  // -1 = no gateway connected
     private volatile long gatewayLastHeartbeatMs = 0;
     private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
@@ -63,93 +63,55 @@ public class AppClusteredService implements ClusteredService {
     private final Queue<String> marketDataQueue = new ArrayBlockingQueue<>(MARKET_DATA_QUEUE_CAPACITY);
     private final AtomicLong droppedMessages = new AtomicLong(0);
 
-    // Timer ID for market data flush
-    private static final long MARKET_DATA_TIMER_ID = 1000;
-    private static final long MARKET_DATA_FLUSH_INTERVAL_MS = 50; // 50ms flush interval
-    private final AtomicBoolean marketDataTimerScheduled = new AtomicBoolean(false);
-    private volatile long lastTimerEventTime = 0; // Track when timer last fired
-    private static final long TIMER_STALE_THRESHOLD_MS = 2000; // Reschedule if no timer event for 2 seconds
-
     /**
      * MarketDataBroadcaster implementation that queues messages for later sending.
-     * Messages are queued from the Disruptor thread and sent via cluster timer.
+     * Messages are queued from the Disruptor thread and flushed on gateway heartbeats.
      * This is required because Aeron Cluster only allows sending from the main service thread.
      */
     private final MarketDataBroadcaster aeronBroadcaster = new MarketDataBroadcaster() {
         @Override
         public void broadcast(String jsonMessage) {
-            // DEBUG: Log every broadcast
-            System.out.printf("[BROADCAST] Queuing message: len=%d, preview=%.50s%n",
-                jsonMessage.length(), jsonMessage.length() > 50 ? jsonMessage.substring(0, 50) : jsonMessage);
-
-            // Queue the message - will be sent during timer callback
-            // ArrayBlockingQueue.offer() returns false if queue is full (non-blocking)
             if (!marketDataQueue.offer(jsonMessage)) {
                 long dropped = droppedMessages.incrementAndGet();
-                if (dropped % 1000 == 1) { // Log every 1000 dropped messages
-                    System.out.println("[WARN] Market data queue full, dropped " + dropped + " messages total");
+                if (dropped % 10000 == 1) {
+                    System.err.println("QUEUE FULL: Dropped " + dropped + " messages");
                 }
             }
         }
 
         @Override
         public void flush() {
-            // Only send to gateway - not to all sessions
-            ClientSession gateway = getGatewaySession();
-            if (gateway == null) {
-                // No active gateway - discard messages
-                int discarded = marketDataQueue.size();
-                if (discarded > 0) {
-                    marketDataQueue.clear();
-                    System.out.printf("[FLUSH] No active gateway, discarded %d messages%n", discarded);
-                }
+            // Broadcast to ALL sessions - each client filters what it needs
+            // This is simpler than tracking a specific "gateway" session
+            List<ClientSession> sessions = clientSessions.getAllSessions();
+            if (sessions.isEmpty()) {
+                marketDataQueue.clear();
                 return;
             }
 
             String message;
-            int messageCount = 0;
-            int successCount = 0;
-            int failCount = 0;
-            int initialQueueSize = marketDataQueue.size();
-            if (initialQueueSize > 0) {
-                System.out.printf("[FLUSH-SEND] Starting flush: queueSize=%d, gateway=%s%n",
-                    initialQueueSize, gateway.id());
-            }
             while ((message = marketDataQueue.poll()) != null) {
-                messageCount++;
                 byte[] bytes = message.getBytes(StandardCharsets.UTF_8);
                 broadcastBuffer.putBytes(0, bytes);
 
-                // Send only to gateway session
-                int retries = 0;
-                long result = 0;
-                while (retries < 3) {
-                    result = gateway.offer(broadcastBuffer, 0, bytes.length);
-                    if (result > 0) {
-                        successCount++;
-                        break; // Success
-                    } else if (result == Publication.BACK_PRESSURED || result == Publication.ADMIN_ACTION) {
-                        retries++;
-                        if (cluster != null) {
-                            cluster.idleStrategy().idle();
+                // Send to all connected sessions
+                for (ClientSession session : sessions) {
+                    int retries = 0;
+                    while (retries < 3) {
+                        long result = session.offer(broadcastBuffer, 0, bytes.length);
+                        if (result > 0) {
+                            break;
+                        } else if (result == Publication.BACK_PRESSURED || result == Publication.ADMIN_ACTION) {
+                            retries++;
+                            if (cluster != null) {
+                                cluster.idleStrategy().idle();
+                            }
+                        } else {
+                            // Session closed or not connected - skip it
+                            break;
                         }
-                    } else {
-                        // NOT_CONNECTED or CLOSED - gateway died
-                        failCount++;
-                        System.out.printf("[FLUSH] Gateway disconnected: result=%d, sessionId=%d%n", result, gateway.id());
-                        // Mark gateway as dead
-                        gatewaySessionId = -1;
-                        marketDataQueue.clear();
-                        return;
                     }
                 }
-                if (retries >= 3) {
-                    failCount++;
-                    System.out.printf("[FLUSH] Gateway backpressure exceeded: result=%d%n", result);
-                }
-            }
-            if (messageCount > 0) {
-                System.out.printf("[FLUSH] Sent %d messages to gateway: success=%d, fail=%d%n", messageCount, successCount, failCount);
             }
         }
 
@@ -159,7 +121,8 @@ public class AppClusteredService implements ClusteredService {
             if (cluster == null || cluster.role() != io.aeron.cluster.service.Cluster.Role.LEADER) {
                 return false;
             }
-            return isGatewayAlive();
+            // Check if any sessions are connected
+            return !clientSessions.getAllSessions().isEmpty();
         }
     };
 
@@ -176,32 +139,6 @@ public class AppClusteredService implements ClusteredService {
 
         // Initialize event publishing for BTC-USD market
         initializeEventPublishing();
-
-        // Note: Timer is scheduled on first session message, not here
-        // (Aeron Cluster doesn't allow scheduling timers from onStart)
-    }
-
-    /**
-     * Schedule the market data flush timer.
-     * This timer fires every 50ms to send queued market data messages.
-     */
-    // Counter to limit timer logging
-    private long timerLogCounter = 0;
-
-    private void scheduleMarketDataFlush() {
-        timerLogCounter++;
-        long clusterTime = cluster.time();
-        long deadlineMs = clusterTime + MARKET_DATA_FLUSH_INTERVAL_MS;
-        boolean scheduled = cluster.scheduleTimer(MARKET_DATA_TIMER_ID, deadlineMs);
-        // DEBUG: Log every 100th scheduling and any failures
-        if (!scheduled || timerLogCounter % 100 == 1) {
-            System.out.printf("[TIMER-SCHED] count=%d, clusterTime=%d, deadline=%d, scheduled=%s%n",
-                timerLogCounter, clusterTime, deadlineMs, scheduled);
-        }
-        // If scheduling failed, reset the flag so next session can retry
-        if (!scheduled) {
-            marketDataTimerScheduled.set(false);
-        }
     }
 
     /**
@@ -243,7 +180,6 @@ public class AppClusteredService implements ClusteredService {
     }
 
     private void loadSnapshot(final Image snapshotImage) {
-        System.out.println("Loading snapshot...");
         final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();
 
         final FragmentHandler handler = (buf, offset, length, header) -> {
@@ -291,60 +227,25 @@ public class AppClusteredService implements ClusteredService {
                     pos += 8;
                 }
 
-                // Restore the engine state
                 matchingEngine.restoreFromSnapshot(bidOrders, askOrders);
-                System.out.printf("Restored market %d: %d bid orders, %d ask orders%n",
-                    marketId, numBidOrders, numAskOrders);
             }
         };
 
         while (snapshotImage.poll(handler, 1) > 0) {
-            // Continue polling until no more fragments
         }
-
-        System.out.println("Snapshot loaded. OrderId: " + engine.getOrderIdGenerator() +
-                          ", TradeId: " + eventPublisher.getTradeIdGenerator());
     }
 
     @Override
     public void onSessionOpen(final ClientSession session, final long timestamp) {
         context.setClusterTime(timestamp);
         clientSessions.addSession(session);
-        System.out.println("[SESSION] Opened session " + session.id() + ", total sessions: " + clientSessions.getAllSessions().size());
-
-        // Only schedule timer if we're the leader
-        if (cluster == null || cluster.role() != Cluster.Role.LEADER) {
-            return;
-        }
-
-        // Check for stale timer - if no timer event for too long, force reschedule
-        long nowMs = System.currentTimeMillis();
-        long timeSinceLastTimer = nowMs - lastTimerEventTime;
-        boolean timerStale = lastTimerEventTime > 0 && timeSinceLastTimer > TIMER_STALE_THRESHOLD_MS;
-
-        if (timerStale) {
-            System.out.printf("[TIMER] Timer stale in onSessionOpen! Last event %dms ago%n", timeSinceLastTimer);
-            marketDataTimerScheduled.set(false);
-        }
-
-        // Schedule market data timer on first session (not from onStart - that's not allowed)
-        // Use compareAndSet for atomic check-then-set to prevent duplicate scheduling
-        if (marketDataTimerScheduled.compareAndSet(false, true)) {
-            System.out.println("[TIMER] Scheduling market data flush timer");
-            lastTimerEventTime = nowMs;
-            scheduleMarketDataFlush();
-        }
     }
 
     @Override
     public void onSessionClose(final ClientSession session, final long timestamp, final CloseReason closeReason) {
         context.setClusterTime(timestamp);
         clientSessions.removeSession(session);
-        System.out.println("[SESSION] Closed session " + session.id() + ", reason=" + closeReason + ", remaining sessions: " + clientSessions.getAllSessions().size());
     }
-
-    // DEBUG: Message counter
-    private long msgCount = 0;
 
     @Override
     public void onSessionMessage(
@@ -354,76 +255,85 @@ public class AppClusteredService implements ClusteredService {
         final int offset,
         final int length,
         final Header header) {
-        msgCount++;
 
         context.setSessionContext(session, timestamp);
 
-        // Check message type - handle heartbeat directly, dispatch others to SbeDemuxer
         if (length >= MessageHeaderDecoder.ENCODED_LENGTH) {
             headerDecoder.wrap(buffer, offset);
+            int templateId = headerDecoder.templateId();
 
-            if (headerDecoder.templateId() == GatewayHeartbeatDecoder.TEMPLATE_ID) {
+            if (templateId == GatewayHeartbeatDecoder.TEMPLATE_ID) {
                 handleGatewayHeartbeat(session, buffer, offset, timestamp);
                 return;
             }
         }
 
-        // DEBUG: Log every 100 order messages
-        if (msgCount % 100 == 1) {
-            System.out.printf("[MSG-DEBUG] sessionId=%d, length=%d, msgCount=%d%n", session.id(), length, msgCount);
-        }
-
         try {
-            // Pass cluster timestamp (in nanoseconds) for order timing
             sbeDemuxer.dispatch(buffer, offset, length, timestamp);
         } catch (Exception e) {
-            System.out.printf("order exception %s", e.getMessage());
+            System.err.println("ORDER ERROR: " + e.getMessage());
             throw new RuntimeException(e);
+        }
+
+        // Flush market data after every message (ensures flush even under heavy load)
+        if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
+            aeronBroadcaster.flush();
+        }
+    }
+
+    // Heartbeat ACK message format (simple JSON)
+    private static final String HEARTBEAT_ACK_PREFIX = "{\"type\":\"HEARTBEAT_ACK\",\"ts\":";
+    private static final String HEARTBEAT_ACK_SUFFIX = "}";
+
+    // Heartbeat counter for debugging
+    private long heartbeatReceivedCount = 0;
+    private long lastHeartbeatLogMs = 0;
+
+    /**
+     * Handle gateway heartbeat - update gateway session tracking, flush market data, and send ACK.
+     * The ACK keeps the gateway's egress liveness tracker happy even during idle periods.
+     */
+    private void handleGatewayHeartbeat(ClientSession session, DirectBuffer buffer, int offset, long timestamp) {
+        heartbeatDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
+        long prevSessionId = gatewaySessionId;
+        gatewaySessionId = session.id();
+        gatewayLastHeartbeatMs = System.currentTimeMillis();
+        heartbeatReceivedCount++;
+
+        // Log gateway session changes for debugging
+        if (prevSessionId != gatewaySessionId) {
+            System.out.println("Gateway session updated: " + prevSessionId + " -> " + gatewaySessionId);
+        }
+
+        // Periodic heartbeat stats (every 10 seconds)
+        long now = System.currentTimeMillis();
+        if (now - lastHeartbeatLogMs > 10_000) {
+            System.out.println("CLUSTER: heartbeatsReceived=" + heartbeatReceivedCount + ", session=" + gatewaySessionId);
+            lastHeartbeatLogMs = now;
+        }
+
+        if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
+            // Flush any pending market data
+            aeronBroadcaster.flush();
+
+            // Send heartbeat ACK to keep gateway egress alive during idle periods
+            sendHeartbeatAck(session);
         }
     }
 
     /**
-     * Handle gateway heartbeat - update gateway session tracking.
+     * Send heartbeat acknowledgment to gateway.
+     * This ensures egress traffic even when there's no market data to send.
      */
-    private void handleGatewayHeartbeat(ClientSession session, DirectBuffer buffer, int offset, long timestamp) {
-        heartbeatDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
+    private void sendHeartbeatAck(ClientSession session) {
+        String ack = HEARTBEAT_ACK_PREFIX + System.currentTimeMillis() + HEARTBEAT_ACK_SUFFIX;
+        byte[] bytes = ack.getBytes(StandardCharsets.UTF_8);
+        broadcastBuffer.putBytes(0, bytes);
 
-        long gatewayId = heartbeatDecoder.gatewayId();
-        long heartbeatTime = heartbeatDecoder.timestamp();
-        long nowMs = System.currentTimeMillis();
-
-        // Ensure timer is scheduled if we're the leader
-        // This handles the case where leadership changed after sessions were established
-        if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
-            // Check for stale timer - if no timer event for too long, force reschedule
-            long timeSinceLastTimer = nowMs - lastTimerEventTime;
-            boolean timerStale = lastTimerEventTime > 0 && timeSinceLastTimer > TIMER_STALE_THRESHOLD_MS;
-
-            if (timerStale) {
-                System.out.printf("[TIMER] Timer stale! Last event %dms ago, forcing reschedule%n", timeSinceLastTimer);
-                marketDataTimerScheduled.set(false); // Reset flag to allow reschedule
-            }
-
-            if (marketDataTimerScheduled.compareAndSet(false, true)) {
-                System.out.println("[TIMER] Leader scheduling timer from heartbeat handler");
-                lastTimerEventTime = nowMs; // Reset timer tracking
-                scheduleMarketDataFlush();
-            }
-        }
-
-        // Register or update gateway
-        if (gatewaySessionId != session.id()) {
-            System.out.printf("[GATEWAY] New gateway registered: sessionId=%d, gatewayId=%d%n",
-                session.id(), gatewayId);
-            gatewaySessionId = session.id();
-        }
-
-        gatewayLastHeartbeatMs = nowMs;
-
-        // Log periodically
-        if (nowMs % 10000 < 250) {
-            System.out.printf("[GATEWAY] Heartbeat: sessionId=%d, gatewayId=%d, age=%dms%n",
-                session.id(), gatewayId, nowMs - heartbeatTime);
+        // Best-effort send - don't block or retry, just attempt once
+        long result = session.offer(broadcastBuffer, 0, bytes.length);
+        if (result < 0) {
+            System.err.println("Heartbeat ACK failed: result=" + result + ", session=" + session.id());
         }
     }
 
@@ -453,24 +363,11 @@ public class AppClusteredService implements ClusteredService {
     @Override
     public void onTimerEvent(final long correlationId, final long timestamp) {
         context.setClusterTime(timestamp);
-        // Handle market data flush timer
-        if (correlationId == MARKET_DATA_TIMER_ID) {
-            // Update last timer event time for stale detection
-            lastTimerEventTime = System.currentTimeMillis();
-            // Flush queued market data messages
-            aeronBroadcaster.flush();
-            // Reschedule for next interval
-            scheduleMarketDataFlush();
-            return;
-        }
-
         timerManager.onTimerEvent(correlationId, timestamp);
     }
 
     @Override
     public void onTakeSnapshot(final ExclusivePublication snapshotPublication) {
-        System.out.println("Taking snapshot...");
-
         final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();
         int pos = 0;
 
@@ -519,50 +416,20 @@ public class AppClusteredService implements ClusteredService {
                 pos += 8;
             }
 
-            System.out.printf("Snapshot market %d: %d bid orders, %d ask orders%n",
-                marketId, numBidOrders, numAskOrders);
         }
 
-        // Offer to publication with proper idle strategy
         while (snapshotPublication.offer(buffer, 0, pos) < 0) {
             cluster.idleStrategy().idle();
         }
-
-        System.out.println("Snapshot complete. Size: " + pos + " bytes, OrderId: " + engine.getOrderIdGenerator() +
-                          ", TradeId: " + eventPublisher.getTradeIdGenerator());
     }
 
     @Override
     public void onRoleChange(final Role newRole) {
-        System.out.println("[ROLE-CHANGE] Role changed to: " + newRole + ", cluster=" + (cluster != null));
-
-        // When becoming leader, reset the timer flag so next session open will schedule it
-        // Note: Cannot schedule timers from onRoleChange - must wait for onSessionOpen or onSessionMessage
-        if (newRole == Role.LEADER) {
-            System.out.println("[ROLE-CHANGE] Becoming leader, resetting timer flag for next session");
-            marketDataTimerScheduled.set(false);
-            lastTimerEventTime = 0; // Reset timer tracking for fresh start
-        }
     }
 
     @Override
     public void onTerminate(final Cluster cluster) {
-        logger.info("Terminating cluster service gracefully");
-
-        // Shutdown event publisher (Disruptor)
         eventPublisher.shutdown();
-
-        // Don't call session.close() here - it tries to send close frames
-        // which blocks forever since the consensus module is stopping.
-        // Sessions will be forcibly closed when the cluster terminates.
-        int sessionCount = clientSessions.getAllSessions().size();
-        if (sessionCount > 0) {
-            logger.info("Abandoning %d sessions (cluster terminating)", sessionCount);
-        }
-
-        // Close engine
         engine.close();
-
-        logger.info("Cluster service terminated gracefully");
     }
 } 

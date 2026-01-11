@@ -163,7 +163,12 @@ public class DirectIndexOrderBook {
             // Append to tail
             int tailSlot = (int) levels[levelBase + 1];
             int tailOrderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + tailSlot) * ORDER_FIELDS;
-            orders[tailOrderBase + 3] = slot; // Link previous tail to new order
+
+            // FIX: Only link if old tail is different from new slot AND still valid
+            // This prevents self-referential cycle when tail slot is cancelled and reused
+            if (tailSlot != slot && orders[tailOrderBase + 2] > 0) {
+                orders[tailOrderBase + 3] = slot; // Link previous tail to new order
+            }
             levels[levelBase + 1] = slot;     // Update tail
         }
 

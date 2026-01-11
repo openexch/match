@@ -224,7 +224,10 @@ public final class ClusterConfig
                 .wheelTickResolutionNs(1_000_000)  // 1ms tick resolution
                 .ticksPerWheel(1024)  // More ticks for finer granularity
                 // Session timeout - close stale sessions to allow reconnection
-                .sessionTimeoutNs(10_000_000_000L);  // 10s session timeout
+                .sessionTimeoutNs(10_000_000_000L)  // 10s session timeout
+                // Allow more concurrent sessions (default is 10)
+                // Prevents session exhaustion during load tests + gateway reconnections
+                .maxConcurrentSessions(50);
 
         final List<ClusteredServiceContainer.Context> serviceContexts = new ArrayList<>();
 
