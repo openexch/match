@@ -11,6 +11,7 @@ import java.net.UnknownHostException;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import static com.match.infrastructure.InfrastructureConstants.SESSION_TIMEOUT_NS;
 import static java.lang.Integer.parseInt;
 
 public class AeronCluster {
@@ -38,10 +39,10 @@ public class AeronCluster {
             .leaderHeartbeatTimeoutNs(TimeUnit.SECONDS.toNanos(1))
             // Election timeout: 1s (fast election)
             .electionTimeoutNs(TimeUnit.SECONDS.toNanos(1))
-            // Termination: 500ms (fast shutdown)
-            .terminationTimeoutNs(TimeUnit.MILLISECONDS.toNanos(500))
-            // Session timeout: 30s (handles high load bursts)
-            .sessionTimeoutNs(TimeUnit.SECONDS.toNanos(30))
+            // Termination: 2s (fast graceful shutdown, systemd will force kill at 5s)
+            .terminationTimeoutNs(TimeUnit.SECONDS.toNanos(2))
+            // Session timeout: 10s (matches ClusterConfig and InfrastructureConstants)
+            .sessionTimeoutNs(SESSION_TIMEOUT_NS)
             // Startup canvass timeout: 2s (must be multiple of heartbeat timeout)
             .startupCanvassTimeoutNs(TimeUnit.SECONDS.toNanos(2))
             ;
@@ -76,10 +77,9 @@ public class AeronCluster {
                 ClusteredServiceContainer ignored1 = ClusteredServiceContainer.launch(
                         clusterConfig.clusteredServiceContext().shutdownSignalBarrier(barrier)))
         {
-            System.out.println("Started Cluster Node...");
             barrier.await();
-            System.out.println("Exiting");
         } catch (Exception e) {
+            System.err.println("FATAL: Cluster node failed: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -150,7 +150,6 @@ public class AeronCluster {
     {
         if (applyDnsDelay())
         {
-            System.out.println("Waiting 5 seconds for DNS to be registered...");
             quietSleep(5000);
         }
 
@@ -162,7 +161,7 @@ public class AeronCluster {
         {
             if (SystemEpochClock.INSTANCE.time() > endTime)
             {
-                System.out.printf("cannot resolve name %s, exiting", host);
+                System.err.println("FATAL: Cannot resolve DNS name " + host + ", exiting");
                 System.exit(-1);
             }
 
@@ -173,7 +172,6 @@ public class AeronCluster {
             }
             catch (final UnknownHostException e)
             {
-                System.out.printf("cannot yet resolve name %s, retrying in 3 seconds", host);
                 quietSleep(3000);
             }
         }
@@ -192,7 +190,7 @@ public class AeronCluster {
         }
         catch (final InterruptedException ex)
         {
-            System.out.println("Interrupted while sleeping");
+            Thread.currentThread().interrupt();
         }
     }
 

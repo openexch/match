@@ -205,23 +205,10 @@ public class MarketPublisher implements MarketEventHandler {
         }
     }
 
-    // DEBUG: Event counter
-    private long eventCount = 0;
-
     @Override
     public void onEvent(PublishEvent event, long sequence, boolean endOfBatch) throws Exception {
-        eventCount++;
-        // DEBUG: Log every 100 events
-        if (eventCount % 100 == 1) {
-            System.out.printf("[EVENT-DEBUG] seq=%d, type=%d, eventCount=%d%n", sequence, event.getEventType(), eventCount);
-        }
-
         int eventType = event.getEventType();
         if (eventType == PublishEventType.TRADE_EXECUTION) {
-            // DEBUG: Log ALL trade events
-            System.out.printf("[TRADE-RECEIVED] seq=%d, price=%d, qty=%d, takerIsBuy=%s%n",
-                sequence, event.getPrice(), event.getQuantity(), event.isTakerIsBuy());
-            // Buffer trades - order book is fetched directly from engine at 50ms intervals
             bufferTrade(event);
         } else if (eventType == PublishEventType.ORDER_STATUS_UPDATE) {
             // Buffer order status for batched sending (reduces message count)
@@ -250,9 +237,6 @@ public class MarketPublisher implements MarketEventHandler {
         }
 
         agg.add(event.getQuantity(), event.isTakerIsBuy(), event.getTimestamp());
-
-        // DEBUG: Confirm trade buffered
-        System.out.printf("[TRADE-BUFFERED] price=%d, tradesByPriceSize=%d%n", price, tradesByPrice.size());
 
         // Capture book version for correlation (read from both books)
         if (matchingEngine != null) {
@@ -341,17 +325,6 @@ public class MarketPublisher implements MarketEventHandler {
                 hasSubscribers = subs != null && !subs.isEmpty();
             }
 
-            // DEBUG: Log flush status when there are trades OR every 5 seconds
-            int tradeCount = tradesByPrice.size();
-            if (tradeCount > 0 || flushCount % 100 == 1) {
-                System.out.printf("[FLUSH-DEBUG] broadcaster=%s, hasSubscribers=%b, trades=%d, orderStatus=%d, engine=%s%n",
-                    localBroadcaster != null ? "SET" : "NULL",
-                    hasSubscribers,
-                    tradeCount,
-                    orderStatusBuffer.size(),
-                    localEngine != null ? "SET" : "NULL");
-            }
-
             if (!hasSubscribers) {
                 // No subscribers, clear buffers but don't serialize
                 clearBuffersWithoutSending();
@@ -377,11 +350,6 @@ public class MarketPublisher implements MarketEventHandler {
                 String bookJson = serializeOrderBookFromEngine(localEngine);
                 if (bookJson != null) {
                     broadcastMessage(bookJson, localBroadcaster);
-                } else if (flushCount % 100 == 1) {
-                    // Debug: log why snapshot is null
-                    localEngine.collectTopLevels(20);
-                    System.out.printf("[BOOK-DEBUG] snapshot null: bidCount=%d, askCount=%d%n",
-                        localEngine.getTopBidCount(), localEngine.getTopAskCount());
                 }
             }
         } catch (Exception e) {
@@ -515,15 +483,8 @@ public class MarketPublisher implements MarketEventHandler {
         long collectedBidVersion = engine.getCollectedBidVersion();
         long collectedAskVersion = engine.getCollectedAskVersion();
 
-        // Change detection using engine version numbers - detects ANY book change
         boolean changed = (collectedBidVersion != lastBidVersion) ||
                           (collectedAskVersion != lastAskVersion);
-
-        // Debug: log version comparison every 100th call
-        if (flushCount % 100 == 1) {
-            System.out.printf("[VERSION-DEBUG] bid: %d->%d, ask: %d->%d, changed=%b%n",
-                lastBidVersion, collectedBidVersion, lastAskVersion, collectedAskVersion, changed);
-        }
 
         if (!changed) {
             return null;

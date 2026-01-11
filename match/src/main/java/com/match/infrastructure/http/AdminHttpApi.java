@@ -32,6 +32,8 @@ public class AdminHttpApi {
         server.createContext("/api/admin/restart-node", this::handleRestartNode);
         server.createContext("/api/admin/stop-node", this::handleStopNode);
         server.createContext("/api/admin/start-node", this::handleStartNode);
+        server.createContext("/api/admin/stop-all-nodes", this::handleStopAllNodes);
+        server.createContext("/api/admin/start-all-nodes", this::handleStartAllNodes);
         server.createContext("/api/admin/stop-backup", this::handleStopBackup);
         server.createContext("/api/admin/start-backup", this::handleStartBackup);
         server.createContext("/api/admin/restart-backup", this::handleRestartBackup);
@@ -50,6 +52,7 @@ public class AdminHttpApi {
         server.createContext("/api/admin/compact", this::handleCompact);
         server.createContext("/api/admin/progress", this::handleProgress);
         server.createContext("/api/admin/logs", this::handleLogs);
+        server.createContext("/api/admin/cleanup", this::handleCleanup);
     }
 
     // ==================== Status ====================
@@ -106,6 +109,24 @@ public class AdminHttpApi {
         } catch (IllegalArgumentException e) {
             sendJsonResponse(exchange, 400, Map.of("error", e.getMessage()));
         }
+    }
+
+    private void handleStopAllNodes(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if (handleCorsPreFlight(exchange)) return;
+        if (!requirePost(exchange)) return;
+
+        adminService.stopAllNodes();
+        sendJsonResponse(exchange, 202, Map.of("message", "All nodes stop initiated"));
+    }
+
+    private void handleStartAllNodes(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if (handleCorsPreFlight(exchange)) return;
+        if (!requirePost(exchange)) return;
+
+        adminService.startAllNodes();
+        sendJsonResponse(exchange, 202, Map.of("message", "All nodes start initiated"));
     }
 
     // ==================== Backup Operations ====================
@@ -270,6 +291,18 @@ public class AdminHttpApi {
         } catch (IllegalStateException e) {
             sendJsonResponse(exchange, 409, Map.of("error", e.getMessage()));
         }
+    }
+
+    // ==================== Cleanup Operations ====================
+
+    private void handleCleanup(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if (handleCorsPreFlight(exchange)) return;
+        if (!requirePost(exchange)) return;
+
+        Map<String, Object> result = adminService.cleanup();
+        boolean success = (boolean) result.getOrDefault("success", false);
+        sendJsonResponse(exchange, success ? 200 : 400, result);
     }
 
     // ==================== Progress & Logs ====================

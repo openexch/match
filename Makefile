@@ -22,6 +22,66 @@
 PROJECT_DIR := $(shell pwd)
 # Current user for running services
 SERVICE_USER := $(shell whoami)
+# Comma variable (for use in $(call) where commas are arg separators)
+COMMA := ,
+# Cluster addresses for local deployment (use 127.0.0.1 to avoid IPv6 issues)
+CLUSTER_ADDRS := 127.0.0.1$(COMMA)127.0.0.1$(COMMA)127.0.0.1
+
+# ==================== USER SERVICE CONFIGURATION ====================
+# Log directory (user-accessible)
+LOG_DIR := $(HOME)/.local/log/cluster
+# User systemd directory
+USER_SERVICE_DIR := $(HOME)/.config/systemd/user
+
+# Common log rotation command (for use in ExecStartPre)
+LOG_ROTATE = /bin/bash -c '"'"'test -f $(LOG_DIR)/$(1).log && mv $(LOG_DIR)/$(1).log $(LOG_DIR)/$(1).log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'
+
+# Java service template: $(1)=name, $(2)=desc, $(3)=env_lines, $(4)=pre_cmds, $(5)=exec, $(6)=restart_sec, $(7)=extra_limits
+define JAVA_SERVICE
+@printf '%s\n' \
+	'[Unit]' \
+	'Description=$(2)' \
+	'After=default.target' \
+	'' \
+	'[Service]' \
+	'Type=simple' \
+	'WorkingDirectory=$(PROJECT_DIR)' \
+	$(3) \
+	'ExecStartPre=$(call LOG_ROTATE,$(1))' \
+	$(4) \
+	'ExecStart=$(5)' \
+	'Restart=on-failure' \
+	'RestartSec=$(6)' \
+	'TimeoutStopSec=5' \
+	'KillMode=mixed' \
+	$(7) \
+	'StandardOutput=append:$(LOG_DIR)/$(1).log' \
+	'StandardError=append:$(LOG_DIR)/$(1).log' \
+	'' \
+	'[Install]' \
+	'WantedBy=default.target' > $(USER_SERVICE_DIR)/$(1).service
+endef
+
+# UI service template
+define UI_SERVICE
+@printf '%s\n' \
+	'[Unit]' \
+	'Description=Match Engine Trading UI' \
+	'After=default.target' \
+	'' \
+	'[Service]' \
+	'Type=simple' \
+	'WorkingDirectory=$(PROJECT_DIR)/match/ui' \
+	'ExecStartPre=$(call LOG_ROTATE,ui)' \
+	'ExecStart=/usr/bin/npx vite preview --port 3000 --host' \
+	'Restart=on-failure' \
+	'RestartSec=5' \
+	'StandardOutput=append:$(LOG_DIR)/ui.log' \
+	'StandardError=append:$(LOG_DIR)/ui.log' \
+	'' \
+	'[Install]' \
+	'WantedBy=default.target' > $(USER_SERVICE_DIR)/ui.service
+endef
 
 # ==================== INSTALLATION ====================
 
@@ -92,7 +152,7 @@ install:
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@# Stop any existing services first
-	@sudo systemctl stop ui admin order market backup node2 node1 node0 2>/dev/null || true
+	@systemctl --user stop ui admin order market backup node2 node1 node0 2>/dev/null || true
 	@echo "→ Step 1/5: Building UI..."
 	@cd match/ui && npm install --silent && npm run build --silent
 	@echo "  ✓ UI built"
@@ -112,18 +172,18 @@ install:
 	@echo "  ✓ Cluster state cleaned"
 	@echo ""
 	@echo "→ Step 5/5: Starting cluster..."
-	@sudo systemctl start node0
+	@systemctl --user start node0
 	@sleep 3
-	@sudo systemctl start node1 node2
+	@systemctl --user start node1 node2
 	@sleep 5
-	@sudo systemctl start backup market order admin ui
+	@systemctl --user start backup market order admin ui
 	@sleep 3
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
 	@echo "║  ✓ Installation Complete!                                        ║"
 	@echo "╠══════════════════════════════════════════════════════════════════╣"
 	@echo "║                                                                  ║"
-	@echo "║  Trading UI:     http://localhost                                ║"
+	@echo "║  Trading UI:     http://localhost:3000                           ║"
 	@echo "║  Admin UI:       http://localhost:8082/ui/                       ║"
 	@echo "║  Order API:      http://localhost:8080/order                     ║"
 	@echo "║  Market WS:      ws://localhost:8081/ws                          ║"
@@ -225,7 +285,7 @@ status:
 	@echo "=== Backup Node ==="
 	@if pgrep -f "ClusterBackupApp" >/dev/null 2>&1; then \
 		echo "  ✓ Backup node running"; \
-		log_pos=$$(grep -o "logPosition=[0-9]*" /var/log/cluster/backup.log 2>/dev/null | tail -1 | cut -d= -f2); \
+		log_pos=$$(grep -o "logPosition=[0-9]*" $(LOG_DIR)/backup.log 2>/dev/null | tail -1 | cut -d= -f2); \
 		if [ -n "$$log_pos" ]; then \
 			echo "  → Replicated: $$(echo "scale=2; $$log_pos/1048576" | bc) MB"; \
 		fi; \
@@ -265,7 +325,7 @@ status:
 
 # View logs
 logs:
-	@tail -f /var/log/cluster/node0.log /var/log/cluster/backup.log 2>/dev/null
+	@tail -f $(LOG_DIR)/node0.log $(LOG_DIR)/backup.log 2>/dev/null
 
 # Help
 help:
@@ -313,234 +373,71 @@ services:
 	@echo "║                    Systemd Services Status                       ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@sudo systemctl status node0 node1 node2 backup market order admin ui --no-pager 2>/dev/null | grep -E "●|Active:|Main PID:" || echo "Services not installed"
+	@systemctl --user status node0 node1 node2 backup market order admin ui --no-pager 2>/dev/null | grep -E "●|Active:|Main PID:" || echo "Services not installed"
 
 # ==================== SERVICE MANAGEMENT ====================
 
-# Setup log directory (requires sudo, run once)
+# Setup log directory (user-accessible, no sudo needed)
 setup-logs:
-	@echo "→ Creating /var/log/cluster directory..."
-	sudo mkdir -p /var/log/cluster
-	sudo chown $(USER):$(USER) /var/log/cluster
-	@echo "✓ Log directory created: /var/log/cluster"
+	@echo "→ Creating log directory..."
+	@mkdir -p $(LOG_DIR)
+	@echo "✓ Log directory created: $(LOG_DIR)"
 
-# Install system-wide systemd services (requires sudo)
+# Install user-level systemd services (no sudo required)
+# Uses templates defined above for DRY service generation
 install-services:
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
-	@echo "║           Installing System-Wide Systemd Services                ║"
+	@echo "║           Installing User-Level Systemd Services                 ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
+	@mkdir -p $(USER_SERVICE_DIR)
+	@mkdir -p $(LOG_DIR)
 	@echo "→ Installing node0.service (CPU cores 0-3)..."
-	@printf '%s\n' \
-		'[Unit]' \
-		'Description=Match Engine Cluster Node 0' \
-		'After=network.target' \
-		'' \
-		'[Service]' \
-		'Type=simple' \
-		'User=$(SERVICE_USER)' \
-		'Group=$(SERVICE_USER)' \
-		'WorkingDirectory=$(PROJECT_DIR)' \
-		'Environment="CLUSTER_ADDRESSES=localhost,localhost,localhost"' \
-		'Environment="CLUSTER_NODE=0"' \
-		'Environment="CLUSTER_PORT_BASE=9000"' \
-		'Environment="BASE_DIR=/tmp/aeron-cluster/node0"' \
-		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/node0.log && mv /var/log/cluster/node0.log /var/log/cluster/node0.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
-		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node0' \
-		'ExecStart=/usr/bin/taskset -c $(CPU_NODE0) /usr/bin/java $(JAVA_OPTS) -jar match/target/cluster-engine-1.0.jar' \
-		'Restart=on-failure' \
-		'RestartSec=10' \
-		'LimitNOFILE=1048576' \
-		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/var/log/cluster/node0.log' \
-		'StandardError=append:/var/log/cluster/node0.log' \
-		'' \
-		'[Install]' \
-		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/node0.service > /dev/null
+	$(call JAVA_SERVICE,node0,Match Engine Cluster Node 0,\
+		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=0"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/tmp/aeron-cluster/node0"',\
+		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node0',\
+		/usr/bin/taskset -c $(CPU_NODE0) /usr/bin/java $(JAVA_OPTS) -jar match/target/cluster-engine-1.0.jar,10,)
 	@echo "→ Installing node1.service (CPU cores 4-7)..."
-	@printf '%s\n' \
-		'[Unit]' \
-		'Description=Match Engine Cluster Node 1' \
-		'After=network.target' \
-		'' \
-		'[Service]' \
-		'Type=simple' \
-		'User=$(SERVICE_USER)' \
-		'Group=$(SERVICE_USER)' \
-		'WorkingDirectory=$(PROJECT_DIR)' \
-		'Environment="CLUSTER_ADDRESSES=localhost,localhost,localhost"' \
-		'Environment="CLUSTER_NODE=1"' \
-		'Environment="CLUSTER_PORT_BASE=9000"' \
-		'Environment="BASE_DIR=/tmp/aeron-cluster/node1"' \
-		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/node1.log && mv /var/log/cluster/node1.log /var/log/cluster/node1.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
-		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node1' \
-		'ExecStartPre=/bin/sleep 2' \
-		'ExecStart=/usr/bin/taskset -c $(CPU_NODE1) /usr/bin/java $(JAVA_OPTS) -jar match/target/cluster-engine-1.0.jar' \
-		'Restart=on-failure' \
-		'RestartSec=10' \
-		'LimitNOFILE=1048576' \
-		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/var/log/cluster/node1.log' \
-		'StandardError=append:/var/log/cluster/node1.log' \
-		'' \
-		'[Install]' \
-		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/node1.service > /dev/null
+	$(call JAVA_SERVICE,node1,Match Engine Cluster Node 1,\
+		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=1"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/tmp/aeron-cluster/node1"',\
+		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node1' 'ExecStartPre=/bin/sleep 2',\
+		/usr/bin/taskset -c $(CPU_NODE1) /usr/bin/java $(JAVA_OPTS) -jar match/target/cluster-engine-1.0.jar,10,)
 	@echo "→ Installing node2.service (CPU cores 8-11)..."
-	@printf '%s\n' \
-		'[Unit]' \
-		'Description=Match Engine Cluster Node 2' \
-		'After=network.target' \
-		'' \
-		'[Service]' \
-		'Type=simple' \
-		'User=$(SERVICE_USER)' \
-		'Group=$(SERVICE_USER)' \
-		'WorkingDirectory=$(PROJECT_DIR)' \
-		'Environment="CLUSTER_ADDRESSES=localhost,localhost,localhost"' \
-		'Environment="CLUSTER_NODE=2"' \
-		'Environment="CLUSTER_PORT_BASE=9000"' \
-		'Environment="BASE_DIR=/tmp/aeron-cluster/node2"' \
-		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/node2.log && mv /var/log/cluster/node2.log /var/log/cluster/node2.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
-		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node2' \
-		'ExecStartPre=/bin/sleep 2' \
-		'ExecStart=/usr/bin/taskset -c $(CPU_NODE2) /usr/bin/java $(JAVA_OPTS) -jar match/target/cluster-engine-1.0.jar' \
-		'Restart=on-failure' \
-		'RestartSec=10' \
-		'LimitNOFILE=1048576' \
-		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/var/log/cluster/node2.log' \
-		'StandardError=append:/var/log/cluster/node2.log' \
-		'' \
-		'[Install]' \
-		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/node2.service > /dev/null
+	$(call JAVA_SERVICE,node2,Match Engine Cluster Node 2,\
+		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=2"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/tmp/aeron-cluster/node2"',\
+		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node2' 'ExecStartPre=/bin/sleep 2',\
+		/usr/bin/taskset -c $(CPU_NODE2) /usr/bin/java $(JAVA_OPTS) -jar match/target/cluster-engine-1.0.jar,10,)
 	@echo "→ Installing backup.service..."
-	@printf '%s\n' \
-		'[Unit]' \
-		'Description=Match Engine Cluster Backup Node' \
-		'After=network.target' \
-		'' \
-		'[Service]' \
-		'Type=simple' \
-		'User=$(SERVICE_USER)' \
-		'Group=$(SERVICE_USER)' \
-		'WorkingDirectory=$(PROJECT_DIR)' \
-		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/backup.log && mv /var/log/cluster/backup.log /var/log/cluster/backup.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
-		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/backup' \
-		'ExecStartPre=/bin/sleep 3' \
-		'ExecStart=/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.persistence.ClusterBackupApp' \
-		'Restart=on-failure' \
-		'RestartSec=10' \
-		'LimitNOFILE=1048576' \
-		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/var/log/cluster/backup.log' \
-		'StandardError=append:/var/log/cluster/backup.log' \
-		'' \
-		'[Install]' \
-		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/backup.service > /dev/null
+	$(call JAVA_SERVICE,backup,Match Engine Cluster Backup Node,,\
+		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/backup' 'ExecStartPre=/bin/sleep 3',\
+		/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.persistence.ClusterBackupApp,10,)
 	@echo "→ Installing market.service..."
-	@printf '%s\n' \
-		'[Unit]' \
-		'Description=Match Engine Market Gateway' \
-		'After=network.target' \
-		'' \
-		'[Service]' \
-		'Type=simple' \
-		'User=$(SERVICE_USER)' \
-		'Group=$(SERVICE_USER)' \
-		'WorkingDirectory=$(PROJECT_DIR)' \
-		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' \
-		'Environment="EGRESS_PORT=9091"' \
-		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/market.log && mv /var/log/cluster/market.log /var/log/cluster/market.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
-		'ExecStartPre=/bin/sleep 5' \
-		'ExecStart=/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.MarketGatewayMain' \
-		'Restart=on-failure' \
-		'RestartSec=5' \
-		'LimitNOFILE=1048576' \
-		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/var/log/cluster/market.log' \
-		'StandardError=append:/var/log/cluster/market.log' \
-		'' \
-		'[Install]' \
-		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/market.service > /dev/null
+	$(call JAVA_SERVICE,market,Match Engine Market Gateway,\
+		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' 'Environment="EGRESS_PORT=9091"',\
+		'ExecStartPre=/bin/sleep 5',\
+		/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.MarketGatewayMain,5,)
 	@echo "→ Installing order.service..."
-	@printf '%s\n' \
-		'[Unit]' \
-		'Description=Match Engine Order Gateway' \
-		'After=network.target' \
-		'' \
-		'[Service]' \
-		'Type=simple' \
-		'User=$(SERVICE_USER)' \
-		'Group=$(SERVICE_USER)' \
-		'WorkingDirectory=$(PROJECT_DIR)' \
-		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' \
-		'Environment="EGRESS_PORT=9092"' \
-		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/order.log && mv /var/log/cluster/order.log /var/log/cluster/order.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
-		'ExecStartPre=/bin/sleep 5' \
-		'ExecStart=/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.OrderGatewayMain' \
-		'Restart=on-failure' \
-		'RestartSec=5' \
-		'LimitNOFILE=1048576' \
-		'LimitMEMLOCK=infinity' \
-		'StandardOutput=append:/var/log/cluster/order.log' \
-		'StandardError=append:/var/log/cluster/order.log' \
-		'' \
-		'[Install]' \
-		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/order.service > /dev/null
+	$(call JAVA_SERVICE,order,Match Engine Order Gateway,\
+		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' 'Environment="EGRESS_PORT=9092"',\
+		'ExecStartPre=/bin/sleep 5',\
+		/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.OrderGatewayMain,5,)
 	@echo "→ Installing admin.service..."
-	@printf '%s\n' \
-		'[Unit]' \
-		'Description=Match Engine Admin Gateway' \
-		'After=network.target' \
-		'' \
-		'[Service]' \
-		'Type=simple' \
-		'User=$(SERVICE_USER)' \
-		'Group=$(SERVICE_USER)' \
-		'WorkingDirectory=$(PROJECT_DIR)' \
-		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' \
-		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/admin.log && mv /var/log/cluster/admin.log /var/log/cluster/admin.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
-		'ExecStart=/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.AdminGatewayMain' \
-		'Restart=on-failure' \
-		'RestartSec=5' \
-		'LimitNOFILE=1048576' \
-		'StandardOutput=append:/var/log/cluster/admin.log' \
-		'StandardError=append:/var/log/cluster/admin.log' \
-		'' \
-		'[Install]' \
-		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/admin.service > /dev/null
-	@echo "→ Installing ui.service (port 80)..."
-	@printf '%s\n' \
-		'[Unit]' \
-		'Description=Match Engine Trading UI' \
-		'After=network.target' \
-		'' \
-		'[Service]' \
-		'Type=simple' \
-		'User=$(SERVICE_USER)' \
-		'Group=$(SERVICE_USER)' \
-		'WorkingDirectory=$(PROJECT_DIR)/match/ui' \
-		'ExecStartPre=/bin/bash -c '"'"'test -f /var/log/cluster/ui.log && mv /var/log/cluster/ui.log /var/log/cluster/ui.log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'' \
-		'ExecStart=/usr/bin/npx vite preview --port 80 --host' \
-		'Restart=on-failure' \
-		'RestartSec=5' \
-		'StandardOutput=append:/var/log/cluster/ui.log' \
-		'StandardError=append:/var/log/cluster/ui.log' \
-		'' \
-		'[Install]' \
-		'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/ui.service > /dev/null
+	$(call JAVA_SERVICE,admin,Match Engine Admin Gateway,\
+		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"',,\
+		/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.AdminGatewayMain,5,)
+	@echo "→ Installing ui.service (port 3000)..."
+	$(call UI_SERVICE)
 	@echo ""
-	@echo "→ Reloading systemd..."
-	@sudo systemctl daemon-reload
+	@echo "→ Reloading user systemd..."
+	@systemctl --user daemon-reload
 	@echo "→ Enabling services..."
-	@sudo systemctl enable node0 node1 node2 backup market order admin ui
+	@systemctl --user enable node0 node1 node2 backup market order admin ui
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
-	@echo "║  ✓ System services installed and enabled!                        ║"
+	@echo "║  ✓ User services installed and enabled!                          ║"
 	@echo "║                                                                  ║"
-	@echo "║  Service Management:                                             ║"
-	@echo "║    sudo systemctl start|stop|restart node0                       ║"
-	@echo "║    sudo service node0 start|stop|restart                         ║"
+	@echo "║  Service Management (no sudo needed):                            ║"
+	@echo "║    systemctl --user start|stop|restart node0                     ║"
 	@echo "║                                                                  ║"
 	@echo "║  Services: node0 node1 node2 backup market order admin ui        ║"
 	@echo "║                                                                  ║"
@@ -552,27 +449,27 @@ install-services:
 	@echo "║  Next: Run 'make install' to build and start the cluster         ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 
-# Uninstall system-wide systemd services (requires sudo)
+# Uninstall user-level systemd services (no sudo required)
 uninstall-services:
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
-	@echo "║           Uninstalling Systemd Services                          ║"
+	@echo "║           Uninstalling User Systemd Services                     ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@echo "→ Stopping services..."
-	@sudo systemctl stop ui admin order market backup node2 node1 node0 2>/dev/null || true
+	@systemctl --user stop ui admin order market backup node2 node1 node0 2>/dev/null || true
 	@echo "→ Disabling services..."
-	@sudo systemctl disable node0 node1 node2 backup market order admin ui 2>/dev/null || true
+	@systemctl --user disable node0 node1 node2 backup market order admin ui 2>/dev/null || true
 	@echo "→ Removing service files..."
-	@sudo rm -f /etc/systemd/system/node0.service
-	@sudo rm -f /etc/systemd/system/node1.service
-	@sudo rm -f /etc/systemd/system/node2.service
-	@sudo rm -f /etc/systemd/system/backup.service
-	@sudo rm -f /etc/systemd/system/market.service
-	@sudo rm -f /etc/systemd/system/order.service
-	@sudo rm -f /etc/systemd/system/admin.service
-	@sudo rm -f /etc/systemd/system/ui.service
-	@echo "→ Reloading systemd..."
-	@sudo systemctl daemon-reload
+	@rm -f $(USER_SERVICE_DIR)/node0.service
+	@rm -f $(USER_SERVICE_DIR)/node1.service
+	@rm -f $(USER_SERVICE_DIR)/node2.service
+	@rm -f $(USER_SERVICE_DIR)/backup.service
+	@rm -f $(USER_SERVICE_DIR)/market.service
+	@rm -f $(USER_SERVICE_DIR)/order.service
+	@rm -f $(USER_SERVICE_DIR)/admin.service
+	@rm -f $(USER_SERVICE_DIR)/ui.service
+	@echo "→ Reloading user systemd..."
+	@systemctl --user daemon-reload
 	@echo ""
 	@echo "✓ Services uninstalled"
 

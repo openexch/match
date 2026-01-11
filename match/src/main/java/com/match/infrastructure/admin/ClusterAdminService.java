@@ -13,6 +13,9 @@ import java.util.concurrent.TimeUnit;
  */
 public class ClusterAdminService {
 
+    // User-accessible log directory (no sudo required)
+    private static final String LOG_DIR = System.getProperty("user.home") + "/.local/log/cluster";
+
     private final ClusterStatus clusterStatus;
     private final OperationProgress operationProgress;
 
@@ -79,11 +82,11 @@ public class ClusterAdminService {
                 node.put("role", "STOPPING");
             } else {
                 try {
-                    String activeResult = executeCommand("sudo", "systemctl", "is-active", "node" + i);
+                    String activeResult = executeCommand("systemctl", "--user", "is-active", "node" + i);
                     boolean isActive = "active".equals(activeResult.trim());
 
                     if (isActive) {
-                        String pidResult = executeCommand("sudo", "systemctl", "show", "-p", "MainPID", "--value", "node" + i);
+                        String pidResult = executeCommand("systemctl", "--user", "show", "-p", "MainPID", "--value", "node" + i);
                         int pid = Integer.parseInt(pidResult.trim());
 
                         node.put("running", true);
@@ -196,7 +199,7 @@ public class ClusterAdminService {
      */
     private boolean isServiceActive(String serviceName) {
         try {
-            String result = executeCommand("sudo", "systemctl", "is-active", serviceName);
+            String result = executeCommand("systemctl", "--user", "is-active", serviceName);
             return "active".equals(result.trim());
         } catch (Exception e) {
             return false;
@@ -214,19 +217,19 @@ public class ClusterAdminService {
 
         new Thread(() -> {
             try {
-                executeCommand("sudo", "systemctl", "stop", "node" + nodeId);
+                executeCommand("systemctl", "--user", "stop", "node" + nodeId);
                 Thread.sleep(1000);
 
                 clusterStatus.setNodeStatus(nodeId, "STARTING", false);
 
-                executeCommand("sudo", "systemctl", "start", "node" + nodeId);
+                executeCommand("systemctl", "--user", "start", "node" + nodeId);
                 Thread.sleep(2000);
 
                 clusterStatus.setNodeStatus(nodeId, "REJOINING", true);
 
                 for (int attempt = 0; attempt < 30; attempt++) {
                     Thread.sleep(500);
-                    String activeResult = executeCommand("sudo", "systemctl", "is-active", "node" + nodeId);
+                    String activeResult = executeCommand("systemctl", "--user", "is-active", "node" + nodeId);
                     if ("active".equals(activeResult.trim())) {
                         clusterStatus.setNodeStatus(nodeId, "FOLLOWER", true);
                         break;
@@ -248,7 +251,7 @@ public class ClusterAdminService {
 
         new Thread(() -> {
             try {
-                executeCommand("sudo", "systemctl", "stop", "node" + nodeId);
+                executeCommand("systemctl", "--user", "stop", "node" + nodeId);
                 Thread.sleep(500);
                 clusterStatus.setNodeStatus(nodeId, "OFFLINE", false);
             } catch (Exception e) {
@@ -267,18 +270,64 @@ public class ClusterAdminService {
 
         new Thread(() -> {
             try {
-                executeCommand("sudo", "systemctl", "start", "node" + nodeId);
+                executeCommand("systemctl", "--user", "start", "node" + nodeId);
                 Thread.sleep(2000);
 
                 clusterStatus.setNodeStatus(nodeId, "REJOINING", true);
 
                 for (int attempt = 0; attempt < 30; attempt++) {
                     Thread.sleep(500);
-                    String activeResult = executeCommand("sudo", "systemctl", "is-active", "node" + nodeId);
+                    String activeResult = executeCommand("systemctl", "--user", "is-active", "node" + nodeId);
                     if ("active".equals(activeResult.trim())) {
                         clusterStatus.setNodeStatus(nodeId, "FOLLOWER", true);
                         break;
                     }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }).start();
+    }
+
+    public void stopAllNodes() {
+        new Thread(() -> {
+            try {
+                for (int i = 0; i < 3; i++) {
+                    clusterStatus.setNodeStatus(i, "STOPPING", false);
+                }
+                for (int i = 0; i < 3; i++) {
+                    executeCommand("systemctl", "--user", "stop", "node" + i);
+                }
+                Thread.sleep(1000);
+                for (int i = 0; i < 3; i++) {
+                    clusterStatus.setNodeStatus(i, "OFFLINE", false);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }).start();
+    }
+
+    public void startAllNodes() {
+        new Thread(() -> {
+            try {
+                for (int i = 0; i < 3; i++) {
+                    clusterStatus.setNodeStatus(i, "STARTING", false);
+                }
+                for (int i = 0; i < 3; i++) {
+                    executeCommand("systemctl", "--user", "start", "node" + i);
+                }
+                Thread.sleep(3000);
+                for (int i = 0; i < 3; i++) {
+                    clusterStatus.setNodeStatus(i, "REJOINING", true);
+                }
+                Thread.sleep(5000);
+                int leader = detectLeaderFromCluster();
+                if (leader >= 0) {
+                    clusterStatus.updateLeader(leader, clusterStatus.getLeadershipTermId() + 1);
+                }
+                for (int i = 0; i < 3; i++) {
+                    clusterStatus.setNodeStatus(i, i == leader ? "LEADER" : "FOLLOWER", true);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -291,7 +340,7 @@ public class ClusterAdminService {
     public void stopBackup() {
         new Thread(() -> {
             try {
-                executeCommand("sudo", "systemctl", "stop", "backup");
+                executeCommand("systemctl", "--user", "stop", "backup");
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -301,7 +350,7 @@ public class ClusterAdminService {
     public void startBackup() {
         new Thread(() -> {
             try {
-                executeCommand("sudo", "systemctl", "start", "backup");
+                executeCommand("systemctl", "--user", "start", "backup");
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -311,9 +360,9 @@ public class ClusterAdminService {
     public void restartBackup() {
         new Thread(() -> {
             try {
-                executeCommand("sudo", "systemctl", "stop", "backup");
+                executeCommand("systemctl", "--user", "stop", "backup");
                 Thread.sleep(1000);
-                executeCommand("sudo", "systemctl", "start", "backup");
+                executeCommand("systemctl", "--user", "start", "backup");
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -333,7 +382,7 @@ public class ClusterAdminService {
         new Thread(() -> {
             try {
                 for (String service : GATEWAY_SERVICES) {
-                    executeCommand("sudo", "systemctl", "stop", service);
+                    executeCommand("systemctl", "--user", "stop", service);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -345,7 +394,7 @@ public class ClusterAdminService {
         new Thread(() -> {
             try {
                 for (String service : GATEWAY_SERVICES) {
-                    executeCommand("sudo", "systemctl", "start", service);
+                    executeCommand("systemctl", "--user", "start", service);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -357,7 +406,7 @@ public class ClusterAdminService {
         new Thread(() -> {
             try {
                 for (String service : GATEWAY_SERVICES) {
-                    executeCommand("sudo", "systemctl", "restart", service);
+                    executeCommand("systemctl", "--user", "restart", service);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -367,27 +416,27 @@ public class ClusterAdminService {
 
     // Individual gateway operations
     public void stopMarketGateway() {
-        executeAsync("sudo", "systemctl", "stop", "market");
+        executeAsync("systemctl", "--user", "stop", "market");
     }
 
     public void startMarketGateway() {
-        executeAsync("sudo", "systemctl", "start", "market");
+        executeAsync("systemctl", "--user", "start", "market");
     }
 
     public void restartMarketGateway() {
-        executeAsync("sudo", "systemctl", "restart", "market");
+        executeAsync("systemctl", "--user", "restart", "market");
     }
 
     public void stopOrderGateway() {
-        executeAsync("sudo", "systemctl", "stop", "order");
+        executeAsync("systemctl", "--user", "stop", "order");
     }
 
     public void startOrderGateway() {
-        executeAsync("sudo", "systemctl", "start", "order");
+        executeAsync("systemctl", "--user", "start", "order");
     }
 
     public void restartOrderGateway() {
-        executeAsync("sudo", "systemctl", "restart", "order");
+        executeAsync("systemctl", "--user", "restart", "order");
     }
 
     private void executeAsync(String... command) {
@@ -409,7 +458,7 @@ public class ClusterAdminService {
 
         new Thread(() -> {
             try {
-                operationProgress.start("rolling-update", 14);
+                operationProgress.start("rolling-update", 10);
 
                 // Step 1: Build application
                 operationProgress.update(1, "Building application...");
@@ -428,8 +477,6 @@ public class ClusterAdminService {
                     return;
                 }
 
-                System.out.println("[ROLLING-UPDATE] Leader is node " + leaderNode);
-
                 // Get follower nodes
                 int[] followers = new int[2];
                 int idx = 0;
@@ -445,21 +492,14 @@ public class ClusterAdminService {
 
                     operationProgress.update(step, "Stopping " + nodeLabel + "...");
                     clusterStatus.setNodeStatus(nodeId, "STOPPING", false);
-                    executeCommand("sudo", "systemctl", "stop", "node" + nodeId);
+                    executeCommand("systemctl", "--user", "stop", "node" + nodeId);
                     Thread.sleep(1000);
-                    step++;
-
-                    operationProgress.update(step, nodeLabel + ": Cleaning state...");
-                    executeCommand("bash", "-c", "rm -rf /dev/shm/aeron-*node" + nodeId + "* 2>/dev/null || true");
-                    executeCommand("bash", "-c", "rm -f /tmp/aeron-cluster/node" + nodeId + "/cluster/cluster-mark.dat 2>/dev/null || true");
-                    executeCommand("bash", "-c", "rm -f /tmp/aeron-cluster/node" + nodeId + "/cluster/*.lck 2>/dev/null || true");
-                    Thread.sleep(500);
                     step++;
 
                     operationProgress.update(step, "Starting " + nodeLabel + "...");
                     clusterStatus.setNodeStatus(nodeId, "STARTING", false);
                     Thread.sleep(300);
-                    executeCommand("sudo", "systemctl", "start", "node" + nodeId);
+                    executeCommand("systemctl", "--user", "start", "node" + nodeId);
                     Thread.sleep(2000);
                     step++;
 
@@ -473,19 +513,17 @@ public class ClusterAdminService {
                     Thread.sleep(500);
                 }
 
-                // Step 11: Stop old leader
-                operationProgress.update(11, "Stopping Node " + leaderNode + " (Leader)...");
+                // Step 9: Stop old leader
+                operationProgress.update(9, "Stopping Node " + leaderNode + " (Leader)...");
                 clusterStatus.setNodeStatus(leaderNode, "STOPPING", false);
                 for (int nodeId : followers) {
                     clusterStatus.setNodeStatus(nodeId, "ELECTION", true);
                 }
-                executeCommand("sudo", "systemctl", "stop", "node" + leaderNode);
+                executeCommand("systemctl", "--user", "stop", "node" + leaderNode);
                 Thread.sleep(1000);
 
-                // Step 12: Election - wait for new leader to emerge
-                operationProgress.update(12, "Leader election in progress...");
-
                 // Wait for election - new leader will be detected by gateway heartbeats
+                operationProgress.update(9, "Leader election in progress...");
                 Thread.sleep(3000);
 
                 // Find new leader from followers (one of them should become leader)
@@ -498,26 +536,19 @@ public class ClusterAdminService {
                         clusterStatus.setNodeStatus(nodeId, "FOLLOWER", true);
                     }
                 }
-                operationProgress.update(12, "New leader elected: Node " + newLeader);
+                operationProgress.update(9, "New leader elected: Node " + newLeader);
 
-                // Step 13: Clean old leader
-                operationProgress.update(13, "Cleaning Node " + leaderNode + " state...");
-                executeCommand("bash", "-c", "rm -rf /dev/shm/aeron-*" + leaderNode + "*");
-                executeCommand("bash", "-c", "rm -f /tmp/aeron-cluster/node" + leaderNode + "/cluster/cluster-mark.dat");
-                executeCommand("bash", "-c", "rm -f /tmp/aeron-cluster/node" + leaderNode + "/cluster/*.lck");
-                Thread.sleep(500);
-
-                // Step 14: Start old leader as follower
-                operationProgress.update(14, "Starting Node " + leaderNode + " as follower...");
+                // Step 10: Start old leader as follower
+                operationProgress.update(10, "Starting Node " + leaderNode + " as follower...");
                 clusterStatus.setNodeStatus(leaderNode, "STARTING", false);
-                executeCommand("sudo", "systemctl", "start", "node" + leaderNode);
+                executeCommand("systemctl", "--user", "start", "node" + leaderNode);
                 Thread.sleep(2000);
 
                 clusterStatus.setNodeStatus(leaderNode, "REJOINING", true);
                 // Wait for old leader to rejoin as follower
                 Thread.sleep(5000);
                 clusterStatus.setNodeStatus(leaderNode, "FOLLOWER", true);
-                operationProgress.update(14, "Node " + leaderNode + " rejoined as follower");
+                operationProgress.update(10, "Node " + leaderNode + " rejoined as follower");
 
                 operationProgress.finish(true, "All nodes updated successfully");
 
@@ -620,7 +651,7 @@ public class ClusterAdminService {
     public Map<String, Object> getLogs(int nodeId, int lines) {
         Map<String, Object> response = new HashMap<>();
         try {
-            Path logPath = Path.of("/var/log/cluster/node" + nodeId + ".log");
+            Path logPath = Path.of(LOG_DIR + "/node" + nodeId + ".log");
             if (Files.exists(logPath)) {
                 List<String> allLines = Files.readAllLines(logPath);
                 int start = Math.max(0, allLines.size() - lines);
@@ -669,7 +700,7 @@ public class ClusterAdminService {
         }
 
         try {
-            String result = executeCommand("sudo", "journalctl", "-u", unitName,
+            String result = executeCommand("journalctl", "--user", "-u", unitName,
                 "--no-pager", "-n", String.valueOf(lines), "--output=short-iso");
             String[] logLines = result.split("\n");
             response.put("logs", Arrays.asList(logLines));
@@ -679,6 +710,72 @@ public class ClusterAdminService {
             response.put("logs", List.of());
             response.put("error", e.getMessage());
         }
+        return response;
+    }
+
+    // ==================== Cleanup Operations ====================
+
+    /**
+     * Clean up stale Aeron files (shared memory, mark files, lock files).
+     * Use this after a crash or when nodes fail to start due to "active Mark file detected".
+     * IMPORTANT: All cluster nodes must be stopped before calling this.
+     */
+    public Map<String, Object> cleanup() {
+        Map<String, Object> response = new HashMap<>();
+        List<String> cleaned = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+
+        // Check if any nodes are running
+        for (int i = 0; i < 3; i++) {
+            try {
+                String activeResult = executeCommand("systemctl", "--user", "is-active", "node" + i);
+                if ("active".equals(activeResult.trim())) {
+                    response.put("success", false);
+                    response.put("error", "Node " + i + " is still running. Stop all nodes before cleanup.");
+                    return response;
+                }
+            } catch (Exception ignored) {
+                // Service not active or doesn't exist - ok to proceed
+            }
+        }
+
+        // Clean shared memory aeron files
+        try {
+            executeCommand("bash", "-c", "rm -rf /dev/shm/aeron-* 2>/dev/null || true");
+            cleaned.add("/dev/shm/aeron-*");
+        } catch (Exception e) {
+            errors.add("Failed to clean /dev/shm: " + e.getMessage());
+        }
+
+        // Clean cluster mark files and lock files for each node
+        for (int i = 0; i < 3; i++) {
+            try {
+                executeCommand("bash", "-c", "rm -rf /tmp/aeron-cluster/node" + i + "/cluster/cluster-mark*.dat 2>/dev/null || true");
+                executeCommand("bash", "-c", "rm -rf /tmp/aeron-cluster/node" + i + "/cluster/*.lck 2>/dev/null || true");
+                executeCommand("bash", "-c", "rm -rf /tmp/aeron-cluster/node" + i + "/archive/archive-mark.dat 2>/dev/null || true");
+                cleaned.add("/tmp/aeron-cluster/node" + i + " (mark files, locks)");
+            } catch (Exception e) {
+                errors.add("Failed to clean node" + i + ": " + e.getMessage());
+            }
+        }
+
+        // Clean gateway aeron files
+        try {
+            executeCommand("bash", "-c", "rm -rf /tmp/aeron-* 2>/dev/null || true");
+            cleaned.add("/tmp/aeron-* (gateway files)");
+        } catch (Exception e) {
+            errors.add("Failed to clean /tmp/aeron-*: " + e.getMessage());
+        }
+
+        response.put("success", errors.isEmpty());
+        response.put("cleaned", cleaned);
+        if (!errors.isEmpty()) {
+            response.put("errors", errors);
+        }
+        response.put("message", errors.isEmpty()
+            ? "Cleanup completed successfully. You can now start the cluster."
+            : "Cleanup completed with some errors.");
+
         return response;
     }
 

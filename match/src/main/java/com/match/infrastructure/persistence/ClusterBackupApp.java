@@ -61,18 +61,8 @@ public class ClusterBackupApp {
         // Wait for DNS resolution of all cluster hosts
         hostAddresses.forEach(ClusterBackupApp::awaitDnsResolution);
 
-        System.out.println("Starting ClusterBackup...");
-        System.out.println("Cluster addresses: " + clusterAddresses);
-        System.out.println("Backup host: " + backupHost);
-        System.out.println("Port base: " + portBase);
-        System.out.println("Backup interval: " + TimeUnit.NANOSECONDS.toSeconds(backupIntervalNs) + "s");
-        System.out.println("Base directory: " + baseDir.getAbsolutePath());
-
         final String aeronDirName = CommonContext.getAeronDirectoryName() + "-backup";
-
-        // Build cluster consensus endpoints string
         final String clusterConsensusEndpoints = buildConsensusEndpoints(hostAddresses, portBase);
-        System.out.println("Consensus endpoints: " + clusterConsensusEndpoints);
 
         // Configure MediaDriver
         final MediaDriver.Context mediaDriverContext = new MediaDriver.Context()
@@ -132,25 +122,15 @@ public class ClusterBackupApp {
 
         try {
             mediaDriver = MediaDriver.launch(mediaDriverContext);
-            System.out.println("MediaDriver started");
-
             archive = Archive.launch(archiveContext);
-            System.out.println("Archive started");
-
             clusterBackup = ClusterBackup.launch(clusterBackupContext);
-            System.out.println("ClusterBackup started - waiting for cluster connection...");
-
             barrier.await();
-            System.out.println("Shutting down ClusterBackup...");
-
         } catch (final Exception e) {
-            System.err.println("Error starting ClusterBackup: " + e.getMessage());
+            System.err.println("FATAL: ClusterBackup failed: " + e.getMessage());
             e.printStackTrace();
         } finally {
             CloseHelper.quietCloseAll(clusterBackup, archive, mediaDriver);
         }
-
-        System.out.println("ClusterBackup shutdown complete");
     }
 
     /**
@@ -220,7 +200,7 @@ public class ClusterBackupApp {
         boolean resolved = false;
         while (!resolved) {
             if (SystemEpochClock.INSTANCE.time() > endTime) {
-                System.out.printf("Cannot resolve name %s, exiting%n", host);
+                System.err.println("FATAL: Cannot resolve DNS name " + host + ", exiting");
                 System.exit(-1);
             }
 
@@ -228,7 +208,6 @@ public class ClusterBackupApp {
                 InetAddress.getByName(host);
                 resolved = true;
             } catch (final UnknownHostException e) {
-                System.out.printf("Cannot yet resolve name %s, retrying in 3 seconds%n", host);
                 try {
                     Thread.sleep(3000);
                 } catch (final InterruptedException ie) {
@@ -238,19 +217,15 @@ public class ClusterBackupApp {
         }
     }
 
-    /**
-     * Event listener for ClusterBackup to log backup progress.
-     */
     static class BackupEventsListener implements ClusterBackupEventsListener {
 
         @Override
         public void onBackupQuery() {
-            System.out.println("Querying cluster for backup updates...");
         }
 
         @Override
         public void onPossibleFailure(final Exception ex) {
-            System.err.println("WARNING: Possible cluster failure detected: " + ex.getMessage());
+            System.err.println("BACKUP WARNING: " + ex.getMessage());
         }
 
         @Override
@@ -258,32 +233,12 @@ public class ClusterBackupApp {
             final ClusterMember[] clusterMembers,
             final ClusterMember logSourceMember,
             final List<RecordingLog.Snapshot> snapshotsToRetrieve) {
-
-            System.out.printf("Backup response: cluster members=%s, log source=%s, snapshots to retrieve=%d%n",
-                Arrays.toString(clusterMembers),
-                logSourceMember,
-                snapshotsToRetrieve.size());
-
-            for (final RecordingLog.Snapshot snapshot : snapshotsToRetrieve) {
-                System.out.printf("  Snapshot: recordingId=%d, leadershipTermId=%d, " +
-                    "termBaseLogPosition=%d, logPosition=%d%n",
-                    snapshot.recordingId, snapshot.leadershipTermId,
-                    snapshot.termBaseLogPosition, snapshot.logPosition);
-            }
         }
 
         @Override
         public void onUpdatedRecordingLog(
             final RecordingLog recordingLog,
             final List<RecordingLog.Snapshot> snapshotsRetrieved) {
-
-            System.out.printf("Recording log updated: snapshots retrieved=%d%n",
-                snapshotsRetrieved.size());
-
-            for (final RecordingLog.Snapshot snapshot : snapshotsRetrieved) {
-                System.out.printf("  Retrieved snapshot: recordingId=%d, leadershipTermId=%d%n",
-                    snapshot.recordingId, snapshot.leadershipTermId);
-            }
         }
 
         @Override
@@ -291,9 +246,6 @@ public class ClusterBackupApp {
             final long recordingId,
             final long recordingPosCounterId,
             final long logPosition) {
-
-            System.out.printf("Live log progress: recordingId=%d, counterId=%d, logPosition=%d%n",
-                recordingId, recordingPosCounterId, logPosition);
         }
     }
 }

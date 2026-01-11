@@ -26,8 +26,6 @@ target
 
 .vscode
 
-.claude
-
 # Aeron cluster backup/archive files
 backup/
 

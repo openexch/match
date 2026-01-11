@@ -88,7 +88,7 @@ public class LoadConfig {
         private int workerThreads = 4;
         private String market = "BTC-USD";
         private OrderScenario scenario = OrderScenario.BALANCED;
-        private List<String> clusterHosts = Arrays.asList("localhost", "localhost", "localhost");
+        private List<String> clusterHosts = Arrays.asList("127.0.0.1", "127.0.0.1", "127.0.0.1");
         private int basePort = 9000;
         private String egressChannel = getDefaultEgressChannel();
         private String ingressChannel = "aeron:udp?term-length=16m|mtu=8k"; // Match cluster config

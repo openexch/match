@@ -10,6 +10,8 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 
+import static com.match.infrastructure.InfrastructureConstants.*;
+
 /**
  * Admin Gateway - serves admin API only.
  * Runs as a separate process on port 8082.
@@ -17,8 +19,6 @@ import java.net.InetSocketAddress;
  * UI runs separately via Vite dev server or static file server.
  */
 public class AdminGatewayMain implements AutoCloseable {
-
-    private static final int HTTP_PORT = 8082;
 
     private final HttpServer httpServer;
     private final ClusterStatus clusterStatus;
@@ -31,7 +31,7 @@ public class AdminGatewayMain implements AutoCloseable {
         this.adminService = new ClusterAdminService(clusterStatus, operationProgress);
 
         // Create HTTP server
-        this.httpServer = HttpServer.create(new InetSocketAddress(HTTP_PORT), 0);
+        this.httpServer = HttpServer.create(new InetSocketAddress(ADMIN_GATEWAY_PORT), 0);
 
         // Register admin endpoints
         AdminHttpApi adminHttpApi = new AdminHttpApi(adminService);
@@ -76,7 +76,6 @@ public class AdminGatewayMain implements AutoCloseable {
 
     public void start() {
         httpServer.start();
-        System.out.println("Admin Gateway started on http://localhost:" + HTTP_PORT);
     }
 
     @Override
@@ -87,6 +86,13 @@ public class AdminGatewayMain implements AutoCloseable {
     }
 
     public static void main(String[] args) {
+        // Set global uncaught exception handler to prevent silent JVM death
+        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+            System.err.println("FATAL: Uncaught exception in thread " + thread.getName());
+            throwable.printStackTrace();
+            System.err.flush();
+        });
+
         try {
             AdminGatewayMain gateway = new AdminGatewayMain();
             Runtime.getRuntime().addShutdownHook(new Thread(gateway::close));
@@ -94,9 +100,9 @@ public class AdminGatewayMain implements AutoCloseable {
 
             // Keep the main thread alive
             Thread.currentThread().join();
-        } catch (Exception e) {
-            System.err.println("Failed to start admin gateway: " + e.getMessage());
-            e.printStackTrace();
+        } catch (Throwable t) {
+            System.err.println("Failed to start admin gateway: " + t.getMessage());
+            t.printStackTrace();
             System.exit(1);
         }
     }

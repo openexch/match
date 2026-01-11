@@ -53,7 +53,7 @@ type ConfirmAction = {
         'stop-backup' | 'restart-backup' | 'start-backup' |
         'stop-market-gateway' | 'restart-market-gateway' | 'start-market-gateway' |
         'stop-order-gateway' | 'restart-order-gateway' | 'start-order-gateway' |
-        'rolling-update';
+        'rolling-update' | 'stop-all-nodes' | 'start-all-nodes' | 'cleanup';
   nodeId?: number;
   title: string;
   message: string;
@@ -350,6 +350,39 @@ export function AdminPage() {
     });
   };
 
+  const requestStopAllNodes = () => {
+    if (progress?.operation && !progress.complete) return;
+    setPendingAction({
+      type: 'stop-all-nodes',
+      title: 'Stop All Nodes?',
+      message: 'This will stop all cluster nodes. The cluster will become completely unavailable.',
+      confirmLabel: 'Stop All',
+      confirmStyle: 'danger',
+    });
+  };
+
+  const requestStartAllNodes = () => {
+    if (progress?.operation && !progress.complete) return;
+    setPendingAction({
+      type: 'start-all-nodes',
+      title: 'Start All Nodes?',
+      message: 'This will start all cluster nodes and form a new cluster.',
+      confirmLabel: 'Start All',
+      confirmStyle: 'primary',
+    });
+  };
+
+  const requestCleanup = () => {
+    if (progress?.operation && !progress.complete) return;
+    setPendingAction({
+      type: 'cleanup',
+      title: 'Clean Aeron State?',
+      message: 'This will remove stale Aeron files (shared memory, locks). All nodes must be stopped first.',
+      confirmLabel: 'Clean State',
+      confirmStyle: 'warning',
+    });
+  };
+
   const executeNodeAction = async (action: string, nodeId: number) => {
     try {
       await fetch(`/api/admin/${action}`, {
@@ -531,6 +564,34 @@ export function AdminPage() {
     }
   };
 
+  const executeStopAllNodes = async () => {
+    try {
+      await fetch('/api/admin/stop-all-nodes', { method: 'POST' });
+    } catch {
+      setError('Failed to stop all nodes');
+    }
+  };
+
+  const executeStartAllNodes = async () => {
+    try {
+      await fetch('/api/admin/start-all-nodes', { method: 'POST' });
+    } catch {
+      setError('Failed to start all nodes');
+    }
+  };
+
+  const executeCleanup = async () => {
+    try {
+      const response = await fetch('/api/admin/cleanup', { method: 'POST' });
+      const data = await response.json();
+      if (!data.success) {
+        setError(data.error || 'Cleanup failed');
+      }
+    } catch {
+      setError('Failed to cleanup state');
+    }
+  };
+
   const confirmAction = async () => {
     if (!pendingAction) return;
     const action = pendingAction;
@@ -561,6 +622,15 @@ export function AdminPage() {
         break;
       case 'rolling-update':
         await executeRollingUpdate();
+        break;
+      case 'stop-all-nodes':
+        await executeStopAllNodes();
+        break;
+      case 'start-all-nodes':
+        await executeStartAllNodes();
+        break;
+      case 'cleanup':
+        await executeCleanup();
         break;
     }
   };
@@ -668,6 +738,35 @@ export function AdminPage() {
           <div className="section-header">
             {Icons.server}
             <h2>Cluster Nodes</h2>
+            <div className="bulk-actions">
+              <button
+                className="btn-bulk stop"
+                onClick={requestStopAllNodes}
+                disabled={isUpdating}
+                title="Stop All Nodes"
+              >
+                {Icons.stop}
+                <span>Stop All</span>
+              </button>
+              <button
+                className="btn-bulk start"
+                onClick={requestStartAllNodes}
+                disabled={isUpdating}
+                title="Start All Nodes"
+              >
+                {Icons.play}
+                <span>Start All</span>
+              </button>
+              <button
+                className="btn-bulk cleanup"
+                onClick={requestCleanup}
+                disabled={isUpdating}
+                title="Clean Aeron State"
+              >
+                {Icons.restart}
+                <span>Cleanup</span>
+              </button>
+            </div>
           </div>
           <div className="nodes-grid">
             {!status ? (
