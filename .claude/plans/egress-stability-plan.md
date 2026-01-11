@@ -37,6 +37,7 @@
 **Commits:**
 - `968e9f2` - Fix order book infinite loop and simplify Aeron gateway
 - `13bdb9e` - Add gateway state management and infrastructure improvements
+- `f6cf767` - Fix admin API logs endpoint to read from log files
 
 ### Other Completed Improvements
 
@@ -44,26 +45,13 @@
 - MediaDriver in `/dev/shm/` for RAM-only operations
 - Gateway reconnection with exponential backoff
 - Mark file cleanup in systemd services
+- Admin API logs endpoint fixed to read from `~/.local/log/cluster/`
 
 ---
 
 ## Remaining TODO
 
-### Admin API Logs Endpoint (Priority: LOW)
-
-**Issue:** The `GET /api/admin/logs` endpoint looks for log files in wrong location.
-
-**Current behavior:** Returns no logs or wrong logs.
-
-**Expected behavior:** Should read from `~/.local/log/cluster/*.log`
-
-**Workaround:**
-```bash
-tail -50 ~/.local/log/cluster/market.log
-tail -50 ~/.local/log/cluster/node0.log
-```
-
-**Fix needed in:** `match/src/main/java/com/match/infrastructure/http/AdminHttpApi.java`
+None - all critical issues resolved.
 
 ---
 
