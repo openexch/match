@@ -670,28 +670,29 @@ public class ClusterAdminService {
     }
 
     /**
-     * Get logs for a service using journalctl.
+     * Get logs for a service from log files.
+     * Reads from ~/.local/log/cluster/{service}.log
      */
     public Map<String, Object> getServiceLogs(String service, int lines) {
         Map<String, Object> response = new HashMap<>();
 
-        // Map service names to systemd unit names
-        String unitName;
+        // Map service names to log file names
+        String logFileName;
         switch (service) {
             case "backup":
-                unitName = "backup";
+                logFileName = "backup";
                 break;
             case "market-gateway":
             case "market":
-                unitName = "market";
+                logFileName = "market";
                 break;
             case "order-gateway":
             case "order":
-                unitName = "order";
+                logFileName = "order";
                 break;
             case "admin-gateway":
             case "admin":
-                unitName = "admin";
+                logFileName = "admin";
                 break;
             default:
                 response.put("logs", List.of());
@@ -700,12 +701,17 @@ public class ClusterAdminService {
         }
 
         try {
-            String result = executeCommand("journalctl", "--user", "-u", unitName,
-                "--no-pager", "-n", String.valueOf(lines), "--output=short-iso");
-            String[] logLines = result.split("\n");
-            response.put("logs", Arrays.asList(logLines));
-            response.put("service", service);
-            response.put("totalLines", logLines.length);
+            Path logPath = Path.of(LOG_DIR + "/" + logFileName + ".log");
+            if (Files.exists(logPath)) {
+                List<String> allLines = Files.readAllLines(logPath);
+                int start = Math.max(0, allLines.size() - lines);
+                response.put("logs", allLines.subList(start, allLines.size()));
+                response.put("service", service);
+                response.put("totalLines", allLines.size());
+            } else {
+                response.put("logs", List.of());
+                response.put("error", "Log file not found: " + logPath);
+            }
         } catch (Exception e) {
             response.put("logs", List.of());
             response.put("error", e.getMessage());
