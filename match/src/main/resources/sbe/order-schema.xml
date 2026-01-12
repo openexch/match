@@ -39,6 +39,11 @@
             <validValue name="UPDATE_LEVEL">1</validValue>
             <validValue name="DELETE_LEVEL">2</validValue>
         </enum>
+        <!-- Group size encoding for variable-length groups -->
+        <composite name="groupSizeEncoding" description="Repeating group dimensions">
+            <type name="blockLength" primitiveType="uint16"/>
+            <type name="numInGroup" primitiveType="uint16"/>
+        </composite>
     </types>
 
     <!-- Optimized: All numeric fields, no string parsing -->
@@ -114,6 +119,54 @@
     <sbe:message name="GatewayHeartbeat" id="21" description="Gateway heartbeat for connection tracking">
         <field name="gatewayId" id="1" type="int64"/>
         <field name="timestamp" id="2" type="int64"/>
+    </sbe:message>
+
+    <!-- ========== EGRESS BATCH MESSAGES (Cluster to Gateway) ========== -->
+
+    <!-- Book Snapshot - Full order book state with bid/ask levels -->
+    <sbe:message name="BookSnapshot" id="22" description="Order book snapshot with all levels">
+        <field name="marketId" id="1" type="int32"/>
+        <field name="timestamp" id="2" type="int64"/>
+        <field name="bidVersion" id="3" type="int64"/>
+        <field name="askVersion" id="4" type="int64"/>
+        <group name="bids" id="10" dimensionType="groupSizeEncoding">
+            <field name="price" id="1" type="int64"/>
+            <field name="quantity" id="2" type="int64"/>
+            <field name="orderCount" id="3" type="int32"/>
+        </group>
+        <group name="asks" id="11" dimensionType="groupSizeEncoding">
+            <field name="price" id="1" type="int64"/>
+            <field name="quantity" id="2" type="int64"/>
+            <field name="orderCount" id="3" type="int32"/>
+        </group>
+    </sbe:message>
+
+    <!-- Trades Batch - Aggregated trades within flush interval -->
+    <sbe:message name="TradesBatch" id="23" description="Batch of aggregated trades">
+        <field name="marketId" id="1" type="int32"/>
+        <field name="timestamp" id="2" type="int64"/>
+        <group name="trades" id="10" dimensionType="groupSizeEncoding">
+            <field name="price" id="1" type="int64"/>
+            <field name="quantity" id="2" type="int64"/>
+            <field name="tradeCount" id="3" type="int32"/>
+            <field name="timestamp" id="4" type="int64"/>
+        </group>
+    </sbe:message>
+
+    <!-- Order Status Batch - Multiple order status updates -->
+    <sbe:message name="OrderStatusBatch" id="24" description="Batch of order status updates">
+        <field name="marketId" id="1" type="int32"/>
+        <field name="timestamp" id="2" type="int64"/>
+        <group name="orders" id="10" dimensionType="groupSizeEncoding">
+            <field name="orderId" id="1" type="int64"/>
+            <field name="userId" id="2" type="int64"/>
+            <field name="status" id="3" type="OrderStatus"/>
+            <field name="price" id="4" type="int64"/>
+            <field name="remainingQty" id="5" type="int64"/>
+            <field name="filledQty" id="6" type="int64"/>
+            <field name="side" id="7" type="OrderSide"/>
+            <field name="timestamp" id="8" type="int64"/>
+        </group>
     </sbe:message>
 
 </sbe:messageSchema>

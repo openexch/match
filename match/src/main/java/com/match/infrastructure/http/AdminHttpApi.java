@@ -50,6 +50,7 @@ public class AdminHttpApi {
         server.createContext("/api/admin/rolling-update", this::handleRollingUpdate);
         server.createContext("/api/admin/snapshot", this::handleSnapshot);
         server.createContext("/api/admin/compact", this::handleCompact);
+        server.createContext("/api/admin/compact-archive", this::handleCompactArchive);
         server.createContext("/api/admin/auto-snapshot", this::handleAutoSnapshot);
         server.createContext("/api/admin/progress", this::handleProgress);
         server.createContext("/api/admin/logs", this::handleLogs);
@@ -295,6 +296,28 @@ public class AdminHttpApi {
     }
 
     /**
+     * Handle full archive compaction with cluster restart.
+     * This is the CORRECT way to clean up archive space.
+     * POST: Initiate full archive compaction (stops all nodes, seeds from snapshot, restarts)
+     */
+    private void handleCompactArchive(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if (handleCorsPreFlight(exchange)) return;
+
+        if (!requirePost(exchange)) return;
+
+        try {
+            adminService.compactArchive();
+            sendJsonResponse(exchange, 202, Map.of(
+                "message", "Full archive compaction initiated",
+                "warning", "This operation requires brief cluster downtime"
+            ));
+        } catch (IllegalStateException e) {
+            sendJsonResponse(exchange, 409, Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
      * Handle auto-snapshot configuration.
      * POST: Start auto-snapshot with {"intervalMinutes": N}
      * DELETE: Stop auto-snapshot
@@ -411,8 +434,10 @@ public class AdminHttpApi {
     private void setCorsHeaders(HttpExchange exchange) {
         Headers headers = exchange.getResponseHeaders();
         headers.set("Access-Control-Allow-Origin", "*");
-        headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
         headers.set("Access-Control-Allow-Headers", "Content-Type");
+        // Allow requests from public networks to private/local network
+        headers.set("Access-Control-Allow-Private-Network", "true");
     }
 
     private boolean handleCorsPreFlight(HttpExchange exchange) throws IOException {

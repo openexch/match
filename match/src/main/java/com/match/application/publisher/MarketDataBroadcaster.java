@@ -1,10 +1,10 @@
 package com.match.application.publisher;
 
+import org.agrona.DirectBuffer;
+
 /**
- * Interface for broadcasting market data (JSON) to connected clients.
- * Used by MarketPublisher to send data either via:
- * - WebSocket (when running in gateway)
- * - Aeron egress (when running in cluster, for forwarding to gateway)
+ * Interface for broadcasting market data (SBE binary) to connected clients.
+ * Used by MarketPublisher to send data via Aeron egress to gateway.
  *
  * IMPORTANT: In cluster mode, broadcast() queues messages instead of sending directly,
  * because Aeron Cluster doesn't allow sending from background threads.
@@ -13,21 +13,21 @@ package com.match.application.publisher;
 public interface MarketDataBroadcaster {
 
     /**
-     * Queue a market data message for broadcast.
-     * In gateway mode: sends immediately via WebSocket.
+     * Queue an SBE-encoded market data message for broadcast.
      * In cluster mode: queues for later sending via flush().
      *
-     * @param jsonMessage The JSON message to broadcast (BOOK_SNAPSHOT, TRADES_BATCH, ORDER_STATUS)
+     * @param buffer The buffer containing the SBE message
+     * @param offset Offset into the buffer
+     * @param length Length of the message
      */
-    void broadcast(String jsonMessage);
+    void broadcast(DirectBuffer buffer, int offset, int length);
 
     /**
      * Flush queued messages (cluster mode only).
      * Must be called from the cluster service's main thread (during onTimerEvent).
-     * In gateway mode: no-op.
      */
     default void flush() {
-        // Default no-op for gateway mode
+        // Default no-op
     }
 
     /**

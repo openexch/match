@@ -618,8 +618,8 @@ public class ClusterAdminService {
     }
 
     /**
-     * Take a cluster snapshot and purge old archive segments.
-     * This prevents archive from growing unbounded over time.
+     * Take a cluster snapshot for state persistence.
+     * Note: Archive cleanup is done separately via compactArchive() which requires restart.
      */
     public void snapshot() {
         if (operationProgress.getOperation() != null && !operationProgress.isComplete()) {
@@ -628,7 +628,7 @@ public class ClusterAdminService {
 
         new Thread(() -> {
             try {
-                operationProgress.start("snapshot", 8);
+                operationProgress.start("snapshot", 4);
                 String jarPath = "match/target/cluster-engine-1.0.jar";
 
                 // Step 1: Find cluster leader
@@ -637,7 +637,7 @@ public class ClusterAdminService {
                 String listResult = executeCommand("java", "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
                     "-cp", jarPath, "io.aeron.cluster.ClusterTool",
                     "/dev/shm/aeron-cluster/node0/cluster", "list-members");
-                if (listResult.contains("leaderMemberId=")) {
+                if (listResult != null && listResult.contains("leaderMemberId=")) {
                     leaderNode = Integer.parseInt(listResult.split("leaderMemberId=")[1].split(",")[0].trim());
                 }
 
@@ -661,41 +661,17 @@ public class ClusterAdminService {
                 long snapshotPosition = getLatestSnapshotPosition(leaderNode);
                 lastSnapshotPosition = snapshotPosition;
 
-                boolean success = snapshotResult.contains("SNAPSHOT") &&
+                boolean success = snapshotResult != null && snapshotResult.contains("SNAPSHOT") &&
                                  (snapshotResult.contains("completed") || snapshotResult.contains("applied"));
 
                 if (!success) {
-                    operationProgress.finish(false, "Snapshot may have failed: " + snapshotResult.trim());
+                    operationProgress.finish(false, "Snapshot may have failed: " +
+                        (snapshotResult != null ? snapshotResult.trim() : "null result"));
                     return;
                 }
 
-                if (snapshotPosition < 0) {
-                    // Snapshot succeeded but couldn't get position - still purge segments
-                    System.err.println("Warning: Snapshot succeeded but position unknown, proceeding with purge");
-                }
-
-                // Steps 5-7: Purge old segments on all nodes (segments before snapshot position are safe to remove)
-                operationProgress.update(5, "Purging old archive segments...");
-                for (int nodeId = 0; nodeId < 3; nodeId++) {
-                    operationProgress.update(5 + nodeId, "Purging Node " + nodeId + " segments...");
-                    String archiveDir = "/dev/shm/aeron-cluster/node" + nodeId + "/archive";
-
-                    // purge-segments removes segments that are no longer needed (before latest snapshot)
-                    try {
-                        executeCommand("bash", "-c",
-                            "echo 'y' | java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED " +
-                            "-cp " + jarPath + " io.aeron.archive.ArchiveTool " + archiveDir + " purge-segments 2>/dev/null || true");
-                    } catch (Exception e) {
-                        System.err.println("Warning: Failed to purge segments on node " + nodeId + ": " + e.getMessage());
-                        // Continue with other nodes
-                    }
-                }
-
-                // Step 8: Complete
                 String positionInfo = snapshotPosition >= 0 ? " at position " + snapshotPosition : "";
-                operationProgress.update(8, "Snapshot and purge complete" + positionInfo);
-                Thread.sleep(500);
-                operationProgress.finish(true, "Snapshot created" + positionInfo + ", old segments purged");
+                operationProgress.finish(true, "Snapshot created" + positionInfo);
 
             } catch (Exception e) {
                 e.printStackTrace();
@@ -732,6 +708,125 @@ public class ClusterAdminService {
                 operationProgress.update(7, "Compaction complete!");
                 Thread.sleep(500);
                 operationProgress.finish(true, "Archives compacted successfully");
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                operationProgress.finish(false, "Error: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    /**
+     * Full archive compaction - requires brief cluster downtime.
+     * This is the CORRECT way to clean up archive space:
+     * 1. Take final snapshot
+     * 2. Stop all nodes
+     * 3. Use seed-recording-log-from-snapshot to create fresh archive
+     * 4. Restart nodes
+     *
+     * WARNING: Do NOT use ArchiveTool mark-invalid + compact - it corrupts
+     * the cluster by desynchronizing archive catalog from recording-log.
+     */
+    public void compactArchive() {
+        if (operationProgress.getOperation() != null && !operationProgress.isComplete()) {
+            throw new IllegalStateException("Another operation in progress");
+        }
+
+        new Thread(() -> {
+            try {
+                operationProgress.start("compact-archive", 10);
+                String jarPath = "match/target/cluster-engine-1.0.jar";
+
+                // Step 1: Take final snapshot to ensure we have latest state
+                operationProgress.update(1, "Taking final snapshot...");
+                int leaderNode = detectLeaderFromCluster();
+                if (leaderNode < 0) {
+                    operationProgress.finish(false, "Could not find cluster leader");
+                    return;
+                }
+
+                String snapshotResult = executeCommand("java",
+                    "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
+                    "-cp", jarPath, "io.aeron.cluster.ClusterTool",
+                    "/dev/shm/aeron-cluster/node" + leaderNode + "/cluster", "snapshot");
+
+                if (snapshotResult == null || !snapshotResult.contains("SNAPSHOT")) {
+                    operationProgress.finish(false, "Failed to take snapshot before compaction");
+                    return;
+                }
+
+                // Wait for snapshot to propagate
+                Thread.sleep(3000);
+
+                // Step 2-4: Stop all 3 nodes
+                for (int i = 0; i < 3; i++) {
+                    operationProgress.update(2 + i, "Stopping node " + i + "...");
+                    clusterStatus.setNodeStatus(i, "STOPPING", false);
+                    executeCommand("systemctl", "--user", "stop", "node" + i);
+                    Thread.sleep(500);
+                    clusterStatus.setNodeStatus(i, "OFFLINE", false);
+                }
+
+                // Wait for all nodes to fully stop
+                Thread.sleep(2000);
+
+                // Step 5: Seed fresh recording log from snapshot on each node
+                // This cleans up old recordings while keeping catalog in sync
+                operationProgress.update(5, "Rebuilding archives from snapshot...");
+                for (int i = 0; i < 3; i++) {
+                    String clusterDir = "/dev/shm/aeron-cluster/node" + i + "/cluster";
+                    try {
+                        String seedResult = executeCommand("java",
+                            "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
+                            "-cp", jarPath, "io.aeron.cluster.ClusterTool",
+                            clusterDir, "seed-recording-log-from-snapshot");
+                        System.out.println("Node " + i + " seed result: " + seedResult);
+                    } catch (Exception e) {
+                        System.err.println("Warning: seed failed for node " + i + ": " + e.getMessage());
+                        // Continue with other nodes - some may not need seeding
+                    }
+                }
+
+                // Step 6: Clean up orphaned segment files that are no longer referenced
+                operationProgress.update(6, "Cleaning orphaned segments...");
+                for (int i = 0; i < 3; i++) {
+                    String archiveDir = "/dev/shm/aeron-cluster/node" + i + "/archive";
+                    try {
+                        executeCommand("bash", "-c",
+                            "echo 'y' | java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED " +
+                            "-cp " + jarPath + " io.aeron.archive.ArchiveTool " + archiveDir + " delete-orphaned-segments");
+                    } catch (Exception e) {
+                        System.err.println("Warning: orphan cleanup failed for node " + i + ": " + e.getMessage());
+                    }
+                }
+
+                // Step 7-9: Start all 3 nodes
+                for (int i = 0; i < 3; i++) {
+                    operationProgress.update(7 + i, "Starting node " + i + "...");
+                    clusterStatus.setNodeStatus(i, "STARTING", false);
+                    executeCommand("systemctl", "--user", "start", "node" + i);
+                    Thread.sleep(2000);
+                    clusterStatus.setNodeStatus(i, "REJOINING", true);
+                }
+
+                // Step 10: Wait for cluster to form and elect leader
+                operationProgress.update(10, "Waiting for cluster election...");
+                Thread.sleep(5000);
+
+                int newLeader = detectLeaderFromCluster();
+                if (newLeader >= 0) {
+                    clusterStatus.updateLeader(newLeader, clusterStatus.getLeadershipTermId() + 1);
+                    for (int i = 0; i < 3; i++) {
+                        clusterStatus.setNodeStatus(i, i == newLeader ? "LEADER" : "FOLLOWER", true);
+                    }
+                    operationProgress.finish(true, "Archive compacted successfully. Leader: Node " + newLeader);
+                } else {
+                    // Nodes are running but couldn't detect leader yet
+                    for (int i = 0; i < 3; i++) {
+                        clusterStatus.setNodeStatus(i, "FOLLOWER", true);
+                    }
+                    operationProgress.finish(true, "Archive compacted. Cluster restarted (leader detection pending)");
+                }
 
             } catch (Exception e) {
                 e.printStackTrace();

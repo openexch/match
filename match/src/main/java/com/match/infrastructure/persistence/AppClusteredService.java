@@ -57,21 +57,36 @@ public class AppClusteredService implements ClusteredService {
     // Buffer for broadcasting market data via Aeron egress
     private final UnsafeBuffer broadcastBuffer = new UnsafeBuffer(new byte[32 * 1024]); // 32KB for JSON messages
 
-    // Queue for market data messages (thread-safe for producer on Disruptor thread)
+    // Queue for market data messages (SBE binary, thread-safe for producer on Disruptor thread)
     // Bounded to prevent OOM if cluster egress backs up
     private static final int MARKET_DATA_QUEUE_CAPACITY = 10_000;
-    private final Queue<String> marketDataQueue = new ArrayBlockingQueue<>(MARKET_DATA_QUEUE_CAPACITY);
+    private final Queue<QueuedMessage> marketDataQueue = new ArrayBlockingQueue<>(MARKET_DATA_QUEUE_CAPACITY);
     private final AtomicLong droppedMessages = new AtomicLong(0);
 
+    // Simple wrapper for queued SBE messages (holds copy of buffer content)
+    private static final class QueuedMessage {
+        final byte[] data;
+        final int length;
+
+        QueuedMessage(byte[] data, int length) {
+            this.data = data;
+            this.length = length;
+        }
+    }
+
     /**
-     * MarketDataBroadcaster implementation that queues messages for later sending.
+     * MarketDataBroadcaster implementation that queues SBE messages for later sending.
      * Messages are queued from the Disruptor thread and flushed on gateway heartbeats.
      * This is required because Aeron Cluster only allows sending from the main service thread.
      */
     private final MarketDataBroadcaster aeronBroadcaster = new MarketDataBroadcaster() {
         @Override
-        public void broadcast(String jsonMessage) {
-            if (!marketDataQueue.offer(jsonMessage)) {
+        public void broadcast(org.agrona.DirectBuffer buffer, int offset, int length) {
+            // Copy the buffer content (since the source buffer is reused)
+            byte[] copy = new byte[length];
+            buffer.getBytes(offset, copy, 0, length);
+
+            if (!marketDataQueue.offer(new QueuedMessage(copy, length))) {
                 long dropped = droppedMessages.incrementAndGet();
                 if (dropped % 10000 == 1) {
                     System.err.println("QUEUE FULL: Dropped " + dropped + " messages");
@@ -82,23 +97,21 @@ public class AppClusteredService implements ClusteredService {
         @Override
         public void flush() {
             // Broadcast to ALL sessions - each client filters what it needs
-            // This is simpler than tracking a specific "gateway" session
             List<ClientSession> sessions = clientSessions.getAllSessions();
             if (sessions.isEmpty()) {
                 marketDataQueue.clear();
                 return;
             }
 
-            String message;
-            while ((message = marketDataQueue.poll()) != null) {
-                byte[] bytes = message.getBytes(StandardCharsets.UTF_8);
-                broadcastBuffer.putBytes(0, bytes);
+            QueuedMessage msg;
+            while ((msg = marketDataQueue.poll()) != null) {
+                broadcastBuffer.putBytes(0, msg.data, 0, msg.length);
 
                 // Send to all connected sessions
                 for (ClientSession session : sessions) {
                     int retries = 0;
                     while (retries < 3) {
-                        long result = session.offer(broadcastBuffer, 0, bytes.length);
+                        long result = session.offer(broadcastBuffer, 0, msg.length);
                         if (result > 0) {
                             break;
                         } else if (result == Publication.BACK_PRESSURED || result == Publication.ADMIN_ACTION) {

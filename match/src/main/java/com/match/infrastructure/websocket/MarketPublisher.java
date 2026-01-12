@@ -1,19 +1,16 @@
 package com.match.infrastructure.websocket;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import com.match.application.orderbook.DirectMatchingEngine;
 import com.match.application.publisher.MarketDataBroadcaster;
 import com.match.application.publisher.MarketEventHandler;
 import com.match.application.publisher.OrderStatusType;
 import com.match.application.publisher.PublishEvent;
 import com.match.application.publisher.PublishEventType;
-import com.match.domain.FixedPoint;
 import com.match.infrastructure.Logger;
-import io.netty.channel.group.ChannelGroup;
-import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
+import com.match.infrastructure.generated.*;
 
 import org.agrona.collections.Long2ObjectHashMap;
+import org.agrona.concurrent.UnsafeBuffer;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -23,11 +20,11 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Per-market publisher that handles Disruptor events and broadcasts to WebSocket clients.
+ * Per-market publisher that handles Disruptor events and broadcasts via Aeron egress.
  * Runs on dedicated thread per market (created by Disruptor).
  *
  * Uses 50ms buffering to batch trades and coalesce order book updates.
- * Serializes events to JSON for WebSocket clients.
+ * Encodes events to SBE binary format for zero-allocation egress.
  */
 public class MarketPublisher implements MarketEventHandler {
 
@@ -36,11 +33,23 @@ public class MarketPublisher implements MarketEventHandler {
     private static final int MAX_BUFFERED_TRADES = 100;
     private static final int MAX_BOOK_LEVELS = 20;
 
+    // SBE encoding buffer (256KB for large batches under load)
+    private static final int ENCODE_BUFFER_SIZE = 256 * 1024;
+    // Max order status entries per batch to prevent buffer overflow (~60 bytes each)
+    private static final int MAX_ORDER_STATUS_PER_BATCH = 2000;
+    private final UnsafeBuffer encodeBuffer = new UnsafeBuffer(new byte[ENCODE_BUFFER_SIZE]);
+
+    // Pre-allocated SBE encoders (reused, zero allocation)
+    private final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
+    private final BookSnapshotEncoder bookSnapshotEncoder = new BookSnapshotEncoder();
+    private final TradesBatchEncoder tradesBatchEncoder = new TradesBatchEncoder();
+    private final OrderStatusBatchEncoder orderStatusBatchEncoder = new OrderStatusBatchEncoder();
+
     private final int marketId;
     private final String marketName;
     private final SubscriptionManager subscriptionManager;
 
-    // Optional broadcaster for cluster mode (Aeron egress instead of WebSocket)
+    // Broadcaster for cluster mode (Aeron egress)
     private volatile MarketDataBroadcaster broadcaster;
 
     // Reference to matching engine for order book snapshots (set after construction)
@@ -61,9 +70,6 @@ public class MarketPublisher implements MarketEventHandler {
     // Flag to track if we have pending book updates
     private boolean hasBookUpdates = false;
     private long lastBookTimestamp = 0;
-
-    // Pre-allocated StringBuilder for JSON building (reused per event)
-    private final StringBuilder jsonBuilder = new StringBuilder(512);
 
     // ORDER_STATUS buffer for batching
     private final java.util.List<OrderStatusEntry> orderStatusBuffer = new java.util.ArrayList<>(100);
@@ -312,52 +318,51 @@ public class MarketPublisher implements MarketEventHandler {
 
         try {
             // Capture local references to volatile fields for null-safety
-            // This prevents race conditions where the field could become null between check and use
             final MarketDataBroadcaster localBroadcaster = broadcaster;
             final DirectMatchingEngine localEngine = matchingEngine;
 
-            // Check if we have any subscribers (either via broadcaster or WebSocket)
-            boolean hasSubscribers;
-            if (localBroadcaster != null) {
-                hasSubscribers = localBroadcaster.hasSubscribers();
-            } else {
-                ChannelGroup subs = subscriptionManager.getSubscribers(marketId);
-                hasSubscribers = subs != null && !subs.isEmpty();
-            }
-
-            if (!hasSubscribers) {
-                // No subscribers, clear buffers but don't serialize
+            // Must have broadcaster configured
+            if (localBroadcaster == null || !localBroadcaster.hasSubscribers()) {
                 clearBuffersWithoutSending();
                 return;
             }
 
-            // Flush aggregated trades
+            // Flush aggregated trades (SBE encoded)
             if (!tradesByPrice.isEmpty()) {
-                String tradesJson = serializeAggregatedTrades();
-                broadcastMessage(tradesJson, localBroadcaster);
+                int length = encodeTradesBatch();
+                if (length > 0) {
+                    localBroadcaster.broadcast(encodeBuffer, 0, length);
+                }
                 clearTradesBuffer();
             }
 
-            // Flush buffered order status updates as batch
-            if (!orderStatusBuffer.isEmpty()) {
-                String statusJson = serializeOrderStatusBatch();
-                broadcastMessage(statusJson, localBroadcaster);
-                orderStatusBuffer.clear();
+            // Flush buffered order status updates as batch (SBE encoded)
+            // Send in chunks if buffer is large to prevent overflow
+            while (!orderStatusBuffer.isEmpty()) {
+                int batchSize = Math.min(orderStatusBuffer.size(), MAX_ORDER_STATUS_PER_BATCH);
+                int length = encodeOrderStatusBatch(batchSize);
+                if (length > 0) {
+                    localBroadcaster.broadcast(encodeBuffer, 0, length);
+                }
+                // Remove encoded entries
+                if (batchSize >= orderStatusBuffer.size()) {
+                    orderStatusBuffer.clear();
+                } else {
+                    orderStatusBuffer.subList(0, batchSize).clear();
+                }
             }
 
-            // Get fresh order book snapshot from matching engine (runs on this thread, not matching engine thread)
+            // Get fresh order book snapshot from matching engine (SBE encoded)
             if (localEngine != null) {
-                String bookJson = serializeOrderBookFromEngine(localEngine);
-                if (bookJson != null) {
-                    broadcastMessage(bookJson, localBroadcaster);
+                int length = encodeBookSnapshot(localEngine);
+                if (length > 0) {
+                    localBroadcaster.broadcast(encodeBuffer, 0, length);
                 }
             }
         } catch (Exception e) {
-            // Log with FULL stack trace - this is critical for debugging
             flushErrorCount++;
             logger.error("FLUSH ERROR for market " + marketId + " (error #" + flushErrorCount + "): " + e.getMessage());
             e.printStackTrace();
-            // Clear buffers to prevent memory leak
             clearBuffersWithoutSending();
         }
     }
@@ -365,24 +370,6 @@ public class MarketPublisher implements MarketEventHandler {
     private void clearBuffersWithoutSending() {
         clearTradesBuffer();
         orderStatusBuffer.clear();
-    }
-
-    /**
-     * Broadcast message using either broadcaster (cluster mode) or WebSocket (gateway mode).
-     * @param jsonMessage The message to broadcast
-     * @param localBroadcaster The captured broadcaster reference (null-safe)
-     */
-    private void broadcastMessage(String jsonMessage, MarketDataBroadcaster localBroadcaster) {
-        if (localBroadcaster != null) {
-            // Cluster mode: send via Aeron egress broadcast
-            localBroadcaster.broadcast(jsonMessage);
-        } else {
-            // Gateway mode: send directly to WebSocket subscribers
-            ChannelGroup subscribers = subscriptionManager.getSubscribers(marketId);
-            if (subscribers != null && !subscribers.isEmpty()) {
-                subscribers.writeAndFlush(new TextWebSocketFrame(jsonMessage));
-            }
-        }
     }
 
     private void clearTradesBuffer() {
@@ -415,52 +402,54 @@ public class MarketPublisher implements MarketEventHandler {
     }
 
     /**
-     * Serialize aggregated trades - each entry represents all trades at a price level
-     * within the flush interval. Much more compact than individual trades.
-     * Includes order book version range for correlation with book snapshots.
+     * Encode aggregated trades to SBE binary format.
+     * Returns the total encoded length, or 0 if nothing to encode.
      */
-    private String serializeAggregatedTrades() {
-        JsonObject json = new JsonObject();
-        json.addProperty("type", "TRADES_BATCH");
-        json.addProperty("marketId", marketId);
-        json.addProperty("market", marketName);
-        json.addProperty("timestamp", System.currentTimeMillis());
-
-        // Include book version range for UI correlation
-        if (bookVersionMin != Long.MAX_VALUE && bookVersionMax != Long.MIN_VALUE) {
-            json.addProperty("bookVersionMin", bookVersionMin);
-            json.addProperty("bookVersionMax", bookVersionMax);
+    private int encodeTradesBatch() {
+        int tradeCount = tradesByPrice.size();
+        if (tradeCount == 0) {
+            return 0;
         }
 
-        JsonArray trades = new JsonArray();
+        // Encode header
+        headerEncoder.wrap(encodeBuffer, 0)
+            .blockLength(TradesBatchEncoder.BLOCK_LENGTH)
+            .templateId(TradesBatchEncoder.TEMPLATE_ID)
+            .schemaId(TradesBatchEncoder.SCHEMA_ID)
+            .version(TradesBatchEncoder.SCHEMA_VERSION);
+
+        // Encode message body
+        tradesBatchEncoder.wrap(encodeBuffer, MessageHeaderEncoder.ENCODED_LENGTH)
+            .marketId(marketId)
+            .timestamp(System.currentTimeMillis());
+
+        // Encode trades group
+        TradesBatchEncoder.TradesEncoder tradesGroup = tradesBatchEncoder.tradesCount(tradeCount);
         Long2ObjectHashMap<AggregatedTrade>.ValueIterator iter = tradesByPrice.values().iterator();
         while (iter.hasNext()) {
             AggregatedTrade agg = iter.next();
-            JsonObject t = new JsonObject();
-            t.addProperty("price", FixedPoint.toDouble(agg.price));
-            t.addProperty("quantity", FixedPoint.toDouble(agg.totalQuantity));
-            t.addProperty("tradeCount", agg.tradeCount);
-            t.addProperty("buyCount", agg.buyCount);
-            t.addProperty("sellCount", agg.sellCount);
-            t.addProperty("timestamp", agg.lastTimestamp);
-            trades.add(t);
+            tradesGroup.next()
+                .price(agg.price)
+                .quantity(agg.totalQuantity)
+                .tradeCount(agg.tradeCount)
+                .timestamp(agg.lastTimestamp);
         }
-        json.add("trades", trades);
 
         // Reset version range for next batch
         bookVersionMin = Long.MAX_VALUE;
         bookVersionMax = Long.MIN_VALUE;
 
-        return json.toString();
+        return MessageHeaderEncoder.ENCODED_LENGTH + tradesBatchEncoder.encodedLength();
     }
 
     /**
-     * Get order book snapshot directly from matching engine.
+     * Encode order book snapshot to SBE binary format.
      * Called on flush thread every 50ms - does NOT block matching engine.
      * Uses change detection to avoid sending duplicate snapshots.
      * @param engine The captured matching engine reference (null-safe)
+     * @return Encoded length, or 0 if no change
      */
-    private String serializeOrderBookFromEngine(DirectMatchingEngine engine) {
+    private int encodeBookSnapshot(DirectMatchingEngine engine) {
         // Collect top 20 levels (this is a read-only operation on engine arrays)
         engine.collectTopLevels(MAX_BOOK_LEVELS);
 
@@ -469,7 +458,7 @@ public class MarketPublisher implements MarketEventHandler {
 
         // Skip when book is empty
         if (bidCount == 0 && askCount == 0) {
-            return null;
+            return 0;
         }
 
         long[] bidPrices = engine.getTopBidPrices();
@@ -487,91 +476,105 @@ public class MarketPublisher implements MarketEventHandler {
                           (collectedAskVersion != lastAskVersion);
 
         if (!changed) {
-            return null;
+            return 0;
         }
 
         // Update last versions for next comparison
         lastBidVersion = collectedBidVersion;
         lastAskVersion = collectedAskVersion;
 
-        JsonObject json = new JsonObject();
-        json.addProperty("type", "BOOK_SNAPSHOT");
-        json.addProperty("marketId", marketId);
-        json.addProperty("market", marketName);
-        json.addProperty("timestamp", System.currentTimeMillis());
-        json.addProperty("bidVersion", collectedBidVersion);
-        json.addProperty("askVersion", collectedAskVersion);
-        json.addProperty("version", Math.max(collectedBidVersion, collectedAskVersion));
+        // Encode header
+        headerEncoder.wrap(encodeBuffer, 0)
+            .blockLength(BookSnapshotEncoder.BLOCK_LENGTH)
+            .templateId(BookSnapshotEncoder.TEMPLATE_ID)
+            .schemaId(BookSnapshotEncoder.SCHEMA_ID)
+            .version(BookSnapshotEncoder.SCHEMA_VERSION);
 
-        // Add bid levels
-        JsonArray bids = new JsonArray();
+        // Encode message body
+        bookSnapshotEncoder.wrap(encodeBuffer, MessageHeaderEncoder.ENCODED_LENGTH)
+            .marketId(marketId)
+            .timestamp(System.currentTimeMillis())
+            .bidVersion(collectedBidVersion)
+            .askVersion(collectedAskVersion);
+
+        // Encode bids group
+        BookSnapshotEncoder.BidsEncoder bidsGroup = bookSnapshotEncoder.bidsCount(bidCount);
         for (int i = 0; i < bidCount; i++) {
-            JsonObject l = new JsonObject();
-            l.addProperty("price", FixedPoint.toDouble(bidPrices[i]));
-            l.addProperty("quantity", FixedPoint.toDouble(bidQuantities[i]));
-            l.addProperty("orderCount", bidOrderCounts[i]);
-            bids.add(l);
+            bidsGroup.next()
+                .price(bidPrices[i])
+                .quantity(bidQuantities[i])
+                .orderCount(bidOrderCounts[i]);
         }
-        json.add("bids", bids);
 
-        // Add ask levels
-        JsonArray asks = new JsonArray();
+        // Encode asks group
+        BookSnapshotEncoder.AsksEncoder asksGroup = bookSnapshotEncoder.asksCount(askCount);
         for (int i = 0; i < askCount; i++) {
-            JsonObject l = new JsonObject();
-            l.addProperty("price", FixedPoint.toDouble(askPrices[i]));
-            l.addProperty("quantity", FixedPoint.toDouble(askQuantities[i]));
-            l.addProperty("orderCount", askOrderCounts[i]);
-            asks.add(l);
+            asksGroup.next()
+                .price(askPrices[i])
+                .quantity(askQuantities[i])
+                .orderCount(askOrderCounts[i]);
         }
-        json.add("asks", asks);
 
-        return json.toString();
+        return MessageHeaderEncoder.ENCODED_LENGTH + bookSnapshotEncoder.encodedLength();
     }
 
     /**
-     * Serialize buffered order status entries as a batch.
-     * Reduces message count from N individual messages to 1 batch message.
+     * Encode buffered order status entries as a batch to SBE binary format.
+     * @param batchSize Number of entries to encode from the front of the buffer
+     * @return Encoded length, or 0 if nothing to encode
      */
-    private String serializeOrderStatusBatch() {
-        JsonObject json = new JsonObject();
-        json.addProperty("type", "ORDER_STATUS_BATCH");
-        json.addProperty("marketId", marketId);
-        json.addProperty("market", marketName);
-        json.addProperty("timestamp", System.currentTimeMillis());
-        json.addProperty("count", orderStatusBuffer.size());
-
-        JsonArray orders = new JsonArray();
-        for (OrderStatusEntry entry : orderStatusBuffer) {
-            JsonObject o = new JsonObject();
-            o.addProperty("orderId", entry.orderId);
-            o.addProperty("userId", entry.userId);
-            o.addProperty("status", getStatusName(entry.status));
-            o.addProperty("price", FixedPoint.toDouble(entry.price));
-            o.addProperty("remainingQuantity", FixedPoint.toDouble(entry.remainingQty));
-            o.addProperty("filledQuantity", FixedPoint.toDouble(entry.filledQty));
-            o.addProperty("side", entry.isBuy ? "BID" : "ASK");
-            o.addProperty("timestamp", entry.timestamp);
-            orders.add(o);
+    private int encodeOrderStatusBatch(int batchSize) {
+        if (batchSize == 0 || orderStatusBuffer.isEmpty()) {
+            return 0;
         }
-        json.add("orders", orders);
 
-        return json.toString();
+        // Encode header
+        headerEncoder.wrap(encodeBuffer, 0)
+            .blockLength(OrderStatusBatchEncoder.BLOCK_LENGTH)
+            .templateId(OrderStatusBatchEncoder.TEMPLATE_ID)
+            .schemaId(OrderStatusBatchEncoder.SCHEMA_ID)
+            .version(OrderStatusBatchEncoder.SCHEMA_VERSION);
+
+        // Encode message body
+        orderStatusBatchEncoder.wrap(encodeBuffer, MessageHeaderEncoder.ENCODED_LENGTH)
+            .marketId(marketId)
+            .timestamp(System.currentTimeMillis());
+
+        // Encode orders group (only up to batchSize)
+        OrderStatusBatchEncoder.OrdersEncoder ordersGroup = orderStatusBatchEncoder.ordersCount(batchSize);
+        for (int i = 0; i < batchSize; i++) {
+            OrderStatusEntry entry = orderStatusBuffer.get(i);
+            ordersGroup.next()
+                .orderId(entry.orderId)
+                .userId(entry.userId)
+                .status(mapOrderStatus(entry.status))
+                .price(entry.price)
+                .remainingQty(entry.remainingQty)
+                .filledQty(entry.filledQty)
+                .side(entry.isBuy ? OrderSide.BID : OrderSide.ASK)
+                .timestamp(entry.timestamp);
+        }
+
+        return MessageHeaderEncoder.ENCODED_LENGTH + orderStatusBatchEncoder.encodedLength();
     }
 
-    private String getStatusName(int status) {
+    /**
+     * Map internal order status int to SBE OrderStatus enum.
+     */
+    private OrderStatus mapOrderStatus(int status) {
         switch (status) {
             case OrderStatusType.NEW:
-                return "NEW";
+                return OrderStatus.NEW;
             case OrderStatusType.PARTIALLY_FILLED:
-                return "PARTIALLY_FILLED";
+                return OrderStatus.PARTIALLY_FILLED;
             case OrderStatusType.FILLED:
-                return "FILLED";
+                return OrderStatus.FILLED;
             case OrderStatusType.CANCELLED:
-                return "CANCELLED";
+                return OrderStatus.CANCELLED;
             case OrderStatusType.REJECTED:
-                return "REJECTED";
+                return OrderStatus.REJECTED;
             default:
-                return "UNKNOWN";
+                return OrderStatus.NEW;
         }
     }
 }

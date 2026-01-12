@@ -74,6 +74,8 @@ public class HttpOrderApi implements HttpHandler {
         headers.set("Access-Control-Allow-Origin", "*");
         headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         headers.set("Access-Control-Allow-Headers", "Content-Type");
+        // Allow requests from public networks to private/local network
+        headers.set("Access-Control-Allow-Private-Network", "true");
     }
 
     private void sendOrder(Order order) {

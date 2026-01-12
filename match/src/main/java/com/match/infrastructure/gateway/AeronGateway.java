@@ -40,9 +40,12 @@ public class AeronGateway implements EgressListener, AutoCloseable {
 
     /**
      * Listener interface for egress messages from the cluster.
+     * Receives decoded SBE messages for zero-allocation processing.
      */
     public interface EgressMessageListener {
-        void onMessage(String json);
+        void onBookSnapshot(BookSnapshotDecoder decoder);
+        void onTradesBatch(TradesBatchDecoder decoder);
+        void onOrderStatusBatch(OrderStatusBatchDecoder decoder);
         void onNewLeader(int leaderMemberId, long leadershipTermId);
     }
 
@@ -62,6 +65,12 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     private final ExpandableDirectByteBuffer buffer = new ExpandableDirectByteBuffer(512);
     private final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
     private final CreateOrderEncoder createOrderEncoder = new CreateOrderEncoder();
+
+    // Decoders for inbound SBE messages (egress from cluster)
+    private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
+    private final BookSnapshotDecoder bookSnapshotDecoder = new BookSnapshotDecoder();
+    private final TradesBatchDecoder tradesBatchDecoder = new TradesBatchDecoder();
+    private final OrderStatusBatchDecoder orderStatusBatchDecoder = new OrderStatusBatchDecoder();
 
     // External dependencies
     private volatile EgressMessageListener egressListener;
@@ -409,16 +418,43 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     public void onMessage(long clusterSessionId, long timestamp, DirectBuffer buffer, int offset, int length, Header header) {
         egressMessageCount++;
 
-        final String response = buffer.getStringWithoutLengthUtf8(offset, length);
+        // Decode SBE header to determine message type
+        if (length < MessageHeaderDecoder.ENCODED_LENGTH) {
+            return; // Too short to be a valid SBE message
+        }
+
+        headerDecoder.wrap(buffer, offset);
+        int templateId = headerDecoder.templateId();
 
         // Debug: log first few egress messages
         if (egressMessageCount <= 5) {
-            System.out.println("EGRESS[" + egressMessageCount + "]: " + response.substring(0, Math.min(100, response.length())));
+            System.out.println("EGRESS[" + egressMessageCount + "]: templateId=" + templateId + ", length=" + length);
         }
 
-        // Forward market data (JSON with type field) to listener
-        if (response.startsWith("{\"type\":") && egressListener != null) {
-            egressListener.onMessage(response);
+        if (egressListener == null) {
+            return;
+        }
+
+        // Dispatch based on SBE message type
+        switch (templateId) {
+            case BookSnapshotDecoder.TEMPLATE_ID:
+                bookSnapshotDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
+                egressListener.onBookSnapshot(bookSnapshotDecoder);
+                break;
+            case TradesBatchDecoder.TEMPLATE_ID:
+                tradesBatchDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
+                egressListener.onTradesBatch(tradesBatchDecoder);
+                break;
+            case OrderStatusBatchDecoder.TEMPLATE_ID:
+                orderStatusBatchDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
+                egressListener.onOrderStatusBatch(orderStatusBatchDecoder);
+                break;
+            default:
+                // Unknown message type - could be heartbeat ACK or other internal messages
+                if (egressMessageCount <= 10) {
+                    System.out.println("EGRESS: Unknown templateId=" + templateId);
+                }
+                break;
         }
     }
 
