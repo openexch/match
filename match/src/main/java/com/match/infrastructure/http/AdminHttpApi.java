@@ -50,6 +50,7 @@ public class AdminHttpApi {
         server.createContext("/api/admin/rolling-update", this::handleRollingUpdate);
         server.createContext("/api/admin/snapshot", this::handleSnapshot);
         server.createContext("/api/admin/compact", this::handleCompact);
+        server.createContext("/api/admin/auto-snapshot", this::handleAutoSnapshot);
         server.createContext("/api/admin/progress", this::handleProgress);
         server.createContext("/api/admin/logs", this::handleLogs);
         server.createContext("/api/admin/cleanup", this::handleCleanup);
@@ -290,6 +291,63 @@ public class AdminHttpApi {
             sendJsonResponse(exchange, 202, Map.of("message", "Archive compaction initiated"));
         } catch (IllegalStateException e) {
             sendJsonResponse(exchange, 409, Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Handle auto-snapshot configuration.
+     * POST: Start auto-snapshot with {"intervalMinutes": N}
+     * DELETE: Stop auto-snapshot
+     * GET: Get auto-snapshot status
+     */
+    private void handleAutoSnapshot(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if (handleCorsPreFlight(exchange)) return;
+
+        String method = exchange.getRequestMethod().toUpperCase();
+
+        switch (method) {
+            case "POST":
+                try {
+                    String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> request = gson.fromJson(body, Map.class);
+                    Number intervalNum = (Number) request.get("intervalMinutes");
+                    if (intervalNum == null || intervalNum.longValue() <= 0) {
+                        sendJsonResponse(exchange, 400, Map.of("error", "intervalMinutes must be a positive number"));
+                        return;
+                    }
+                    long interval = intervalNum.longValue();
+                    adminService.startAutoSnapshot(interval);
+                    sendJsonResponse(exchange, 200, Map.of(
+                        "status", "started",
+                        "intervalMinutes", interval,
+                        "message", "Auto-snapshot enabled: every " + interval + " minutes"
+                    ));
+                } catch (Exception e) {
+                    sendJsonResponse(exchange, 400, Map.of("error", e.getMessage()));
+                }
+                break;
+
+            case "DELETE":
+                adminService.stopAutoSnapshot();
+                sendJsonResponse(exchange, 200, Map.of(
+                    "status", "stopped",
+                    "message", "Auto-snapshot disabled"
+                ));
+                break;
+
+            case "GET":
+            default:
+                long lastPos = adminService.getLastSnapshotPosition();
+                Map<String, Object> status = new java.util.HashMap<>();
+                status.put("enabled", adminService.isAutoSnapshotEnabled());
+                status.put("intervalMinutes", adminService.getSnapshotIntervalMinutes());
+                if (lastPos >= 0) {
+                    status.put("lastPosition", lastPos);
+                }
+                sendJsonResponse(exchange, 200, status);
+                break;
         }
     }
 

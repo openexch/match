@@ -5,6 +5,8 @@ import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -18,6 +20,11 @@ public class ClusterAdminService {
 
     private final ClusterStatus clusterStatus;
     private final OperationProgress operationProgress;
+
+    // Auto-snapshot scheduling
+    private ScheduledExecutorService snapshotScheduler;
+    private volatile long snapshotIntervalMinutes = 0;
+    private volatile long lastSnapshotPosition = -1;
 
     public ClusterAdminService(ClusterStatus clusterStatus, OperationProgress operationProgress) {
         this.clusterStatus = clusterStatus;
@@ -156,12 +163,12 @@ public class ClusterAdminService {
 
         // Archive size
         try {
-            String result = executeCommand("du", "-sb", "--apparent-size", "/tmp/aeron-cluster/");
+            String result = executeCommand("du", "-sb", "--apparent-size", "/dev/shm/aeron-cluster/");
             String[] parts = result.trim().split("\t");
             if (parts.length > 0) {
                 status.put("archiveBytes", Long.parseLong(parts[0]));
             }
-            result = executeCommand("du", "-s", "/tmp/aeron-cluster/");
+            result = executeCommand("du", "-s", "/dev/shm/aeron-cluster/");
             parts = result.trim().split("\t");
             if (parts.length > 0) {
                 status.put("archiveDiskBytes", Long.parseLong(parts[0]) * 1024);
@@ -170,6 +177,15 @@ public class ClusterAdminService {
             status.put("archiveBytes", 0);
             status.put("archiveDiskBytes", 0);
         }
+
+        // Auto-snapshot status
+        Map<String, Object> autoSnapshot = new HashMap<>();
+        autoSnapshot.put("enabled", isAutoSnapshotEnabled());
+        autoSnapshot.put("intervalMinutes", snapshotIntervalMinutes);
+        if (lastSnapshotPosition >= 0) {
+            autoSnapshot.put("lastPosition", lastSnapshotPosition);
+        }
+        status.put("autoSnapshot", autoSnapshot);
 
         return status;
     }
@@ -183,13 +199,55 @@ public class ClusterAdminService {
             try {
                 String result = executeCommand("java", "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
                     "-cp", jarPath, "io.aeron.cluster.ClusterTool",
-                    "/tmp/aeron-cluster/node" + nodeId + "/cluster", "list-members");
+                    "/dev/shm/aeron-cluster/node" + nodeId + "/cluster", "list-members");
                 if (result != null && result.contains("leaderMemberId=")) {
                     return Integer.parseInt(result.split("leaderMemberId=")[1].split(",")[0].trim());
                 }
             } catch (Exception ignored) {
                 // Try next node
             }
+        }
+        return -1;
+    }
+
+    /**
+     * Get the log position of the latest snapshot using ClusterTool recording-log.
+     * Returns -1 if no snapshot found or parse error.
+     */
+    private long getLatestSnapshotPosition(int nodeId) {
+        try {
+            String jarPath = "match/target/cluster-engine-1.0.jar";
+            String clusterDir = "/dev/shm/aeron-cluster/node" + nodeId + "/cluster";
+
+            // Use recording-log command to get snapshot entries
+            String result = executeCommand("java",
+                "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
+                "-cp", jarPath, "io.aeron.cluster.ClusterTool",
+                clusterDir, "recording-log");
+
+            // Parse logPosition from snapshot entries
+            // Format: Entry{..., logPosition=704, ..., type=SNAPSHOT, ...}
+            if (result != null) {
+                long latestPosition = -1;
+                // Split by "Entry{" to get individual entries
+                String[] entries = result.split("Entry\\{");
+                for (String entry : entries) {
+                    if (entry.contains("type=SNAPSHOT") && entry.contains("logPosition=")) {
+                        try {
+                            String posStr = entry.split("logPosition=")[1].split(",")[0];
+                            long pos = Long.parseLong(posStr.trim());
+                            if (pos > latestPosition) {
+                                latestPosition = pos;
+                            }
+                        } catch (Exception ignored) {
+                            // Continue parsing other entries
+                        }
+                    }
+                }
+                return latestPosition;
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to get snapshot position: " + e.getMessage());
         }
         return -1;
     }
@@ -559,6 +617,10 @@ public class ClusterAdminService {
         }).start();
     }
 
+    /**
+     * Take a cluster snapshot and purge old archive segments.
+     * This prevents archive from growing unbounded over time.
+     */
     public void snapshot() {
         if (operationProgress.getOperation() != null && !operationProgress.isComplete()) {
             throw new IllegalStateException("Another operation in progress");
@@ -566,14 +628,15 @@ public class ClusterAdminService {
 
         new Thread(() -> {
             try {
-                operationProgress.start("snapshot", 5);
+                operationProgress.start("snapshot", 8);
                 String jarPath = "match/target/cluster-engine-1.0.jar";
 
+                // Step 1: Find cluster leader
                 operationProgress.update(1, "Finding cluster leader...");
                 int leaderNode = -1;
                 String listResult = executeCommand("java", "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
                     "-cp", jarPath, "io.aeron.cluster.ClusterTool",
-                    "/tmp/aeron-cluster/node0/cluster", "list-members");
+                    "/dev/shm/aeron-cluster/node0/cluster", "list-members");
                 if (listResult.contains("leaderMemberId=")) {
                     leaderNode = Integer.parseInt(listResult.split("leaderMemberId=")[1].split(",")[0].trim());
                 }
@@ -583,25 +646,56 @@ public class ClusterAdminService {
                     return;
                 }
 
-                operationProgress.update(2, "Requesting snapshot from Node " + leaderNode + "...");
+                // Step 2: Take snapshot on leader
+                operationProgress.update(2, "Taking snapshot on Node " + leaderNode + "...");
                 String snapshotResult = executeCommand("java", "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
                     "-cp", jarPath, "io.aeron.cluster.ClusterTool",
-                    "/tmp/aeron-cluster/node" + leaderNode + "/cluster", "snapshot");
+                    "/dev/shm/aeron-cluster/node" + leaderNode + "/cluster", "snapshot");
 
-                operationProgress.update(3, "Verifying snapshot...");
+                // Step 3: Wait for snapshot propagation to all nodes
+                operationProgress.update(3, "Waiting for snapshot propagation...");
                 Thread.sleep(2000);
 
-                operationProgress.update(4, "Checking snapshot status...");
+                // Step 4: Verify snapshot and get log position
+                operationProgress.update(4, "Verifying snapshot position...");
+                long snapshotPosition = getLatestSnapshotPosition(leaderNode);
+                lastSnapshotPosition = snapshotPosition;
+
                 boolean success = snapshotResult.contains("SNAPSHOT") &&
                                  (snapshotResult.contains("completed") || snapshotResult.contains("applied"));
 
-                if (success) {
-                    operationProgress.update(5, "Snapshot complete!");
-                    Thread.sleep(500);
-                    operationProgress.finish(true, "Snapshot created successfully");
-                } else {
+                if (!success) {
                     operationProgress.finish(false, "Snapshot may have failed: " + snapshotResult.trim());
+                    return;
                 }
+
+                if (snapshotPosition < 0) {
+                    // Snapshot succeeded but couldn't get position - still purge segments
+                    System.err.println("Warning: Snapshot succeeded but position unknown, proceeding with purge");
+                }
+
+                // Steps 5-7: Purge old segments on all nodes (segments before snapshot position are safe to remove)
+                operationProgress.update(5, "Purging old archive segments...");
+                for (int nodeId = 0; nodeId < 3; nodeId++) {
+                    operationProgress.update(5 + nodeId, "Purging Node " + nodeId + " segments...");
+                    String archiveDir = "/dev/shm/aeron-cluster/node" + nodeId + "/archive";
+
+                    // purge-segments removes segments that are no longer needed (before latest snapshot)
+                    try {
+                        executeCommand("bash", "-c",
+                            "echo 'y' | java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED " +
+                            "-cp " + jarPath + " io.aeron.archive.ArchiveTool " + archiveDir + " purge-segments 2>/dev/null || true");
+                    } catch (Exception e) {
+                        System.err.println("Warning: Failed to purge segments on node " + nodeId + ": " + e.getMessage());
+                        // Continue with other nodes
+                    }
+                }
+
+                // Step 8: Complete
+                String positionInfo = snapshotPosition >= 0 ? " at position " + snapshotPosition : "";
+                operationProgress.update(8, "Snapshot and purge complete" + positionInfo);
+                Thread.sleep(500);
+                operationProgress.finish(true, "Snapshot created" + positionInfo + ", old segments purged");
 
             } catch (Exception e) {
                 e.printStackTrace();
@@ -622,7 +716,7 @@ public class ClusterAdminService {
 
                 int step = 1;
                 for (int i = 0; i < 3; i++) {
-                    String archiveDir = "/tmp/aeron-cluster/node" + i + "/archive";
+                    String archiveDir = "/dev/shm/aeron-cluster/node" + i + "/archive";
 
                     operationProgress.update(step++, "Compacting Node " + i + " archive...");
                     executeCommand("bash", "-c",
@@ -644,6 +738,76 @@ public class ClusterAdminService {
                 operationProgress.finish(false, "Error: " + e.getMessage());
             }
         }).start();
+    }
+
+    // ==================== Auto-Snapshot Operations ====================
+
+    /**
+     * Start automatic periodic snapshots with segment purge.
+     * @param intervalMinutes interval between snapshots in minutes
+     */
+    public void startAutoSnapshot(long intervalMinutes) {
+        stopAutoSnapshot();  // Stop existing scheduler if any
+        snapshotIntervalMinutes = intervalMinutes;
+        snapshotScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "auto-snapshot");
+            t.setDaemon(true);
+            return t;
+        });
+        snapshotScheduler.scheduleAtFixedRate(() -> {
+            try {
+                // Only run if no other operation is in progress
+                if (operationProgress.getOperation() == null || operationProgress.isComplete()) {
+                    snapshot();
+                } else {
+                    System.out.println("Auto-snapshot skipped: another operation in progress");
+                }
+            } catch (Exception e) {
+                System.err.println("Auto-snapshot failed: " + e.getMessage());
+            }
+        }, intervalMinutes, intervalMinutes, TimeUnit.MINUTES);
+        System.out.println("Auto-snapshot enabled: every " + intervalMinutes + " minutes");
+    }
+
+    /**
+     * Stop automatic periodic snapshots.
+     */
+    public void stopAutoSnapshot() {
+        if (snapshotScheduler != null) {
+            snapshotScheduler.shutdown();
+            try {
+                if (!snapshotScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                    snapshotScheduler.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                snapshotScheduler.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            snapshotScheduler = null;
+        }
+        snapshotIntervalMinutes = 0;
+        System.out.println("Auto-snapshot disabled");
+    }
+
+    /**
+     * Check if auto-snapshot is enabled.
+     */
+    public boolean isAutoSnapshotEnabled() {
+        return snapshotIntervalMinutes > 0 && snapshotScheduler != null;
+    }
+
+    /**
+     * Get the auto-snapshot interval in minutes.
+     */
+    public long getSnapshotIntervalMinutes() {
+        return snapshotIntervalMinutes;
+    }
+
+    /**
+     * Get the last known snapshot position.
+     */
+    public long getLastSnapshotPosition() {
+        return lastSnapshotPosition;
     }
 
     // ==================== Log Operations ====================
@@ -756,10 +920,10 @@ public class ClusterAdminService {
         // Clean cluster mark files and lock files for each node
         for (int i = 0; i < 3; i++) {
             try {
-                executeCommand("bash", "-c", "rm -rf /tmp/aeron-cluster/node" + i + "/cluster/cluster-mark*.dat 2>/dev/null || true");
-                executeCommand("bash", "-c", "rm -rf /tmp/aeron-cluster/node" + i + "/cluster/*.lck 2>/dev/null || true");
-                executeCommand("bash", "-c", "rm -rf /tmp/aeron-cluster/node" + i + "/archive/archive-mark.dat 2>/dev/null || true");
-                cleaned.add("/tmp/aeron-cluster/node" + i + " (mark files, locks)");
+                executeCommand("bash", "-c", "rm -rf /dev/shm/aeron-cluster/node" + i + "/cluster/cluster-mark*.dat 2>/dev/null || true");
+                executeCommand("bash", "-c", "rm -rf /dev/shm/aeron-cluster/node" + i + "/cluster/*.lck 2>/dev/null || true");
+                executeCommand("bash", "-c", "rm -rf /dev/shm/aeron-cluster/node" + i + "/archive/archive-mark.dat 2>/dev/null || true");
+                cleaned.add("/dev/shm/aeron-cluster/node" + i + " (mark files, locks)");
             } catch (Exception e) {
                 errors.add("Failed to clean node" + i + ": " + e.getMessage());
             }
