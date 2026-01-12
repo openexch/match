@@ -27,6 +27,7 @@ export default defineConfig({
   },
   preview: {
     port: 80,
+    allowedHosts: ['trade.initex.io', 'localhost'],
     proxy: {
       '/ws': {
         target: 'ws://localhost:8081',

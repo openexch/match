@@ -39,8 +39,12 @@ export function useWebSocket({ marketId, onMessage, onReconnecting, onReconnecte
   const marketIdRef = useRef(marketId);
 
   const getWebSocketUrl = useCallback(() => {
+    // Use environment variable if set (for cloudflared deployment)
+    if (import.meta.env.VITE_MARKET_WS_URL) {
+      return `${import.meta.env.VITE_MARKET_WS_URL}/ws`;
+    }
+    // Fallback to localhost for development
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // WebSocket runs on port 8081
     const host = window.location.hostname;
     return `${protocol}//${host}:8081/ws`;
   }, []);
