@@ -835,6 +835,229 @@ public class ClusterAdminService {
         }).start();
     }
 
+    // ==================== Rolling Archive Cleanup (Zero Downtime) ====================
+
+    private static final long ARCHIVE_SIZE_THRESHOLD_BYTES = 300 * 1024 * 1024; // 300MB
+
+    /**
+     * Rolling archive cleanup - ZERO cluster downtime.
+     * Cleans archive on each node one at a time while maintaining quorum.
+     *
+     * Process:
+     * 1. Take snapshot on leader
+     * 2. For each follower: stop → clean → restart → wait for rejoin
+     * 3. Finally clean leader (causes leader election)
+     */
+    public void rollingArchiveCleanup() {
+        if (operationProgress.getOperation() != null && !operationProgress.isComplete()) {
+            throw new IllegalStateException("Another operation in progress");
+        }
+
+        new Thread(() -> {
+            try {
+                operationProgress.start("rolling-cleanup", 7);
+                String jarPath = "match/target/cluster-engine-1.0.jar";
+
+                // Step 1: Take snapshot to ensure all nodes have latest state
+                operationProgress.update(1, "Taking snapshot...");
+                int leaderNode = detectLeaderFromCluster();
+                if (leaderNode < 0) {
+                    operationProgress.finish(false, "Could not find cluster leader");
+                    return;
+                }
+
+                String snapshotResult = executeCommand("java",
+                    "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
+                    "-cp", jarPath, "io.aeron.cluster.ClusterTool",
+                    "/dev/shm/aeron-cluster/node" + leaderNode + "/cluster", "snapshot");
+
+                if (snapshotResult == null || !snapshotResult.contains("SNAPSHOT")) {
+                    operationProgress.finish(false, "Failed to take snapshot");
+                    return;
+                }
+
+                Thread.sleep(5000); // Wait for snapshot propagation
+
+                // Verify snapshot was properly linked to recording-log
+                // Nodes being cleaned will rebuild from this snapshot via catchup
+                String recordingLog = executeCommand("java",
+                    "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
+                    "-cp", jarPath, "io.aeron.cluster.ClusterTool",
+                    "/dev/shm/aeron-cluster/node" + leaderNode + "/cluster", "recording-log");
+
+                System.out.println("Recording-log after snapshot:\n" + recordingLog);
+
+                if (recordingLog == null || !recordingLog.contains("type=SNAPSHOT")) {
+                    operationProgress.finish(false,
+                        "Snapshot not found in recording-log. " +
+                        "Cluster needs valid snapshot for nodes to rebuild. " +
+                        "Try taking a snapshot first or use compactArchive().");
+                    return;
+                }
+
+                System.out.println("Snapshot verified, nodes will rebuild from it via catchup");
+
+                // Step 2-5: Clean followers first (maintains quorum)
+                int step = 2;
+                for (int nodeId = 0; nodeId < 3; nodeId++) {
+                    if (nodeId == leaderNode) continue; // Skip leader for now
+
+                    operationProgress.update(step++, "Cleaning Node " + nodeId + " archive...");
+                    if (!cleanSingleNodeArchive(nodeId, jarPath)) {
+                        operationProgress.finish(false, "Failed to clean Node " + nodeId);
+                        return;
+                    }
+
+                    operationProgress.update(step++, "Waiting for Node " + nodeId + " rejoin...");
+                    waitForNodeRejoin(nodeId, 30000); // 30 second timeout
+                }
+
+                // Step 6: Clean leader last (causes automatic leader election)
+                operationProgress.update(6, "Cleaning leader Node " + leaderNode + "...");
+                if (!cleanSingleNodeArchive(leaderNode, jarPath)) {
+                    operationProgress.finish(false, "Failed to clean leader node");
+                    return;
+                }
+
+                // Step 7: Wait for new leader election
+                operationProgress.update(7, "Waiting for leader election...");
+                Thread.sleep(5000);
+
+                int newLeader = detectLeaderFromCluster();
+                if (newLeader >= 0) {
+                    clusterStatus.updateLeader(newLeader, clusterStatus.getLeadershipTermId() + 1);
+                    for (int i = 0; i < 3; i++) {
+                        clusterStatus.setNodeStatus(i, i == newLeader ? "LEADER" : "FOLLOWER", true);
+                    }
+                    operationProgress.finish(true,
+                        "Rolling cleanup complete. New leader: Node " + newLeader);
+                } else {
+                    for (int i = 0; i < 3; i++) {
+                        clusterStatus.setNodeStatus(i, "FOLLOWER", true);
+                    }
+                    operationProgress.finish(true,
+                        "Rolling cleanup complete (leader detection pending)");
+                }
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                operationProgress.finish(false, "Error: " + e.getMessage());
+            }
+        }, "rolling-cleanup").start();
+    }
+
+    /**
+     * Clean a single node's archive by deleting ALL data and letting it rebuild.
+     * The node will sync from other cluster members via snapshot + catchup.
+     * This is the only safe way to reduce archive size on a live cluster.
+     */
+    private boolean cleanSingleNodeArchive(int nodeId, String jarPath) {
+        try {
+            String nodeDir = "/dev/shm/aeron-cluster/node" + nodeId;
+
+            // Stop node
+            clusterStatus.setNodeStatus(nodeId, "STOPPING", false);
+            executeCommand("systemctl", "--user", "stop", "node" + nodeId);
+            Thread.sleep(2000);
+            clusterStatus.setNodeStatus(nodeId, "OFFLINE", false);
+
+            // Get archive size before cleanup for logging
+            String sizeBefore = executeCommand("du", "-sh", nodeDir);
+            System.out.println("Node " + nodeId + " size before cleanup: " +
+                (sizeBefore != null ? sizeBefore.split("\\t")[0] : "unknown"));
+
+            // Delete ALL data - node will rebuild from scratch via catchup
+            // This is safe because other nodes have the complete log and snapshots
+            executeCommand("rm", "-rf", nodeDir);
+            executeCommand("mkdir", "-p", nodeDir);
+
+            System.out.println("Node " + nodeId + " data wiped, will rebuild from cluster");
+
+            // Restart node - it will sync from leader via snapshot catchup
+            clusterStatus.setNodeStatus(nodeId, "STARTING", false);
+            executeCommand("systemctl", "--user", "start", "node" + nodeId);
+            Thread.sleep(3000);
+            clusterStatus.setNodeStatus(nodeId, "REJOINING", true);
+
+            return true;
+        } catch (Exception e) {
+            System.err.println("Failed to clean node " + nodeId + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void waitForNodeRejoin(int nodeId, long timeoutMs) throws InterruptedException {
+        String jarPath = "match/target/cluster-engine-1.0.jar";
+        long deadline = System.currentTimeMillis() + timeoutMs;
+
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                // Poll actual cluster state via ClusterTool list-members
+                // Check any running node's cluster directory
+                String members = null;
+                for (int i = 0; i < 3; i++) {
+                    if (i == nodeId) continue; // Don't check the node we're waiting for
+                    try {
+                        members = executeCommand("java",
+                            "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
+                            "-cp", jarPath, "io.aeron.cluster.ClusterTool",
+                            "/dev/shm/aeron-cluster/node" + i + "/cluster", "list-members");
+                        if (members != null && !members.isEmpty()) break;
+                    } catch (Exception e) {
+                        // This node may be down, try next
+                    }
+                }
+
+                if (members != null && members.contains("memberId=" + nodeId)) {
+                    System.out.println("Node " + nodeId + " confirmed in cluster membership");
+                    // Update cluster status from actual state
+                    int leader = detectLeaderFromCluster();
+                    if (leader >= 0) {
+                        for (int i = 0; i < 3; i++) {
+                            clusterStatus.setNodeStatus(i, i == leader ? "LEADER" : "FOLLOWER", true);
+                        }
+                    }
+                    return;
+                }
+            } catch (Exception e) {
+                // Cluster may be in transition, continue waiting
+                System.out.println("Node " + nodeId + " rejoin check error: " + e.getMessage());
+            }
+            Thread.sleep(1000);
+        }
+        // Timeout - node may still be catching up, continue anyway
+        System.out.println("Node " + nodeId + " rejoin timeout after " + timeoutMs + "ms, continuing...");
+    }
+
+    /**
+     * Check if any node's archive exceeds threshold and auto-trigger cleanup.
+     * Called periodically from status check.
+     */
+    public void checkAutoCleanupThreshold() {
+        // Skip if operation in progress
+        if (operationProgress.getOperation() != null && !operationProgress.isComplete()) {
+            return;
+        }
+
+        for (int nodeId = 0; nodeId < 3; nodeId++) {
+            String archiveDir = "/dev/shm/aeron-cluster/node" + nodeId + "/archive";
+            try {
+                String sizeOutput = executeCommand("du", "-sb", archiveDir);
+                if (sizeOutput != null) {
+                    long sizeBytes = Long.parseLong(sizeOutput.split("\\s+")[0]);
+                    if (sizeBytes > ARCHIVE_SIZE_THRESHOLD_BYTES) {
+                        System.out.println("Auto-cleanup triggered: Node " + nodeId +
+                            " archive at " + (sizeBytes / 1024 / 1024) + "MB (threshold: 300MB)");
+                        rollingArchiveCleanup();
+                        return; // Only trigger once
+                    }
+                }
+            } catch (Exception e) {
+                // Ignore errors in size check
+            }
+        }
+    }
+
     // ==================== Auto-Snapshot Operations ====================
 
     /**

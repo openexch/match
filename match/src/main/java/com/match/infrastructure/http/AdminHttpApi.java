@@ -51,6 +51,7 @@ public class AdminHttpApi {
         server.createContext("/api/admin/snapshot", this::handleSnapshot);
         server.createContext("/api/admin/compact", this::handleCompact);
         server.createContext("/api/admin/compact-archive", this::handleCompactArchive);
+        server.createContext("/api/admin/rolling-cleanup", this::handleRollingCleanup);
         server.createContext("/api/admin/auto-snapshot", this::handleAutoSnapshot);
         server.createContext("/api/admin/progress", this::handleProgress);
         server.createContext("/api/admin/logs", this::handleLogs);
@@ -311,6 +312,28 @@ public class AdminHttpApi {
             sendJsonResponse(exchange, 202, Map.of(
                 "message", "Full archive compaction initiated",
                 "warning", "This operation requires brief cluster downtime"
+            ));
+        } catch (IllegalStateException e) {
+            sendJsonResponse(exchange, 409, Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Rolling archive cleanup - ZERO cluster downtime.
+     * Cleans archive on each node one at a time while maintaining quorum.
+     * POST: Initiate rolling archive cleanup
+     */
+    private void handleRollingCleanup(HttpExchange exchange) throws IOException {
+        setCorsHeaders(exchange);
+        if (handleCorsPreFlight(exchange)) return;
+
+        if (!requirePost(exchange)) return;
+
+        try {
+            adminService.rollingArchiveCleanup();
+            sendJsonResponse(exchange, 202, Map.of(
+                "message", "Rolling archive cleanup initiated",
+                "info", "Cluster remains operational throughout"
             ));
         } catch (IllegalStateException e) {
             sendJsonResponse(exchange, 409, Map.of("error", e.getMessage()));

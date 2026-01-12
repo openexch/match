@@ -53,7 +53,7 @@ type ConfirmAction = {
         'stop-backup' | 'restart-backup' | 'start-backup' |
         'stop-market-gateway' | 'restart-market-gateway' | 'start-market-gateway' |
         'stop-order-gateway' | 'restart-order-gateway' | 'start-order-gateway' |
-        'rolling-update' | 'stop-all-nodes' | 'start-all-nodes' | 'cleanup';
+        'rolling-update' | 'rolling-cleanup' | 'stop-all-nodes' | 'start-all-nodes' | 'cleanup';
   nodeId?: number;
   title: string;
   message: string;
@@ -150,6 +150,13 @@ const Icons = {
       <line x1="6" y1="6" x2="18" y2="18"/>
     </svg>
   ),
+  archive: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="2" y="3" width="20" height="5" rx="1"/>
+      <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/>
+      <path d="M10 12h4"/>
+    </svg>
+  ),
 };
 
 function getClusterStatus(progress: OperationProgress | null, nodes: NodeStatus[]): {
@@ -162,6 +169,14 @@ function getClusterStatus(progress: OperationProgress | null, nodes: NodeStatus[
       status: 'updating',
       title: 'Rolling Update',
       detail: progress.status || 'Updating cluster...'
+    };
+  }
+
+  if (progress?.operation === 'rolling-cleanup' && !progress.complete) {
+    return {
+      status: 'updating',
+      title: 'Rolling Cleanup',
+      detail: progress.status || 'Cleaning archive...'
     };
   }
 
@@ -274,10 +289,11 @@ export function AdminPage() {
 
   useEffect(() => {
     if (progress?.operation && !progress.complete) {
+      // Fast polling (50ms) during active operations for accurate progress display
       statusPollRef.current = window.setInterval(() => {
         fetchStatus();
         fetchProgress();
-      }, 200);
+      }, 50);
     } else if (statusPollRef.current) {
       clearInterval(statusPollRef.current);
       statusPollRef.current = null;
@@ -564,6 +580,29 @@ export function AdminPage() {
     }
   };
 
+  const requestRollingCleanup = () => {
+    if (progress?.operation && !progress.complete) return;
+    setPendingAction({
+      type: 'rolling-cleanup',
+      title: 'Start Rolling Cleanup?',
+      message: 'This will clean archive segments on each node one by one to free disk space. The cluster will remain available during the cleanup.',
+      confirmLabel: 'Start Cleanup',
+      confirmStyle: 'warning',
+    });
+  };
+
+  const executeRollingCleanup = async () => {
+    try {
+      const response = await fetch('/api/admin/rolling-cleanup', { method: 'POST' });
+      if (!response.ok) {
+        const data = await response.json();
+        setError(data.error || 'Rolling cleanup failed');
+      }
+    } catch {
+      setError('Failed to trigger rolling cleanup');
+    }
+  };
+
   const executeStopAllNodes = async () => {
     try {
       await fetch('/api/admin/stop-all-nodes', { method: 'POST' });
@@ -623,6 +662,9 @@ export function AdminPage() {
       case 'rolling-update':
         await executeRollingUpdate();
         break;
+      case 'rolling-cleanup':
+        await executeRollingCleanup();
+        break;
       case 'stop-all-nodes':
         await executeStopAllNodes();
         break;
@@ -677,8 +719,8 @@ export function AdminPage() {
   };
 
   const clusterStatus = getClusterStatus(progress, status?.nodes || []);
-  const isUpdating = progress?.operation === 'rolling-update' && !progress.complete;
-  const updateProgress = isUpdating ? (progress?.progress || 0) : 0;
+  const isOperationRunning = !!(progress?.operation && !progress.complete);
+  const operationProgress = isOperationRunning ? (progress?.progress || 0) : 0;
 
   return (
     <div className="admin-page">
@@ -705,7 +747,7 @@ export function AdminPage() {
         <div className="skeleton skeleton-status-bar" />
       ) : (
         <div className={`status-bar ${clusterStatus.status}`}>
-          <div className="status-bar-progress" style={{ width: `${updateProgress}%` }} />
+          <div className="status-bar-progress" style={{ width: `${operationProgress}%` }} />
           <div className="status-bar-content">
             <div className="status-info">
               <span className={`status-dot ${clusterStatus.status}`} />
@@ -714,19 +756,29 @@ export function AdminPage() {
                 <span className="status-detail">{clusterStatus.detail}</span>
               </div>
             </div>
-            {isUpdating ? (
+            {isOperationRunning ? (
               <div className="update-progress">
-                <span className="progress-text">{updateProgress}%</span>
+                <span className="progress-text">{operationProgress}%</span>
               </div>
             ) : (
-              <button
-                className="update-btn"
-                onClick={requestRollingUpdate}
-                disabled={!!(progress?.operation && !progress.complete)}
-              >
-                {Icons.update}
-                <span>Rolling Update</span>
-              </button>
+              <div className="status-bar-actions">
+                <button
+                  className="update-btn"
+                  onClick={requestRollingUpdate}
+                  disabled={isOperationRunning}
+                >
+                  {Icons.update}
+                  <span>Rolling Update</span>
+                </button>
+                <button
+                  className="cleanup-btn"
+                  onClick={requestRollingCleanup}
+                  disabled={isOperationRunning}
+                >
+                  {Icons.archive}
+                  <span>Rolling Cleanup</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -742,7 +794,7 @@ export function AdminPage() {
               <button
                 className="btn-bulk stop"
                 onClick={requestStopAllNodes}
-                disabled={isUpdating}
+                disabled={isOperationRunning}
                 title="Stop All Nodes"
               >
                 {Icons.stop}
@@ -751,7 +803,7 @@ export function AdminPage() {
               <button
                 className="btn-bulk start"
                 onClick={requestStartAllNodes}
-                disabled={isUpdating}
+                disabled={isOperationRunning}
                 title="Start All Nodes"
               >
                 {Icons.play}
@@ -760,7 +812,7 @@ export function AdminPage() {
               <button
                 className="btn-bulk cleanup"
                 onClick={requestCleanup}
-                disabled={isUpdating}
+                disabled={isOperationRunning}
                 title="Clean Aeron State"
               >
                 {Icons.restart}
@@ -798,15 +850,15 @@ export function AdminPage() {
                   <div className="node-actions">
                     {node.running && !isTransitioning ? (
                       <>
-                        <button className="btn-icon stop" onClick={() => requestStopNode(node.id)} disabled={isUpdating} title="Stop">
+                        <button className="btn-icon stop" onClick={() => requestStopNode(node.id)} disabled={isOperationRunning} title="Stop">
                           {Icons.stop}
                         </button>
-                        <button className="btn-icon restart" onClick={() => requestRestartNode(node.id)} disabled={isUpdating} title="Restart">
+                        <button className="btn-icon restart" onClick={() => requestRestartNode(node.id)} disabled={isOperationRunning} title="Restart">
                           {Icons.restart}
                         </button>
                       </>
                     ) : !node.running && !isTransitioning ? (
-                      <button className="btn-icon start" onClick={() => requestStartNode(node.id)} disabled={isUpdating} title="Start">
+                      <button className="btn-icon start" onClick={() => requestStartNode(node.id)} disabled={isOperationRunning} title="Start">
                         {Icons.play}
                       </button>
                     ) : null}
@@ -862,19 +914,19 @@ export function AdminPage() {
               <div className="service-actions">
                 {!serviceOps.backup && status?.backup.running ? (
                   <>
-                    <button className="btn-icon stop" onClick={requestStopBackup} disabled={isUpdating} title="Stop">{Icons.stop}</button>
-                    <button className="btn-icon restart" onClick={requestRestartBackup} disabled={isUpdating} title="Restart">{Icons.restart}</button>
+                    <button className="btn-icon stop" onClick={requestStopBackup} disabled={isOperationRunning} title="Stop">{Icons.stop}</button>
+                    <button className="btn-icon restart" onClick={requestRestartBackup} disabled={isOperationRunning} title="Restart">{Icons.restart}</button>
                     <button
                       className={`btn-icon snapshot ${serviceOps.snapshot ? 'active' : ''}`}
                       onClick={takeSnapshot}
-                      disabled={serviceOps.snapshot || isUpdating}
+                      disabled={serviceOps.snapshot || isOperationRunning}
                       title="Take Snapshot"
                     >
                       {Icons.snapshot}
                     </button>
                   </>
                 ) : !serviceOps.backup ? (
-                  <button className="btn-icon start" onClick={requestStartBackup} disabled={isUpdating} title="Start">{Icons.play}</button>
+                  <button className="btn-icon start" onClick={requestStartBackup} disabled={isOperationRunning} title="Start">{Icons.play}</button>
                 ) : null}
                 <button
                   className={`btn-icon logs ${isLogSelected({ type: 'service', name: 'backup' }) ? 'active' : ''}`}
@@ -901,11 +953,11 @@ export function AdminPage() {
               <div className="service-actions">
                 {!serviceOps.marketGateway && status?.gateways?.market?.running ? (
                   <>
-                    <button className="btn-icon stop" onClick={requestStopMarketGateway} disabled={isUpdating} title="Stop">{Icons.stop}</button>
-                    <button className="btn-icon restart" onClick={requestRestartMarketGateway} disabled={isUpdating} title="Restart">{Icons.restart}</button>
+                    <button className="btn-icon stop" onClick={requestStopMarketGateway} disabled={isOperationRunning} title="Stop">{Icons.stop}</button>
+                    <button className="btn-icon restart" onClick={requestRestartMarketGateway} disabled={isOperationRunning} title="Restart">{Icons.restart}</button>
                   </>
                 ) : !serviceOps.marketGateway ? (
-                  <button className="btn-icon start" onClick={requestStartMarketGateway} disabled={isUpdating} title="Start">{Icons.play}</button>
+                  <button className="btn-icon start" onClick={requestStartMarketGateway} disabled={isOperationRunning} title="Start">{Icons.play}</button>
                 ) : null}
                 <button
                   className={`btn-icon logs ${isLogSelected({ type: 'service', name: 'market-gateway' }) ? 'active' : ''}`}
@@ -932,11 +984,11 @@ export function AdminPage() {
               <div className="service-actions">
                 {!serviceOps.orderGateway && status?.gateways?.order?.running ? (
                   <>
-                    <button className="btn-icon stop" onClick={requestStopOrderGateway} disabled={isUpdating} title="Stop">{Icons.stop}</button>
-                    <button className="btn-icon restart" onClick={requestRestartOrderGateway} disabled={isUpdating} title="Restart">{Icons.restart}</button>
+                    <button className="btn-icon stop" onClick={requestStopOrderGateway} disabled={isOperationRunning} title="Stop">{Icons.stop}</button>
+                    <button className="btn-icon restart" onClick={requestRestartOrderGateway} disabled={isOperationRunning} title="Restart">{Icons.restart}</button>
                   </>
                 ) : !serviceOps.orderGateway ? (
-                  <button className="btn-icon start" onClick={requestStartOrderGateway} disabled={isUpdating} title="Start">{Icons.play}</button>
+                  <button className="btn-icon start" onClick={requestStartOrderGateway} disabled={isOperationRunning} title="Start">{Icons.play}</button>
                 ) : null}
                 <button
                   className={`btn-icon logs ${isLogSelected({ type: 'service', name: 'order-gateway' }) ? 'active' : ''}`}

@@ -381,16 +381,22 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onTakeSnapshot(final ExclusivePublication snapshotPublication) {
+        System.out.println("[SNAPSHOT] onTakeSnapshot called");
+
         final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();
         int pos = 0;
 
         // Write order ID generator
-        buffer.putLong(pos, engine.getOrderIdGenerator());
+        long orderId = engine.getOrderIdGenerator();
+        buffer.putLong(pos, orderId);
         pos += 8;
+        System.out.println("[SNAPSHOT] OrderIdGenerator: " + orderId);
 
         // Write trade ID generator (for event publisher)
-        buffer.putLong(pos, eventPublisher.getTradeIdGenerator());
+        long tradeId = eventPublisher.getTradeIdGenerator();
+        buffer.putLong(pos, tradeId);
         pos += 8;
+        System.out.println("[SNAPSHOT] TradeIdGenerator: " + tradeId);
 
         // Get all engines
         Int2ObjectHashMap<DirectMatchingEngine> engines = engine.getEngines();
@@ -398,6 +404,7 @@ public class AppClusteredService implements ClusteredService {
         // Write number of markets
         buffer.putInt(pos, engines.size());
         pos += 4;
+        System.out.println("[SNAPSHOT] Markets: " + engines.size());
 
         // Write each market's orders
         Int2ObjectHashMap<DirectMatchingEngine>.KeyIterator keyIt = engines.keySet().iterator();
@@ -429,11 +436,16 @@ public class AppClusteredService implements ClusteredService {
                 pos += 8;
             }
 
+            System.out.println("[SNAPSHOT] Market " + marketId + ": " + numBidOrders + " bids, " + numAskOrders + " asks");
         }
 
-        while (snapshotPublication.offer(buffer, 0, pos) < 0) {
+        System.out.println("[SNAPSHOT] Total buffer size: " + pos + " bytes");
+
+        long result;
+        while ((result = snapshotPublication.offer(buffer, 0, pos)) < 0) {
             cluster.idleStrategy().idle();
         }
+        System.out.println("[SNAPSHOT] Publication result: " + result + " (success)");
     }
 
     @Override
