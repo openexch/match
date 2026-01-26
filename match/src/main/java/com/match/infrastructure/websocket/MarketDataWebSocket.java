@@ -15,10 +15,13 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.websocketx.*;
+import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.GlobalEventExecutor;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static com.match.infrastructure.InfrastructureConstants.*;
 
@@ -30,8 +33,19 @@ import static com.match.infrastructure.InfrastructureConstants.*;
 public class MarketDataWebSocket implements AutoCloseable {
 
     private static final Gson gson = new Gson();
+    private static final Map<Integer, String> MARKET_NAMES = Map.of(
+        1, "BTC-USD",
+        2, "ETH-USD",
+        3, "SOL-USD"
+    );
+
+    // Attribute to store subscribed marketId per channel
+    private static final AttributeKey<Integer> SUBSCRIBED_MARKET =
+        AttributeKey.valueOf("subscribedMarket");
 
     private ChannelGroup channels;
+    // Per-market channel groups for efficient broadcasting
+    private final ConcurrentHashMap<Integer, ChannelGroup> marketChannels = new ConcurrentHashMap<>();
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
     private Channel serverChannel;
@@ -92,13 +106,55 @@ public class MarketDataWebSocket implements AutoCloseable {
     }
 
     /**
-     * Broadcast market data to all connected WebSocket clients.
+     * Broadcast market data to clients subscribed to the relevant market.
      * Called by GatewayStateManager after processing egress messages.
+     * Parses marketId from JSON to filter recipients.
      */
     public void broadcastMarketData(String jsonMessage) {
-        if (channels != null && !channels.isEmpty()) {
+        if (channels == null || channels.isEmpty()) {
+            return;
+        }
+
+        // Extract marketId from message for filtering
+        int marketId = extractMarketId(jsonMessage);
+
+        if (marketId > 0) {
+            // Send only to clients subscribed to this market
+            ChannelGroup group = marketChannels.get(marketId);
+            if (group != null && !group.isEmpty()) {
+                group.writeAndFlush(new TextWebSocketFrame(jsonMessage));
+            }
+        } else {
+            // Broadcast to all (e.g., cluster status messages)
             channels.writeAndFlush(new TextWebSocketFrame(jsonMessage));
         }
+    }
+
+    /**
+     * Extract marketId from JSON message for routing.
+     * Returns 0 if not found (message goes to all clients).
+     */
+    private int extractMarketId(String json) {
+        try {
+            // Quick parse - look for "marketId": pattern
+            int idx = json.indexOf("\"marketId\":");
+            if (idx == -1) {
+                idx = json.indexOf("\"marketId\" :");
+            }
+            if (idx >= 0) {
+                int start = idx + (json.charAt(idx + 10) == ' ' ? 12 : 11);
+                int end = start;
+                while (end < json.length() && Character.isDigit(json.charAt(end))) {
+                    end++;
+                }
+                if (end > start) {
+                    return Integer.parseInt(json.substring(start, end));
+                }
+            }
+        } catch (Exception e) {
+            // Ignore parse errors - will broadcast to all
+        }
+        return 0;
     }
 
     // ==================== WebSocket Handler ====================
@@ -113,7 +169,33 @@ public class MarketDataWebSocket implements AutoCloseable {
 
         @Override
         public void handlerRemoved(ChannelHandlerContext ctx) {
-            channels.remove(ctx.channel());
+            Channel channel = ctx.channel();
+            channels.remove(channel);
+            // Remove from market-specific group
+            Integer oldMarketId = channel.attr(SUBSCRIBED_MARKET).get();
+            if (oldMarketId != null) {
+                ChannelGroup oldGroup = marketChannels.get(oldMarketId);
+                if (oldGroup != null) {
+                    oldGroup.remove(channel);
+                }
+            }
+        }
+
+        private void subscribeToMarket(Channel channel, int marketId) {
+            // Remove from previous market group if switching
+            Integer oldMarketId = channel.attr(SUBSCRIBED_MARKET).get();
+            if (oldMarketId != null && oldMarketId != marketId) {
+                ChannelGroup oldGroup = marketChannels.get(oldMarketId);
+                if (oldGroup != null) {
+                    oldGroup.remove(channel);
+                }
+            }
+
+            // Add to new market group
+            channel.attr(SUBSCRIBED_MARKET).set(marketId);
+            ChannelGroup group = marketChannels.computeIfAbsent(marketId,
+                k -> new DefaultChannelGroup(GlobalEventExecutor.INSTANCE));
+            group.add(channel);
         }
 
         @Override
@@ -127,16 +209,27 @@ public class MarketDataWebSocket implements AutoCloseable {
 
                     if ("subscribe".equals(action)) {
                         // Client wants to subscribe to a market
+                        int marketId = msg.containsKey("marketId")
+                            ? ((Number) msg.get("marketId")).intValue() : 1;
+
+                        // Track subscription for filtered broadcasting
+                        subscribeToMarket(ctx.channel(), marketId);
+
                         Map<String, Object> response = new HashMap<>();
                         response.put("type", "SUBSCRIPTION_CONFIRMED");
-                        response.put("marketId", msg.get("marketId"));
+                        response.put("marketId", marketId);
                         ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(response)));
 
-                        // Send initial state from state manager
-                        sendInitialState(ctx);
+                        // Send ticker stats for this market
+                        sendTickerStats(ctx, marketId);
+
+                        // Send initial state from state manager (only if matches requested market)
+                        sendInitialState(ctx, marketId);
                     } else if ("refresh".equals(action)) {
                         // Client requesting state refresh (after reconnect)
-                        sendInitialState(ctx);
+                        int refreshMarketId = msg.containsKey("marketId")
+                            ? ((Number) msg.get("marketId")).intValue() : 0;
+                        sendInitialState(ctx, refreshMarketId);
                     } else if ("ping".equals(action)) {
                         Map<String, Object> pong = new HashMap<>();
                         pong.put("type", "PONG");
@@ -149,11 +242,15 @@ public class MarketDataWebSocket implements AutoCloseable {
                         response.put("marketId", msg.get("marketId"));
                         ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(response)));
                     } else if ("getOrderBook".equals(action)) {
-                        // Query: return current order book
+                        // Query: return order book for specified market
                         if (stateManager != null) {
-                            String json = stateManager.getOrderBook().toJson();
-                            if (json != null) {
-                                ctx.writeAndFlush(new TextWebSocketFrame(json));
+                            int queryMarketId = msg.containsKey("marketId")
+                                ? ((Number) msg.get("marketId")).intValue() : 1;
+                            var book = stateManager.getOrderBook(queryMarketId);
+                            if (book != null && book.hasData()) {
+                                ctx.writeAndFlush(new TextWebSocketFrame(book.toJson()));
+                            } else {
+                                ctx.writeAndFlush(new TextWebSocketFrame(buildEmptyBookSnapshot(queryMarketId)));
                             }
                         }
                     } else if ("getTrades".equals(action)) {
@@ -164,13 +261,6 @@ public class MarketDataWebSocket implements AutoCloseable {
                                 limit = ((Number) msg.get("limit")).intValue();
                             }
                             String json = stateManager.getTrades().toJson(limit);
-                            ctx.writeAndFlush(new TextWebSocketFrame(json));
-                        }
-                    } else if ("getOrders".equals(action)) {
-                        // Query: return open orders for user
-                        if (stateManager != null && msg.containsKey("userId")) {
-                            long userId = ((Number) msg.get("userId")).longValue();
-                            String json = stateManager.getOpenOrders().toJson(userId);
                             ctx.writeAndFlush(new TextWebSocketFrame(json));
                         }
                     }
@@ -185,17 +275,38 @@ public class MarketDataWebSocket implements AutoCloseable {
             }
         }
 
-        private void sendInitialState(ChannelHandlerContext ctx) {
+        private void sendTickerStats(ChannelHandlerContext ctx, int marketId) {
             if (stateManager != null) {
-                // Send order book snapshot
-                String bookJson = stateManager.getOrderBook().toJson();
-                if (bookJson != null) {
-                    ctx.write(new TextWebSocketFrame(bookJson));
+                String tickerJson = stateManager.getTickerStats(marketId);
+                if (tickerJson != null) {
+                    ctx.writeAndFlush(new TextWebSocketFrame(tickerJson));
+                }
+            }
+        }
+
+        private void sendInitialState(ChannelHandlerContext ctx, int requestedMarketId) {
+            if (stateManager != null && requestedMarketId > 0) {
+                // Get order book for the requested market
+                var book = stateManager.getOrderBook(requestedMarketId);
+                System.out.println("[WS] sendInitialState: requestedMarketId=" + requestedMarketId +
+                    ", book=" + (book != null ? "exists, hasData=" + book.hasData() : "null"));
+
+                if (book != null && book.hasData()) {
+                    // Send cached book for this market
+                    String bookJson = book.toJson();
+                    if (bookJson != null) {
+                        System.out.println("[WS] Sending cached book for market " + requestedMarketId);
+                        ctx.write(new TextWebSocketFrame(bookJson));
+                    }
+                } else {
+                    // No data for this market yet - send empty book
+                    System.out.println("[WS] Sending EMPTY book for market " + requestedMarketId);
+                    ctx.write(new TextWebSocketFrame(buildEmptyBookSnapshot(requestedMarketId)));
                 }
 
-                // Send recent trades (last 50)
+                // Send recent trades (last 20)
                 if (stateManager.getTrades().hasData()) {
-                    String tradesJson = stateManager.getTrades().toJson(50);
+                    String tradesJson = stateManager.getTrades().toJson(20);
                     ctx.write(new TextWebSocketFrame(tradesJson));
                 }
 
@@ -206,6 +317,20 @@ public class MarketDataWebSocket implements AutoCloseable {
                 response.put("message", "State not yet available, waiting for cluster update");
                 ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(response)));
             }
+        }
+
+        private String buildEmptyBookSnapshot(int marketId) {
+            Map<String, Object> book = new HashMap<>();
+            book.put("type", "BOOK_SNAPSHOT");
+            book.put("marketId", marketId);
+            book.put("market", MARKET_NAMES.getOrDefault(marketId, "UNKNOWN"));
+            book.put("timestamp", System.currentTimeMillis());
+            book.put("bidVersion", 0);
+            book.put("askVersion", 0);
+            book.put("version", 0);
+            book.put("bids", new ArrayList<>());
+            book.put("asks", new ArrayList<>());
+            return gson.toJson(book);
         }
 
         @Override

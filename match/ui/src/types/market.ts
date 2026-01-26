@@ -10,6 +10,8 @@ export const MARKETS: Market[] = [
   { id: 1, symbol: 'BTC-USD', baseAsset: 'BTC', quoteAsset: 'USD' },
   { id: 2, symbol: 'ETH-USD', baseAsset: 'ETH', quoteAsset: 'USD' },
   { id: 3, symbol: 'SOL-USD', baseAsset: 'SOL', quoteAsset: 'USD' },
+  { id: 4, symbol: 'XRP-USD', baseAsset: 'XRP', quoteAsset: 'USD' },
+  { id: 5, symbol: 'DOGE-USD', baseAsset: 'DOGE', quoteAsset: 'USD' },
 ];
 
 export interface BookLevel {
@@ -58,6 +60,24 @@ export interface BookSnapshotMessage {
   version?: number;
 }
 
+export interface BookDeltaChange {
+  price: number;
+  quantity: number;
+  orderCount: number;
+  side: 'BID' | 'ASK';
+  updateType: 'NEW_LEVEL' | 'UPDATE_LEVEL' | 'DELETE_LEVEL';
+}
+
+export interface BookDeltaMessage {
+  type: 'BOOK_DELTA';
+  marketId: number;
+  market: string;
+  changes: BookDeltaChange[];
+  bidVersion: number;
+  askVersion: number;
+  timestamp: number;
+}
+
 export interface OrderStatusMessage {
   type?: 'ORDER_STATUS';
   marketId?: number;
@@ -95,6 +115,19 @@ export interface PongMessage {
 export interface ErrorMessage {
   type: 'ERROR';
   message: string;
+}
+
+export interface TickerStatsMessage {
+  type: 'TICKER_STATS';
+  marketId: number;
+  market: string;
+  lastPrice: number;
+  priceChange: number;
+  priceChangePercent: number;
+  high24h: number;
+  low24h: number;
+  volume24h: number;
+  timestamp: number;
 }
 
 // Cluster status types - includes transitional states during rolling updates
@@ -149,11 +182,13 @@ export type ExtendedConnectionStatus =
 export type WebSocketMessage =
   | TradesBatchMessage
   | BookSnapshotMessage
+  | BookDeltaMessage
   | OrderStatusMessage
   | OrderStatusBatchMessage
   | SubscriptionConfirmMessage
   | PongMessage
   | ErrorMessage
+  | TickerStatsMessage
   | ClusterStatusMessage
   | ClusterEventMessage;
 

@@ -148,8 +148,120 @@ public class GatewayOrderBook {
     // Getters for direct access (use with caution - prefer toJson())
     public int getBidCount() { return bidCount; }
     public int getAskCount() { return askCount; }
+    public int getMarketId() { return marketId; }
     public double getBidPrice(int i) { return bidPrices[i]; }
     public double getAskPrice(int i) { return askPrices[i]; }
     public double getBidQuantity(int i) { return bidQuantities[i]; }
     public double getAskQuantity(int i) { return askQuantities[i]; }
+
+    /**
+     * Apply a single delta change to the order book.
+     * Called for each change in a BOOK_DELTA message.
+     */
+    public void applyDelta(String side, double price, double quantity, int orderCount, String updateType) {
+        long stamp = lock.writeLock();
+        try {
+            if ("BID".equals(side)) {
+                applyDeltaToSide(bidPrices, bidQuantities, bidOrderCounts, price, quantity, orderCount, updateType, true);
+            } else {
+                applyDeltaToSide(askPrices, askQuantities, askOrderCounts, price, quantity, orderCount, updateType, false);
+            }
+        } finally {
+            lock.unlockWrite(stamp);
+        }
+    }
+
+    private void applyDeltaToSide(double[] prices, double[] quantities, int[] orderCounts,
+                                  double price, double quantity, int orderCount,
+                                  String updateType, boolean isBid) {
+        int count = isBid ? bidCount : askCount;
+
+        if ("DELETE_LEVEL".equals(updateType)) {
+            // Find and remove the level
+            int idx = findPriceIndex(prices, count, price);
+            if (idx >= 0) {
+                // Shift remaining elements
+                for (int i = idx; i < count - 1; i++) {
+                    prices[i] = prices[i + 1];
+                    quantities[i] = quantities[i + 1];
+                    orderCounts[i] = orderCounts[i + 1];
+                }
+                if (isBid) bidCount--; else askCount--;
+            }
+        } else if ("UPDATE_LEVEL".equals(updateType)) {
+            // Find and update the level
+            int idx = findPriceIndex(prices, count, price);
+            if (idx >= 0) {
+                quantities[idx] = quantity;
+                orderCounts[idx] = orderCount;
+            }
+        } else { // NEW_LEVEL
+            // Insert at correct position to maintain sort order
+            if (count >= MAX_LEVELS) {
+                // Check if this level should be in the top 20
+                // Bids: descending (higher prices first)
+                // Asks: ascending (lower prices first)
+                boolean shouldInsert = isBid
+                    ? price > prices[count - 1]  // Higher than lowest bid
+                    : price < prices[count - 1]; // Lower than highest ask
+                if (!shouldInsert) return;
+                count--; // Will replace last level
+            }
+
+            // Find insertion point
+            int insertIdx = 0;
+            for (int i = 0; i < count; i++) {
+                boolean shouldInsertBefore = isBid
+                    ? price > prices[i]  // Bids: insert before smaller prices
+                    : price < prices[i]; // Asks: insert before larger prices
+                if (shouldInsertBefore) {
+                    insertIdx = i;
+                    break;
+                }
+                insertIdx = i + 1;
+            }
+
+            // Shift elements to make room
+            for (int i = Math.min(count, MAX_LEVELS - 1); i > insertIdx; i--) {
+                prices[i] = prices[i - 1];
+                quantities[i] = quantities[i - 1];
+                orderCounts[i] = orderCounts[i - 1];
+            }
+
+            // Insert new level
+            prices[insertIdx] = price;
+            quantities[insertIdx] = quantity;
+            orderCounts[insertIdx] = orderCount;
+
+            if (isBid && bidCount < MAX_LEVELS) bidCount++;
+            else if (!isBid && askCount < MAX_LEVELS) askCount++;
+        }
+    }
+
+    private int findPriceIndex(double[] prices, int count, double price) {
+        for (int i = 0; i < count; i++) {
+            if (Math.abs(prices[i] - price) < 0.0000001) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Update versions and regenerate cached JSON after delta processing.
+     */
+    public void updateVersions(int marketId, String marketName, long bidVersion, long askVersion, long timestamp) {
+        long stamp = lock.writeLock();
+        try {
+            this.marketId = marketId;
+            this.marketName = marketName;
+            this.bidVersion = bidVersion;
+            this.askVersion = askVersion;
+            this.version = Math.max(bidVersion, askVersion);
+            this.lastUpdateMs = timestamp;
+            this.cachedJson = buildJson();
+        } finally {
+            lock.unlockWrite(stamp);
+        }
+    }
 }

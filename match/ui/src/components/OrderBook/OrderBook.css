@@ -253,6 +253,47 @@
   border-radius: 2px;
 }
 
+/* Animation Keyframes */
+@keyframes level-flash {
+  0% { background: rgba(240, 185, 11, 0.35); }
+  100% { background: transparent; }
+}
+
+@keyframes level-new-bid {
+  0% {
+    background: rgba(14, 203, 129, 0.25);
+    transform: scaleY(1.05);
+  }
+  100% {
+    background: transparent;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes level-new-ask {
+  0% {
+    background: rgba(246, 70, 93, 0.25);
+    transform: scaleY(1.05);
+  }
+  100% {
+    background: transparent;
+    transform: scaleY(1);
+  }
+}
+
+/* Animation Classes */
+.book-row.flash {
+  animation: level-flash 0.5s ease-out;
+}
+
+.book-row.new-bid {
+  animation: level-new-bid 0.4s ease-out;
+}
+
+.book-row.new-ask {
+  animation: level-new-ask 0.4s ease-out;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .book-sides {

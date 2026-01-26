@@ -114,6 +114,18 @@ public class ClusterAdminService {
                     node.put("role", isTransitional ? trackedStatus : "OFFLINE");
                 }
             }
+
+            // Add per-node position and archive data
+            long logPos = getLogPositionForNode(i);
+            long snapPos = getLatestSnapshotPosition(i);
+            long archiveSize = getArchiveSizeForNode(i);
+            long archiveDiskSize = getArchiveDiskUsageForNode(i);
+
+            if (logPos >= 0) node.put("logPosition", logPos);
+            if (snapPos >= 0) node.put("snapshotPosition", snapPos);
+            if (archiveSize >= 0) node.put("archiveBytes", archiveSize);
+            if (archiveDiskSize >= 0) node.put("archiveDiskBytes", archiveDiskSize);
+
             nodes.add(node);
         }
         status.put("nodes", nodes);
@@ -161,22 +173,7 @@ public class ClusterAdminService {
         gateway.put("port", 8080);
         status.put("gateway", gateway);
 
-        // Archive size
-        try {
-            String result = executeCommand("du", "-sb", "--apparent-size", "/dev/shm/aeron-cluster/");
-            String[] parts = result.trim().split("\t");
-            if (parts.length > 0) {
-                status.put("archiveBytes", Long.parseLong(parts[0]));
-            }
-            result = executeCommand("du", "-s", "/dev/shm/aeron-cluster/");
-            parts = result.trim().split("\t");
-            if (parts.length > 0) {
-                status.put("archiveDiskBytes", Long.parseLong(parts[0]) * 1024);
-            }
-        } catch (Exception e) {
-            status.put("archiveBytes", 0);
-            status.put("archiveDiskBytes", 0);
-        }
+        // Note: Archive size is now per-node (included in each node object above)
 
         // Auto-snapshot status
         Map<String, Object> autoSnapshot = new HashMap<>();
@@ -206,6 +203,81 @@ public class ClusterAdminService {
             } catch (Exception ignored) {
                 // Try next node
             }
+        }
+        return -1;
+    }
+
+    /**
+     * Get the current log position for a node using ClusterTool recording-log.
+     * Returns the highest logPosition from any entry type (LOG, SNAPSHOT, TERM).
+     * Returns -1 if parse error or node not available.
+     */
+    private long getLogPositionForNode(int nodeId) {
+        try {
+            String jarPath = "match/target/cluster-engine-1.0.jar";
+            String clusterDir = "/dev/shm/aeron-cluster/node" + nodeId + "/cluster";
+
+            String result = executeCommand("java",
+                "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
+                "-cp", jarPath, "io.aeron.cluster.ClusterTool",
+                clusterDir, "recording-log");
+
+            if (result != null) {
+                long maxPosition = -1;
+                String[] entries = result.split("Entry\\{");
+                for (String entry : entries) {
+                    if (entry.contains("logPosition=")) {
+                        try {
+                            String posStr = entry.split("logPosition=")[1].split(",")[0];
+                            long pos = Long.parseLong(posStr.trim());
+                            if (pos > maxPosition) {
+                                maxPosition = pos;
+                            }
+                        } catch (Exception ignored) {
+                            // Continue parsing other entries
+                        }
+                    }
+                }
+                return maxPosition;
+            }
+        } catch (Exception e) {
+            // Node may be offline or archive not available
+        }
+        return -1;
+    }
+
+    /**
+     * Get archive apparent size for a specific node in bytes.
+     * Returns -1 if node directory doesn't exist or error.
+     */
+    private long getArchiveSizeForNode(int nodeId) {
+        try {
+            String nodeDir = "/dev/shm/aeron-cluster/node" + nodeId;
+            String result = executeCommand("du", "-sb", "--apparent-size", nodeDir);
+            String[] parts = result.trim().split("\t");
+            if (parts.length > 0) {
+                return Long.parseLong(parts[0]);
+            }
+        } catch (Exception e) {
+            // Node directory may not exist
+        }
+        return -1;
+    }
+
+    /**
+     * Get archive disk usage for a specific node in bytes.
+     * Returns -1 if node directory doesn't exist or error.
+     */
+    private long getArchiveDiskUsageForNode(int nodeId) {
+        try {
+            String nodeDir = "/dev/shm/aeron-cluster/node" + nodeId;
+            String result = executeCommand("du", "-s", nodeDir);
+            String[] parts = result.trim().split("\t");
+            if (parts.length > 0) {
+                return Long.parseLong(parts[0]) * 1024; // Convert from KB to bytes
+            }
+        } catch (Exception e) {
+            // Node directory may not exist
         }
         return -1;
     }

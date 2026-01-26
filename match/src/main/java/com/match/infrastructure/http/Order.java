@@ -4,6 +4,8 @@ import com.match.domain.FixedPoint;
 import com.match.infrastructure.generated.OrderSide;
 import com.match.infrastructure.generated.OrderType;
 
+import java.util.Map;
+
 /**
  * Order received from HTTP JSON request.
  * Provides conversion methods for SBE encoding.
@@ -19,8 +21,14 @@ public class Order {
     double totalPrice;
     long timestamp;
 
-    // Market ID mapping
-    private static final int MARKET_BTC_USD = 1;
+    // Market symbol to ID mapping
+    private static final Map<String, Integer> MARKET_IDS = Map.of(
+        "BTC-USD", 1,
+        "ETH-USD", 2,
+        "SOL-USD", 3,
+        "XRP-USD", 4,
+        "DOGE-USD", 5
+    );
 
     public Order() {
     }
@@ -58,8 +66,7 @@ public class Order {
      * Convert market string to market ID
      */
     public int getMarketId() {
-        // Currently only BTC-USD is supported
-        return MARKET_BTC_USD;
+        return MARKET_IDS.getOrDefault(market, 0);
     }
 
     /**

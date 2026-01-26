@@ -8,6 +8,7 @@ import com.match.application.publisher.PublishEvent;
 import com.match.application.publisher.PublishEventType;
 import com.match.infrastructure.Logger;
 import com.match.infrastructure.generated.*;
+import com.match.infrastructure.generated.BookDeltaEncoder;
 
 import org.agrona.collections.Long2ObjectHashMap;
 import org.agrona.concurrent.UnsafeBuffer;
@@ -29,7 +30,7 @@ import java.util.concurrent.TimeUnit;
 public class MarketPublisher implements MarketEventHandler {
 
     private static final Logger logger = Logger.getLogger(MarketPublisher.class);
-    private static final long FLUSH_INTERVAL_MS = 50;
+    private static final long FLUSH_INTERVAL_MS = 20;
     private static final int MAX_BUFFERED_TRADES = 100;
     private static final int MAX_BOOK_LEVELS = 20;
 
@@ -42,6 +43,7 @@ public class MarketPublisher implements MarketEventHandler {
     // Pre-allocated SBE encoders (reused, zero allocation)
     private final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
     private final BookSnapshotEncoder bookSnapshotEncoder = new BookSnapshotEncoder();
+    private final BookDeltaEncoder bookDeltaEncoder = new BookDeltaEncoder();
     private final TradesBatchEncoder tradesBatchEncoder = new TradesBatchEncoder();
     private final OrderStatusBatchEncoder orderStatusBatchEncoder = new OrderStatusBatchEncoder();
 
@@ -89,6 +91,17 @@ public class MarketPublisher implements MarketEventHandler {
     // Change detection - use engine version numbers to detect any book change
     private long lastBidVersion = -1;
     private long lastAskVersion = -1;
+
+    // Delta tracking - last sent book state for computing incremental changes
+    private final long[] lastBidPrices = new long[MAX_BOOK_LEVELS];
+    private final long[] lastBidQuantities = new long[MAX_BOOK_LEVELS];
+    private final int[] lastBidOrderCounts = new int[MAX_BOOK_LEVELS];
+    private final long[] lastAskPrices = new long[MAX_BOOK_LEVELS];
+    private final long[] lastAskQuantities = new long[MAX_BOOK_LEVELS];
+    private final int[] lastAskOrderCounts = new int[MAX_BOOK_LEVELS];
+    private int lastBidCount = 0;
+    private int lastAskCount = 0;
+    private boolean sentInitialSnapshot = false;
 
     // Diagnostic counters
     private long flushCount = 0;
@@ -321,8 +334,8 @@ public class MarketPublisher implements MarketEventHandler {
             final MarketDataBroadcaster localBroadcaster = broadcaster;
             final DirectMatchingEngine localEngine = matchingEngine;
 
-            // Must have broadcaster configured
-            if (localBroadcaster == null || !localBroadcaster.hasSubscribers()) {
+            // Must have broadcaster configured (gateway caches state regardless of WebSocket clients)
+            if (localBroadcaster == null) {
                 clearBuffersWithoutSending();
                 return;
             }
@@ -443,9 +456,9 @@ public class MarketPublisher implements MarketEventHandler {
     }
 
     /**
-     * Encode order book snapshot to SBE binary format.
+     * Encode order book update to SBE binary format.
+     * Sends full snapshot on first call, then delta updates.
      * Called on flush thread every 50ms - does NOT block matching engine.
-     * Uses change detection to avoid sending duplicate snapshots.
      * @param engine The captured matching engine reference (null-safe)
      * @return Encoded length, or 0 if no change
      */
@@ -483,6 +496,40 @@ public class MarketPublisher implements MarketEventHandler {
         lastBidVersion = collectedBidVersion;
         lastAskVersion = collectedAskVersion;
 
+        int encodedLength;
+
+        // First message must be full snapshot, then send deltas
+        if (!sentInitialSnapshot) {
+            encodedLength = encodeFullSnapshot(bidPrices, bidQuantities, bidOrderCounts, bidCount,
+                                               askPrices, askQuantities, askOrderCounts, askCount,
+                                               collectedBidVersion, collectedAskVersion);
+            sentInitialSnapshot = true;
+        } else {
+            encodedLength = encodeBookDelta(bidPrices, bidQuantities, bidOrderCounts, bidCount,
+                                            askPrices, askQuantities, askOrderCounts, askCount,
+                                            collectedBidVersion, collectedAskVersion);
+        }
+
+        // Store current state as last sent
+        System.arraycopy(bidPrices, 0, lastBidPrices, 0, bidCount);
+        System.arraycopy(bidQuantities, 0, lastBidQuantities, 0, bidCount);
+        System.arraycopy(bidOrderCounts, 0, lastBidOrderCounts, 0, bidCount);
+        lastBidCount = bidCount;
+
+        System.arraycopy(askPrices, 0, lastAskPrices, 0, askCount);
+        System.arraycopy(askQuantities, 0, lastAskQuantities, 0, askCount);
+        System.arraycopy(askOrderCounts, 0, lastAskOrderCounts, 0, askCount);
+        lastAskCount = askCount;
+
+        return encodedLength;
+    }
+
+    /**
+     * Encode full order book snapshot.
+     */
+    private int encodeFullSnapshot(long[] bidPrices, long[] bidQuantities, int[] bidOrderCounts, int bidCount,
+                                   long[] askPrices, long[] askQuantities, int[] askOrderCounts, int askCount,
+                                   long bidVersion, long askVersion) {
         // Encode header
         headerEncoder.wrap(encodeBuffer, 0)
             .blockLength(BookSnapshotEncoder.BLOCK_LENGTH)
@@ -494,8 +541,8 @@ public class MarketPublisher implements MarketEventHandler {
         bookSnapshotEncoder.wrap(encodeBuffer, MessageHeaderEncoder.ENCODED_LENGTH)
             .marketId(marketId)
             .timestamp(System.currentTimeMillis())
-            .bidVersion(collectedBidVersion)
-            .askVersion(collectedAskVersion);
+            .bidVersion(bidVersion)
+            .askVersion(askVersion);
 
         // Encode bids group
         BookSnapshotEncoder.BidsEncoder bidsGroup = bookSnapshotEncoder.bidsCount(bidCount);
@@ -516,6 +563,153 @@ public class MarketPublisher implements MarketEventHandler {
         }
 
         return MessageHeaderEncoder.ENCODED_LENGTH + bookSnapshotEncoder.encodedLength();
+    }
+
+    // Reusable list for delta changes (avoid allocations)
+    private final java.util.List<LevelChange> deltaChanges = new java.util.ArrayList<>(MAX_BOOK_LEVELS * 2);
+
+    // Simple struct for level changes
+    private static class LevelChange {
+        long price;
+        long quantity;
+        int orderCount;
+        boolean isBid;
+        int updateType; // 0=NEW, 1=UPDATE, 2=DELETE
+
+        void set(long price, long quantity, int orderCount, boolean isBid, int updateType) {
+            this.price = price;
+            this.quantity = quantity;
+            this.orderCount = orderCount;
+            this.isBid = isBid;
+            this.updateType = updateType;
+        }
+    }
+
+    // Pre-allocated change objects
+    private final LevelChange[] changePool = new LevelChange[MAX_BOOK_LEVELS * 4];
+    {
+        for (int i = 0; i < changePool.length; i++) {
+            changePool[i] = new LevelChange();
+        }
+    }
+
+    /**
+     * Encode incremental book delta - only levels that changed.
+     * Compares current state with last sent state and encodes differences.
+     */
+    private int encodeBookDelta(long[] bidPrices, long[] bidQuantities, int[] bidOrderCounts, int bidCount,
+                                long[] askPrices, long[] askQuantities, int[] askOrderCounts, int askCount,
+                                long bidVersion, long askVersion) {
+        deltaChanges.clear();
+        int poolIdx = 0;
+
+        // Compute bid changes
+        poolIdx = computeLevelChanges(
+            lastBidPrices, lastBidQuantities, lastBidOrderCounts, lastBidCount,
+            bidPrices, bidQuantities, bidOrderCounts, bidCount, true, poolIdx);
+
+        // Compute ask changes
+        poolIdx = computeLevelChanges(
+            lastAskPrices, lastAskQuantities, lastAskOrderCounts, lastAskCount,
+            askPrices, askQuantities, askOrderCounts, askCount, false, poolIdx);
+
+        if (deltaChanges.isEmpty()) {
+            return 0;
+        }
+
+        // Encode header
+        headerEncoder.wrap(encodeBuffer, 0)
+            .blockLength(BookDeltaEncoder.BLOCK_LENGTH)
+            .templateId(BookDeltaEncoder.TEMPLATE_ID)
+            .schemaId(BookDeltaEncoder.SCHEMA_ID)
+            .version(BookDeltaEncoder.SCHEMA_VERSION);
+
+        // Encode message body
+        bookDeltaEncoder.wrap(encodeBuffer, MessageHeaderEncoder.ENCODED_LENGTH)
+            .marketId(marketId)
+            .timestamp(System.currentTimeMillis())
+            .bidVersion(bidVersion)
+            .askVersion(askVersion);
+
+        // Encode changes group
+        BookDeltaEncoder.ChangesEncoder changesGroup = bookDeltaEncoder.changesCount(deltaChanges.size());
+
+        for (LevelChange change : deltaChanges) {
+            changesGroup.next()
+                .price(change.price)
+                .quantity(change.quantity)
+                .orderCount(change.orderCount)
+                .side(change.isBid ? OrderSide.BID : OrderSide.ASK)
+                .updateType(mapUpdateType(change.updateType));
+        }
+
+        return MessageHeaderEncoder.ENCODED_LENGTH + bookDeltaEncoder.encodedLength();
+    }
+
+    /**
+     * Compute level changes between old and new book state.
+     * Adds changes to deltaChanges list using pooled objects.
+     * @return next available pool index
+     */
+    private int computeLevelChanges(long[] oldPrices, long[] oldQtys, int[] oldCounts, int oldLen,
+                                    long[] newPrices, long[] newQtys, int[] newCounts, int newLen,
+                                    boolean isBid, int poolIdx) {
+        // Build price set for old levels
+        java.util.Set<Long> oldPriceSet = new java.util.HashSet<>();
+        for (int i = 0; i < oldLen; i++) {
+            oldPriceSet.add(oldPrices[i]);
+        }
+
+        // Check new levels for additions and updates
+        for (int i = 0; i < newLen; i++) {
+            long price = newPrices[i];
+            long qty = newQtys[i];
+            int count = newCounts[i];
+
+            // Find matching old level
+            int oldIdx = -1;
+            for (int j = 0; j < oldLen; j++) {
+                if (oldPrices[j] == price) {
+                    oldIdx = j;
+                    break;
+                }
+            }
+
+            if (oldIdx == -1) {
+                // New level
+                LevelChange change = changePool[poolIdx++];
+                change.set(price, qty, count, isBid, 0); // NEW
+                deltaChanges.add(change);
+                oldPriceSet.remove(price);
+            } else if (oldQtys[oldIdx] != qty || oldCounts[oldIdx] != count) {
+                // Updated level
+                LevelChange change = changePool[poolIdx++];
+                change.set(price, qty, count, isBid, 1); // UPDATE
+                deltaChanges.add(change);
+                oldPriceSet.remove(price);
+            } else {
+                // Unchanged
+                oldPriceSet.remove(price);
+            }
+        }
+
+        // Remaining old prices are deletions
+        for (Long price : oldPriceSet) {
+            LevelChange change = changePool[poolIdx++];
+            change.set(price, 0, 0, isBid, 2); // DELETE
+            deltaChanges.add(change);
+        }
+
+        return poolIdx;
+    }
+
+    private BookUpdateType mapUpdateType(int type) {
+        switch (type) {
+            case 0: return BookUpdateType.NEW_LEVEL;
+            case 1: return BookUpdateType.UPDATE_LEVEL;
+            case 2: return BookUpdateType.DELETE_LEVEL;
+            default: return BookUpdateType.UPDATE_LEVEL;
+        }
     }
 
     /**

@@ -1,13 +1,15 @@
 import { useMemo } from 'react';
 import type { OrderBook as OrderBookType } from '../../types/market';
+import { type LevelChange, priceKey } from '../../hooks/useOrderBook';
 import { formatPrice, formatQuantity } from '../../utils/formatters';
 import './OrderBook.css';
 
 interface OrderBookProps {
   orderBook: OrderBookType;
+  levelChanges: Map<string, LevelChange>;
 }
 
-export function OrderBook({ orderBook }: OrderBookProps) {
+export function OrderBook({ orderBook, levelChanges }: OrderBookProps) {
   const { bids, asks } = orderBook;
 
   const { askLevels, bidLevels, maxCumulative } = useMemo(() => {
@@ -45,6 +47,16 @@ export function OrderBook({ orderBook }: OrderBookProps) {
   const midPrice = bids.length > 0 && asks.length > 0
     ? (asks[0].price + bids[0].price) / 2
     : 0;
+
+  // Get animation class for a price level
+  const getAnimationClass = (price: number, side: 'bid' | 'ask'): string => {
+    const change = levelChanges.get(priceKey(price));
+    if (!change) return '';
+    if (change.type === 'new') {
+      return side === 'bid' ? 'new-bid' : 'new-ask';
+    }
+    return 'flash';
+  };
 
   return (
     <div className="order-book">
@@ -84,8 +96,8 @@ export function OrderBook({ orderBook }: OrderBookProps) {
             <span className="col price">Bid Price</span>
           </div>
           <div className="side-content">
-            {bidLevels.map((level, i) => (
-              <div key={`bid-${i}`} className="book-row bid">
+            {bidLevels.map((level) => (
+              <div key={level.price} className={`book-row bid ${getAnimationClass(level.price, 'bid')}`}>
                 <div
                   className="depth-bar"
                   style={{ width: `${(level.cumulative / maxCumulative) * 100}%` }}
@@ -109,8 +121,8 @@ export function OrderBook({ orderBook }: OrderBookProps) {
             <span className="col total">Total</span>
           </div>
           <div className="side-content">
-            {askLevels.map((level, i) => (
-              <div key={`ask-${i}`} className="book-row ask">
+            {askLevels.map((level) => (
+              <div key={level.price} className={`book-row ask ${getAnimationClass(level.price, 'ask')}`}>
                 <div
                   className="depth-bar"
                   style={{ width: `${(level.cumulative / maxCumulative) * 100}%` }}

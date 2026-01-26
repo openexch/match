@@ -11,6 +11,11 @@ interface NodeStatus {
   role: NodeStatusType;
   status?: NodeStatusType;
   healthy?: boolean;
+  // Per-node data
+  logPosition?: number;
+  snapshotPosition?: number;
+  archiveBytes?: number;
+  archiveDiskBytes?: number;
 }
 
 interface GatewayStatus {
@@ -28,7 +33,8 @@ interface ClusterStatus {
     order: GatewayStatus;
     admin: GatewayStatus;
   };
-  archiveBytes: number;
+  // Archive is now per-node (in NodeStatus), these are deprecated
+  archiveBytes?: number;
   archiveDiskBytes?: number;
 }
 
@@ -155,6 +161,13 @@ const Icons = {
       <rect x="2" y="3" width="20" height="5" rx="1"/>
       <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/>
       <path d="M10 12h4"/>
+    </svg>
+  ),
+  info: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="12" y1="16" x2="12" y2="12"/>
+      <line x1="12" y1="8" x2="12.01" y2="8"/>
     </svg>
   ),
 };
@@ -684,6 +697,15 @@ export function AdminPage() {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   };
 
+  // Format log/snapshot positions with K, M, G suffixes
+  const formatPosition = (pos: number | undefined): string => {
+    if (pos === undefined || pos < 0) return '--';
+    if (pos < 1000) return pos.toString();
+    if (pos < 1000000) return `${(pos / 1000).toFixed(1)}K`;
+    if (pos < 1000000000) return `${(pos / 1000000).toFixed(1)}M`;
+    return `${(pos / 1000000000).toFixed(2)}G`;
+  };
+
   const isLogSelected = (source: LogSource) => {
     if (!logSource) return false;
     if (source.type === 'node' && logSource.type === 'node') {
@@ -847,6 +869,55 @@ export function AdminPage() {
                        node.pid ? `PID ${node.pid}` : 'Running'}
                     </span>
                   </div>
+                  <div className="node-data">
+                    <div className="node-data-row">
+                      <span className="data-label">Log:</span>
+                      <span className="data-value">{formatPosition(node.logPosition)}</span>
+                      <span className="data-label">Snap:</span>
+                      <span className="data-value">{formatPosition(node.snapshotPosition)}</span>
+                    </div>
+                    <div className="node-data-row">
+                      <span className="data-label">Delta:</span>
+                      <span className="data-value delta">
+                        {node.logPosition !== undefined && node.snapshotPosition !== undefined
+                          ? formatPosition(node.logPosition - node.snapshotPosition)
+                          : '--'}
+                      </span>
+                      <span className="data-label">Archive:</span>
+                      <span className="data-value">{node.archiveBytes !== undefined ? formatBytes(node.archiveBytes) : '--'}</span>
+                      <span className="info-trigger">
+                        {Icons.info}
+                        <div className="node-popover">
+                          <div className="popover-title">Node Details</div>
+                          <div className="popover-row">
+                            <span>Log Position:</span>
+                            <span>{node.logPosition !== undefined ? node.logPosition.toLocaleString() : '--'}</span>
+                          </div>
+                          <div className="popover-row">
+                            <span>Snapshot Position:</span>
+                            <span>{node.snapshotPosition !== undefined ? node.snapshotPosition.toLocaleString() : '--'}</span>
+                          </div>
+                          <div className="popover-row">
+                            <span>Delta (uncommitted):</span>
+                            <span>
+                              {node.logPosition !== undefined && node.snapshotPosition !== undefined
+                                ? (node.logPosition - node.snapshotPosition).toLocaleString()
+                                : '--'}
+                            </span>
+                          </div>
+                          <div className="popover-divider" />
+                          <div className="popover-row">
+                            <span>Archive Size:</span>
+                            <span>{node.archiveBytes !== undefined ? formatBytes(node.archiveBytes) : '--'}</span>
+                          </div>
+                          <div className="popover-row">
+                            <span>Disk Usage:</span>
+                            <span>{node.archiveDiskBytes !== undefined ? formatBytes(node.archiveDiskBytes) : '--'}</span>
+                          </div>
+                        </div>
+                      </span>
+                    </div>
+                  </div>
                   <div className="node-actions">
                     {node.running && !isTransitioning ? (
                       <>
@@ -881,13 +952,6 @@ export function AdminPage() {
           <div className="section-header">
             {Icons.server}
             <h2>Services</h2>
-            <div className="storage-stats">
-              {Icons.folder}
-              <span>{status ? formatBytes(status.archiveBytes || 0) : '--'}</span>
-              <span className="separator">/</span>
-              {Icons.database}
-              <span>{status ? formatBytes(status.archiveDiskBytes || 0) : '--'}</span>
-            </div>
           </div>
           <div className="services-grid">
             {!status ? (

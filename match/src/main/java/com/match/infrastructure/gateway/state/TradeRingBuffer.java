@@ -11,7 +11,7 @@ import java.util.List;
  * Lock-free single-writer, multi-reader using volatile and copy-on-read.
  */
 public class TradeRingBuffer {
-    private static final int DEFAULT_CAPACITY = 500;
+    private static final int DEFAULT_CAPACITY = 100;
 
     private final AggregatedTrade[] trades;
     private final int capacity;

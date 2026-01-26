@@ -89,8 +89,8 @@ export function useWebSocket({ marketId, onMessage, onReconnecting, onReconnecte
 
         // Request state refresh after reconnect
         if (isReconnectRef.current) {
-          console.log('[WS] Requesting state refresh after reconnect');
-          ws.send(JSON.stringify({ action: 'refresh' }));
+          console.log('[WS] Requesting state refresh after reconnect for market', marketIdRef.current);
+          ws.send(JSON.stringify({ action: 'refresh', marketId: marketIdRef.current }));
           if (onReconnectedRef.current) {
             onReconnectedRef.current();
           }

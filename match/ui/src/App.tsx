@@ -1,9 +1,8 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { Routes, Route, Link } from 'react-router-dom';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useOrderBook } from './hooks/useOrderBook';
 import { useTrades } from './hooks/useTrades';
-import { useOrders } from './hooks/useOrders';
 import { useMarketStats } from './hooks/useMarketStats';
 import { useClusterState } from './hooks/useClusterState';
 import { useApi } from './hooks/useApi';
@@ -13,9 +12,8 @@ import { ConnectionStatus } from './components/ConnectionStatus/ConnectionStatus
 import { MarketSelector } from './components/MarketSelector/MarketSelector';
 import { MarketStats } from './components/MarketStats/MarketStats';
 import { OrderForm } from './components/OrderForm/OrderForm';
-import { OpenOrders } from './components/OpenOrders/OpenOrders';
 import { AdminPage } from './pages/AdminPage';
-import type { WebSocketMessage, Market, OrderRequest, ClusterStatusMessage, ClusterEventMessage, ExtendedConnectionStatus } from './types/market';
+import type { WebSocketMessage, Market, OrderRequest, ClusterStatusMessage, ClusterEventMessage, ExtendedConnectionStatus, BookDeltaMessage, TickerStatsMessage } from './types/market';
 import { MARKETS } from './types/market';
 import './App.css';
 
@@ -32,26 +30,41 @@ const Icons = {
       <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
     </svg>
   ),
+  // initEX logo - geometric molecular network icon
+  initexLogo: (
+    <svg viewBox="0 0 40 40" fill="none">
+      {/* Network/molecular structure with 4 nodes */}
+      <circle cx="8" cy="12" r="4" fill="currentColor"/>
+      <circle cx="8" cy="32" r="4" fill="currentColor"/>
+      <circle cx="22" cy="22" r="4" fill="currentColor"/>
+      <circle cx="32" cy="8" r="4" fill="currentColor"/>
+      {/* Connecting lines */}
+      <line x1="8" y1="16" x2="8" y2="28" stroke="currentColor" strokeWidth="2"/>
+      <line x1="11" y1="13" x2="19" y2="20" stroke="currentColor" strokeWidth="2"/>
+      <line x1="11" y1="31" x2="19" y2="24" stroke="currentColor" strokeWidth="2"/>
+      <line x1="25" y1="20" x2="29" y2="11" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  ),
 };
 
 function MarketPage() {
   // Market state
   const [selectedMarket, setSelectedMarket] = useState<Market>(MARKETS[0]);
+  // Ref for immediate access to current market ID (avoids stale closures)
+  const selectedMarketIdRef = useRef(selectedMarket.id);
 
   // Data hooks
-  const { orderBook, handleBookSnapshot, resetOrderBook } = useOrderBook();
+  const { orderBook, levelChanges, handleBookSnapshot, handleBookDelta, resetOrderBook } = useOrderBook();
   const { trades, handleTradesBatch, resetTrades } = useTrades();
-  const { openOrders, handleOrderStatus, handleOrderStatusBatch, resetOrders } = useOrders();
-  const { stats, handleTrades, handleBookUpdate, resetStats } = useMarketStats();
+  const { stats, setStats, handleTrades, handleBookUpdate, resetStats } = useMarketStats();
   const { clusterState, handleClusterStatus, handleClusterEvent } = useClusterState();
-  const { submitOrder, cancelOrder, loading: apiLoading } = useApi();
+  const { submitOrder, loading: apiLoading } = useApi();
 
   const resetAllState = useCallback(() => {
     resetOrderBook();
     resetTrades();
-    resetOrders();
     resetStats();
-  }, [resetOrderBook, resetTrades, resetOrders, resetStats]);
+  }, [resetOrderBook, resetTrades, resetStats]);
 
   const handleReconnecting = useCallback(() => {
     resetAllState();
@@ -63,18 +76,37 @@ function MarketPage() {
     (message: WebSocketMessage) => {
       switch (message.type) {
         case 'BOOK_SNAPSHOT':
-          handleBookSnapshot(message);
-          handleBookUpdate(message.bids, message.asks);
+          // Only process if message is for the selected market (use ref for immediate value)
+          console.log('[App] BOOK_SNAPSHOT received: marketId=' + message.marketId +
+            ' (type=' + typeof message.marketId + ')' +
+            ', selectedRef=' + selectedMarketIdRef.current +
+            ' (type=' + typeof selectedMarketIdRef.current + ')' +
+            ', bids=' + message.bids?.length + ', asks=' + message.asks?.length);
+          // Use == for type coercion in case of string/number mismatch
+          if (Number(message.marketId) === selectedMarketIdRef.current) {
+            console.log('[App] Processing BOOK_SNAPSHOT');
+            handleBookSnapshot(message);
+            handleBookUpdate(message.bids, message.asks);
+          } else {
+            console.log('[App] FILTERED OUT BOOK_SNAPSHOT - marketId mismatch');
+          }
+          break;
+        case 'BOOK_DELTA':
+          // Only process if message is for the selected market (use ref for immediate value)
+          if (message.marketId === selectedMarketIdRef.current) {
+            handleBookDelta(message as BookDeltaMessage);
+          }
           break;
         case 'TRADES_BATCH':
-          handleTradesBatch(message);
-          handleTrades(message.trades);
+          // Only process if message is for the selected market (use ref for immediate value)
+          if (message.marketId === selectedMarketIdRef.current) {
+            handleTradesBatch(message);
+            handleTrades(message.trades);
+          }
           break;
         case 'ORDER_STATUS':
-          handleOrderStatus(message);
-          break;
         case 'ORDER_STATUS_BATCH':
-          handleOrderStatusBatch(message);
+          // Order status tracking disabled
           break;
         case 'SUBSCRIPTION_CONFIRMED':
           break;
@@ -83,19 +115,30 @@ function MarketPage() {
         case 'ERROR':
           console.error('Server error:', message.message);
           break;
+        case 'TICKER_STATS':
+          // Only process if message is for the selected market
+          if ((message as TickerStatsMessage).marketId === selectedMarketIdRef.current) {
+            const tickerMsg = message as TickerStatsMessage;
+            setStats({
+              lastPrice: tickerMsg.lastPrice,
+              priceChange: tickerMsg.priceChange,
+              priceChangePercent: tickerMsg.priceChangePercent,
+              high24h: tickerMsg.high24h,
+              low24h: tickerMsg.low24h,
+              volume24h: tickerMsg.volume24h,
+            });
+          }
+          break;
         case 'CLUSTER_STATUS':
           handleClusterStatus(message as ClusterStatusMessage);
           break;
         case 'CLUSTER_EVENT':
           handleClusterEvent(message as ClusterEventMessage);
-          if ((message as ClusterEventMessage).event === 'LEADER_CHANGE') {
-            resetOrders();
-          }
           break;
       }
     },
-    [handleBookSnapshot, handleTradesBatch, handleOrderStatus, handleOrderStatusBatch,
-     handleBookUpdate, handleTrades, handleClusterStatus, handleClusterEvent, resetOrders]
+    [handleBookSnapshot, handleBookDelta, handleTradesBatch, setStats,
+     handleBookUpdate, handleTrades, handleClusterStatus, handleClusterEvent]
   );
 
   const { status, forceReconnect } = useWebSocket({
@@ -113,6 +156,8 @@ function MarketPage() {
   }, [status, clusterState.isElecting, clusterState.isRollingUpdate]);
 
   const handleMarketChange = useCallback((market: Market) => {
+    // Update ref immediately (before state update) to ensure message filtering works instantly
+    selectedMarketIdRef.current = market.id;
     setSelectedMarket(market);
     resetAllState();
   }, [resetAllState]);
@@ -125,10 +170,6 @@ function MarketPage() {
     return await submitOrder(order);
   }, [submitOrder]);
 
-  const handleCancelOrder = useCallback(async (orderId: number) => {
-    await cancelOrder(orderId, '1', selectedMarket.symbol);
-  }, [cancelOrder, selectedMarket.symbol]);
-
   const bestBid = orderBook.bids.length > 0 ? orderBook.bids[0] : null;
   const bestAsk = orderBook.asks.length > 0 ? orderBook.asks[0] : null;
 
@@ -137,8 +178,8 @@ function MarketPage() {
       <header className="app-header">
         <div className="header-left">
           <div className="logo">
-            <span className="logo-icon">M</span>
-            <span className="logo-text">Match</span>
+            <span className="logo-icon">{Icons.initexLogo}</span>
+            <span className="logo-text"><span className="init">init</span><span className="ex">EX</span></span>
           </div>
           <MarketSelector
             markets={MARKETS}
@@ -170,7 +211,7 @@ function MarketPage() {
         </aside>
 
         <section className="center-panel">
-          <OrderBook orderBook={orderBook} />
+          <OrderBook orderBook={orderBook} levelChanges={levelChanges} />
         </section>
 
         <aside className="right-panel">
@@ -178,18 +219,10 @@ function MarketPage() {
         </aside>
       </main>
 
-      <section className="orders-panel">
-        <OpenOrders
-          orders={openOrders}
-          onCancelOrder={handleCancelOrder}
-          loading={apiLoading}
-        />
-      </section>
-
       <footer className="app-footer">
         <div className="footer-left">
           <span className="footer-icon">{Icons.activity}</span>
-          <span>Match Trading Engine</span>
+          <span>initEX Trading Engine</span>
           <span className="separator">|</span>
           <span className="version">v1.0.0</span>
         </div>

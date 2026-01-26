@@ -15,7 +15,6 @@ import io.netty.util.CharsetUtil;
  * Endpoints:
  * - GET /api/orderbook - Current order book
  * - GET /api/trades?limit=N - Recent trades
- * - GET /api/orders/{userId} - Open orders for user
  * - GET /health - Gateway health check
  */
 @ChannelHandler.Sharable
@@ -54,22 +53,26 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
         }
 
         if (uri.startsWith("/api/orderbook")) {
-            handleOrderBook(ctx);
+            handleOrderBook(ctx, uri);
         } else if (uri.startsWith("/api/trades")) {
             handleTrades(ctx, uri);
-        } else if (uri.startsWith("/api/orders/")) {
-            handleOrders(ctx, uri);
         } else {
             sendError(ctx, HttpResponseStatus.NOT_FOUND, "Unknown endpoint: " + uri);
         }
     }
 
-    private void handleOrderBook(ChannelHandlerContext ctx) {
-        String json = stateManager.getOrderBook().toJson();
-        if (json == null) {
-            sendError(ctx, HttpResponseStatus.SERVICE_UNAVAILABLE, "Order book not yet available");
+    private void handleOrderBook(ChannelHandlerContext ctx, String uri) {
+        int marketId = parseQueryParam(uri, "marketId", 1); // Default to market 1 (BTC-USD)
+        var book = stateManager.getOrderBook(marketId);
+        if (book == null || !book.hasData()) {
+            // Return empty book structure for this market
+            String emptyJson = "{\"type\":\"BOOK_SNAPSHOT\",\"marketId\":" + marketId +
+                ",\"market\":\"UNKNOWN\",\"bids\":[],\"asks\":[],\"timestamp\":" +
+                System.currentTimeMillis() + "}";
+            sendJson(ctx, emptyJson);
             return;
         }
+        String json = book.toJson();
         sendJson(ctx, json);
     }
 
@@ -81,33 +84,18 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
         sendJson(ctx, json);
     }
 
-    private void handleOrders(ChannelHandlerContext ctx, String uri) {
-        // Parse userId from path: /api/orders/{userId}
-        String path = uri;
-        int queryIdx = uri.indexOf('?');
-        if (queryIdx > 0) {
-            path = uri.substring(0, queryIdx);
-        }
-
-        String userIdStr = path.substring("/api/orders/".length());
-        if (userIdStr.isEmpty()) {
-            sendError(ctx, HttpResponseStatus.BAD_REQUEST, "Missing userId in path");
-            return;
-        }
-
-        try {
-            long userId = Long.parseLong(userIdStr);
-            String json = stateManager.getOpenOrders().toJson(userId);
-            sendJson(ctx, json);
-        } catch (NumberFormatException e) {
-            sendError(ctx, HttpResponseStatus.BAD_REQUEST, "Invalid userId: " + userIdStr);
-        }
-    }
-
     private void handleHealth(ChannelHandlerContext ctx, FullHttpRequest req) {
-        String json = "{\"status\":\"ok\",\"orderBook\":" + stateManager.getOrderBook().hasData() +
-                      ",\"trades\":" + stateManager.getTrades().hasData() +
-                      ",\"openOrders\":" + stateManager.getOpenOrders().getOpenOrderCount() + "}";
+        // Check if any market has order book data
+        boolean hasAnyOrderBook = false;
+        for (int marketId = 1; marketId <= 5; marketId++) {
+            var book = stateManager.getOrderBook(marketId);
+            if (book != null && book.hasData()) {
+                hasAnyOrderBook = true;
+                break;
+            }
+        }
+        String json = "{\"status\":\"ok\",\"orderBook\":" + hasAnyOrderBook +
+                      ",\"trades\":" + stateManager.getTrades().hasData() + "}";
         sendJson(ctx, json);
     }
 

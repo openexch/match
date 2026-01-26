@@ -1,6 +1,7 @@
 package com.match.infrastructure.persistence;
 
 import com.match.application.engine.Engine;
+import com.match.application.engine.MarketConfig;
 import com.match.application.orderbook.DirectMatchingEngine;
 import com.match.application.publisher.MarketDataBroadcaster;
 import com.match.application.publisher.MatchEventPublisher;
@@ -150,7 +151,7 @@ public class AppClusteredService implements ClusteredService {
             loadSnapshot(snapshotImage);
         }
 
-        // Initialize event publishing for BTC-USD market
+        // Initialize event publishing for all markets
         initializeEventPublishing();
     }
 
@@ -161,23 +162,27 @@ public class AppClusteredService implements ClusteredService {
      */
     private void initializeEventPublishing() {
         try {
-            // Create per-market publisher for BTC-USD
-            MarketPublisher btcPublisher = new MarketPublisher(
-                Engine.MARKET_BTC_USD,
-                "BTC-USD",
-                subscriptionManager
-            );
+            // Create per-market publisher for all configured markets
+            for (MarketConfig config : MarketConfig.ALL_MARKETS) {
+                MarketPublisher publisher = new MarketPublisher(
+                    config.marketId,
+                    config.symbol,
+                    subscriptionManager
+                );
 
-            // Wire matching engine to publisher for direct order book access
-            // Order book snapshots are fetched every 50ms on publisher thread (not matching engine thread)
-            btcPublisher.setMatchingEngine(engine.getEngine(Engine.MARKET_BTC_USD));
+                // Wire matching engine to publisher for direct order book access
+                // Order book snapshots are fetched every 50ms on publisher thread
+                publisher.setMatchingEngine(engine.getEngine(config.marketId));
 
-            // Use Aeron broadcaster instead of WebSocket
-            // Market data flows: Cluster → Aeron egress → Gateway → WebSocket → UI
-            btcPublisher.setBroadcaster(aeronBroadcaster);
+                // Use Aeron broadcaster instead of WebSocket
+                // Market data flows: Cluster → Aeron egress → Gateway → WebSocket → UI
+                publisher.setBroadcaster(aeronBroadcaster);
 
-            // Initialize Disruptor ring buffer for BTC-USD market
-            eventPublisher.initMarket(Engine.MARKET_BTC_USD, btcPublisher);
+                // Initialize Disruptor ring buffer for this market
+                eventPublisher.initMarket(config.marketId, publisher);
+
+                logger.info("Initialized publisher for {}", config.symbol);
+            }
 
             // Wire publisher to engine (for trade events only)
             engine.setEventPublisher(eventPublisher);
@@ -185,7 +190,8 @@ public class AppClusteredService implements ClusteredService {
             // Start the Disruptor (creates publisher threads)
             eventPublisher.start();
 
-            logger.info("Event publishing initialized with Aeron broadcaster (no WebSocket on cluster node)");
+            logger.info("Event publishing initialized for {} markets with Aeron broadcaster",
+                MarketConfig.ALL_MARKETS.length);
         } catch (Exception e) {
             logger.warn("Failed to initialize event publishing: " + e.getMessage());
             // Continue without publishing - engine will still work
@@ -193,9 +199,11 @@ public class AppClusteredService implements ClusteredService {
     }
 
     private void loadSnapshot(final Image snapshotImage) {
+        System.out.println("[SNAPSHOT] loadSnapshot called, image position: " + snapshotImage.position());
         final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();
 
         final FragmentHandler handler = (buf, offset, length, header) -> {
+            System.out.println("[SNAPSHOT] Fragment received: offset=" + offset + ", length=" + length);
             // Copy to our buffer for processing
             buffer.putBytes(0, buf, offset, length);
 
@@ -205,22 +213,28 @@ public class AppClusteredService implements ClusteredService {
             long orderIdGen = buffer.getLong(pos);
             pos += 8;
             engine.setOrderIdGenerator(orderIdGen);
+            System.out.println("[SNAPSHOT] Restored OrderIdGenerator: " + orderIdGen);
 
             // Read trade ID generator (for event publisher)
             long tradeIdGen = buffer.getLong(pos);
             pos += 8;
             eventPublisher.setTradeIdGenerator(tradeIdGen);
+            System.out.println("[SNAPSHOT] Restored TradeIdGenerator: " + tradeIdGen);
 
             // Read number of markets
             int numMarkets = buffer.getInt(pos);
             pos += 4;
+            System.out.println("[SNAPSHOT] Restoring " + numMarkets + " markets");
 
             for (int m = 0; m < numMarkets; m++) {
                 int marketId = buffer.getInt(pos);
                 pos += 4;
 
                 DirectMatchingEngine matchingEngine = engine.getEngine(marketId);
-                if (matchingEngine == null) continue;
+                if (matchingEngine == null) {
+                    System.out.println("[SNAPSHOT] WARNING: No engine for market " + marketId);
+                    continue;
+                }
 
                 // Read bid orders
                 int numBidOrders = buffer.getInt(pos);
@@ -241,11 +255,16 @@ public class AppClusteredService implements ClusteredService {
                 }
 
                 matchingEngine.restoreFromSnapshot(bidOrders, askOrders);
+                System.out.println("[SNAPSHOT] Market " + marketId + ": restored " + numBidOrders + " bids, " + numAskOrders + " asks");
             }
+            System.out.println("[SNAPSHOT] Snapshot load complete");
         };
 
+        int fragmentCount = 0;
         while (snapshotImage.poll(handler, 1) > 0) {
+            fragmentCount++;
         }
+        System.out.println("[SNAPSHOT] Total fragments polled: " + fragmentCount);
     }
 
     @Override

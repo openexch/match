@@ -7,11 +7,22 @@
   --text-primary: #e0e0e0;
   --text-secondary: #888;
   --text-muted: #666;
+
+  /* Primary brand accent (cyan/teal from initEX logo) */
+  --accent-primary: #00b8d9;
+  --accent-primary-hover: #00a3c4;
+  --accent-primary-glow: rgba(0, 184, 217, 0.3);
+
+  /* Trading colors - keep green/red semantics */
   --accent-green: #0ecb81;
   --accent-green-hover: #0da870;
   --accent-red: #f6465d;
   --accent-red-hover: #d93d51;
   --accent-yellow: #f0b90b;
+
+  /* Info/follower now uses brand cyan */
+  --accent-blue: #00b8d9;
+
   --font-mono: 'SF Mono', Monaco, 'Courier New', monospace;
 }
 
@@ -101,10 +112,10 @@ body {
 .footer-icon svg {
   width: 14px;
   height: 14px;
-  color: var(--accent-green);
+  color: var(--accent-primary);
 }
 
-/* Logo */
+/* Logo - initEX branding */
 .logo {
   display: flex;
   align-items: center;
@@ -112,23 +123,29 @@ body {
 }
 
 .logo-icon {
-  width: 36px;
-  height: 36px;
-  background: linear-gradient(135deg, var(--accent-green), #00a8ff);
-  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
-  font-weight: 800;
-  color: #fff;
+  color: var(--accent-primary);
+}
+
+.logo-icon svg {
+  width: 32px;
+  height: 32px;
 }
 
 .logo-text {
   font-size: 22px;
   font-weight: 700;
-  color: #fff;
   letter-spacing: -0.5px;
+}
+
+.logo-text .init {
+  color: var(--accent-primary);
+}
+
+.logo-text .ex {
+  color: #fff;
 }
 
 /* Stats Bar */
@@ -201,14 +218,14 @@ body {
 .update-indicator {
   width: 8px;
   height: 8px;
-  background: var(--accent-green);
+  background: var(--accent-primary);
   border-radius: 50%;
   animation: pulse 2s ease-in-out infinite;
 }
 
 .update-rate {
   font-size: 12px;
-  color: var(--accent-green);
+  color: var(--accent-primary);
 }
 
 @keyframes pulse {
@@ -306,6 +323,6 @@ body {
 
 /* Selection */
 ::selection {
-  background: rgba(14, 203, 129, 0.3);
+  background: var(--accent-primary-glow);
   color: #fff;
 }

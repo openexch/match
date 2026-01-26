@@ -44,6 +44,7 @@ public class AeronGateway implements EgressListener, AutoCloseable {
      */
     public interface EgressMessageListener {
         void onBookSnapshot(BookSnapshotDecoder decoder);
+        void onBookDelta(BookDeltaDecoder decoder);
         void onTradesBatch(TradesBatchDecoder decoder);
         void onOrderStatusBatch(OrderStatusBatchDecoder decoder);
         void onNewLeader(int leaderMemberId, long leadershipTermId);
@@ -69,6 +70,7 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     // Decoders for inbound SBE messages (egress from cluster)
     private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
     private final BookSnapshotDecoder bookSnapshotDecoder = new BookSnapshotDecoder();
+    private final BookDeltaDecoder bookDeltaDecoder = new BookDeltaDecoder();
     private final TradesBatchDecoder tradesBatchDecoder = new TradesBatchDecoder();
     private final OrderStatusBatchDecoder orderStatusBatchDecoder = new OrderStatusBatchDecoder();
 
@@ -440,6 +442,10 @@ public class AeronGateway implements EgressListener, AutoCloseable {
             case BookSnapshotDecoder.TEMPLATE_ID:
                 bookSnapshotDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
                 egressListener.onBookSnapshot(bookSnapshotDecoder);
+                break;
+            case BookDeltaDecoder.TEMPLATE_ID:
+                bookDeltaDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
+                egressListener.onBookDelta(bookDeltaDecoder);
                 break;
             case TradesBatchDecoder.TEMPLATE_ID:
                 tradesBatchDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);

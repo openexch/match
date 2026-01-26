@@ -34,32 +34,32 @@ public class Engine {
 
     // Market ID constants
     public static final int MARKET_BTC_USD = 1;
+    public static final int MARKET_ETH_USD = 2;
+    public static final int MARKET_SOL_USD = 3;
+    public static final int MARKET_XRP_USD = 4;
+    public static final int MARKET_DOGE_USD = 5;
 
     // Command type constants (int for zero-allocation dispatch)
     public static final int CMD_CREATE = 0;
     public static final int CMD_CANCEL = 1;
     public static final int CMD_UPDATE = 2;
 
-    // BTC-USD price range configuration (fixed-point, 8 decimals)
-    // Range: $90,000 to $130,000 with $1 tick size = 40,000 price levels
-    private static final long BTC_BASE_PRICE = FixedPoint.fromDouble(90_000.0);
-    private static final long BTC_MAX_PRICE = FixedPoint.fromDouble(130_000.0);
-    private static final long BTC_TICK_SIZE = FixedPoint.fromDouble(1.0);  // $1 tick for 40K levels
-
     public Engine() {
         this.engines = new Int2ObjectHashMap<>();
 
-        // Create ultra-low latency matching engine for BTC-USD
-        DirectMatchingEngine btcEngine = new DirectMatchingEngine(
-            BTC_BASE_PRICE,
-            BTC_MAX_PRICE,
-            BTC_TICK_SIZE
-        );
+        // Initialize all markets from MarketConfig
+        for (MarketConfig config : MarketConfig.ALL_MARKETS) {
+            DirectMatchingEngine engine = new DirectMatchingEngine(
+                config.basePrice,
+                config.maxPrice,
+                config.tickSize
+            );
+            engines.put(config.marketId, engine);
+            logger.info("Initialized {} engine: {} price levels",
+                config.symbol, config.getPriceLevels());
+        }
 
-        engines.put(MARKET_BTC_USD, btcEngine);
-
-        logger.info("Engine started with DirectMatchingEngine for BTC-USD.");
-        logger.info("Price range: $90,000 - $130,000, tick size: $1.00");
+        logger.info("Engine started with {} markets.", MarketConfig.ALL_MARKETS.length);
     }
 
     /**
