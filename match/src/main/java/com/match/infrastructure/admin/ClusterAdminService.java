@@ -790,14 +790,14 @@ public class ClusterAdminService {
 
     /**
      * Full archive compaction - requires brief cluster downtime.
-     * This is the CORRECT way to clean up archive space:
+     * 
+     * Proper workflow:
      * 1. Take final snapshot
      * 2. Stop all nodes
-     * 3. Use seed-recording-log-from-snapshot to create fresh archive
-     * 4. Restart nodes
-     *
-     * WARNING: Do NOT use ArchiveTool mark-invalid + compact - it corrupts
-     * the cluster by desynchronizing archive catalog from recording-log.
+     * 3. Use seed-recording-log-from-snapshot to reset recording-log
+     * 4. Mark unreferenced recordings as INVALID in archive catalog
+     * 5. Run ArchiveTool compact to delete INVALID recordings
+     * 6. Restart nodes
      */
     public void compactArchive() {
         if (operationProgress.getOperation() != null && !operationProgress.isComplete()) {
@@ -806,7 +806,7 @@ public class ClusterAdminService {
 
         new Thread(() -> {
             try {
-                operationProgress.start("compact-archive", 10);
+                operationProgress.start("compact-archive", 12);
                 String jarPath = "match/target/cluster-engine-1.0.jar";
 
                 // Step 1: Take final snapshot to ensure we have latest state
@@ -843,32 +843,27 @@ public class ClusterAdminService {
                 Thread.sleep(2000);
 
                 // Step 5: Seed fresh recording log from snapshot on each node
-                // This cleans up old recordings while keeping catalog in sync
-                operationProgress.update(5, "Rebuilding archives from snapshot...");
+                operationProgress.update(5, "Seeding recording-log from snapshot...");
                 for (int i = 0; i < 3; i++) {
                     String clusterDir = "/dev/shm/aeron-cluster/node" + i + "/cluster";
                     try {
-                        String seedResult = executeCommand("java",
+                        executeCommand("java",
                             "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
                             "-cp", jarPath, "io.aeron.cluster.ClusterTool",
                             clusterDir, "seed-recording-log-from-snapshot");
-                        System.out.println("Node " + i + " seed result: " + seedResult);
+                        System.out.println("Node " + i + " recording-log seeded from snapshot");
                     } catch (Exception e) {
                         System.err.println("Warning: seed failed for node " + i + ": " + e.getMessage());
-                        // Continue with other nodes - some may not need seeding
                     }
                 }
 
-                // Step 6: Clean up orphaned segment files that are no longer referenced
-                operationProgress.update(6, "Cleaning orphaned segments...");
+                // Step 6: Mark unreferenced recordings as INVALID and compact
+                operationProgress.update(6, "Compacting archives...");
                 for (int i = 0; i < 3; i++) {
-                    String archiveDir = "/dev/shm/aeron-cluster/node" + i + "/archive";
                     try {
-                        executeCommand("bash", "-c",
-                            "echo 'y' | java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED " +
-                            "-cp " + jarPath + " io.aeron.archive.ArchiveTool " + archiveDir + " delete-orphaned-segments");
+                        compactNodeArchive(i, jarPath);
                     } catch (Exception e) {
-                        System.err.println("Warning: orphan cleanup failed for node " + i + ": " + e.getMessage());
+                        System.err.println("Warning: compact failed for node " + i + ": " + e.getMessage());
                     }
                 }
 
@@ -905,6 +900,103 @@ public class ClusterAdminService {
                 operationProgress.finish(false, "Error: " + e.getMessage());
             }
         }).start();
+    }
+
+    /**
+     * Compact a single node's archive by marking unreferenced recordings as INVALID
+     * and then running ArchiveTool compact.
+     * 
+     * After seed-recording-log-from-snapshot, the recording-log only references
+     * snapshot recordings. We need to mark all OTHER recordings in the catalog
+     * as INVALID before compacting.
+     */
+    private void compactNodeArchive(int nodeId, String jarPath) throws Exception {
+        String clusterDir = "/dev/shm/aeron-cluster/node" + nodeId + "/cluster";
+        String archiveDir = "/dev/shm/aeron-cluster/node" + nodeId + "/archive";
+
+        // Get recording IDs referenced in the recording-log
+        Set<Long> referencedIds = getRecordingLogRecordingIds(clusterDir, jarPath);
+        System.out.println("Node " + nodeId + " recording-log references: " + referencedIds);
+
+        // Get all recording IDs from the archive catalog
+        Set<Long> catalogIds = getArchiveCatalogRecordingIds(archiveDir, jarPath);
+        System.out.println("Node " + nodeId + " archive catalog contains: " + catalogIds);
+
+        // Find unreferenced recordings (in catalog but not in recording-log)
+        Set<Long> unreferencedIds = new HashSet<>(catalogIds);
+        unreferencedIds.removeAll(referencedIds);
+        System.out.println("Node " + nodeId + " unreferenced recordings to invalidate: " + unreferencedIds);
+
+        // Mark unreferenced recordings as INVALID
+        for (Long recordingId : unreferencedIds) {
+            try {
+                executeCommand("java",
+                    "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
+                    "-cp", jarPath, "io.aeron.archive.ArchiveTool",
+                    archiveDir, "mark-invalid", String.valueOf(recordingId));
+                System.out.println("Node " + nodeId + " marked recording " + recordingId + " as INVALID");
+            } catch (Exception e) {
+                System.err.println("Warning: failed to mark recording " + recordingId + " invalid: " + e.getMessage());
+            }
+        }
+
+        // Run compact to delete INVALID recordings and their segment files
+        if (!unreferencedIds.isEmpty()) {
+            executeCommand("bash", "-c",
+                "echo 'y' | java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED " +
+                "-cp " + jarPath + " io.aeron.archive.ArchiveTool " + archiveDir + " compact");
+            System.out.println("Node " + nodeId + " archive compacted");
+        }
+    }
+
+    /**
+     * Parse the cluster recording-log and extract all referenced recording IDs.
+     */
+    private Set<Long> getRecordingLogRecordingIds(String clusterDir, String jarPath) {
+        Set<Long> ids = new HashSet<>();
+        try {
+            String result = executeCommand("java",
+                "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
+                "-cp", jarPath, "io.aeron.cluster.ClusterTool",
+                clusterDir, "recording-log");
+
+            if (result != null) {
+                // Parse recordingId=N from the output
+                java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("recordingId=(\\d+)");
+                java.util.regex.Matcher matcher = pattern.matcher(result);
+                while (matcher.find()) {
+                    ids.add(Long.parseLong(matcher.group(1)));
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to parse recording-log: " + e.getMessage());
+        }
+        return ids;
+    }
+
+    /**
+     * Parse the archive catalog and extract all recording IDs.
+     */
+    private Set<Long> getArchiveCatalogRecordingIds(String archiveDir, String jarPath) {
+        Set<Long> ids = new HashSet<>();
+        try {
+            String result = executeCommand("java",
+                "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
+                "-cp", jarPath, "io.aeron.archive.ArchiveTool",
+                archiveDir, "describe");
+
+            if (result != null) {
+                // Parse recordingId=N from the output
+                java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("recordingId=(\\d+)");
+                java.util.regex.Matcher matcher = pattern.matcher(result);
+                while (matcher.find()) {
+                    ids.add(Long.parseLong(matcher.group(1)));
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to parse archive catalog: " + e.getMessage());
+        }
+        return ids;
     }
 
     // ==================== Rolling Archive Cleanup (Zero Downtime) ====================
