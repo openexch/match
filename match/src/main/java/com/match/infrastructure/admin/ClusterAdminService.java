@@ -588,19 +588,60 @@ public class ClusterAdminService {
 
         new Thread(() -> {
             try {
-                operationProgress.start("rolling-update", 10);
+                operationProgress.start("rolling-update", 11);
 
-                // Step 1: Build application
-                operationProgress.update(1, "Building application...");
                 String projectDir = System.getenv("MATCH_PROJECT_DIR");
                 if (projectDir == null || projectDir.isEmpty()) {
                     projectDir = System.getProperty("user.dir");
                 }
-                executeCommand("bash", "-c", "cd " + projectDir + "/match && mvn clean package -DskipTests -q");
+                String jarPath = projectDir + "/match/target/cluster-engine-1.0.jar";
+                String stagingJarPath = projectDir + "/match/target/staging/cluster-engine-1.0.jar";
+
+                // Step 1: Build in isolated directory (NEVER touch live JAR)
+                // CRITICAL: The live JAR at target/cluster-engine-1.0.jar must NEVER be
+                // modified while cluster nodes are running! Even a brief overwrite causes
+                // ClassNotFoundException for any lazy-loaded classes.
+                //
+                // Strategy: Copy source to /tmp, build there, copy result to staging.
+                // This guarantees the live JAR is never touched during build.
+                operationProgress.update(1, "Building application in isolated directory...");
+                String buildId = String.valueOf(System.currentTimeMillis());
+                String tempBuildDir = "/tmp/match-rolling-build-" + buildId;
+                
+                // Build in isolated /tmp directory - never touches live JAR
+                String buildScript = String.join(" && ",
+                    "rm -rf " + tempBuildDir,
+                    "mkdir -p " + tempBuildDir,
+                    "mkdir -p " + projectDir + "/match/target/staging",
+                    // Copy only what's needed for build
+                    "cp " + projectDir + "/match/pom.xml " + tempBuildDir + "/",
+                    "cp -r " + projectDir + "/match/src " + tempBuildDir + "/",
+                    // Build in temp directory
+                    "cd " + tempBuildDir,
+                    "mvn package -DskipTests -q",
+                    // Copy result to staging (live JAR untouched!)
+                    "cp " + tempBuildDir + "/target/cluster-engine-1.0.jar " + stagingJarPath,
+                    // Cleanup temp build
+                    "rm -rf " + tempBuildDir
+                );
+                executeCommand("bash", "-c", buildScript);
+
+                // Verify staging JAR exists
+                if (!Files.exists(Path.of(stagingJarPath))) {
+                    operationProgress.finish(false, "Build failed: staging JAR not found");
+                    return;
+                }
+                
+                operationProgress.update(1, "Build complete, staged for deployment");
 
                 // Step 2: Find current leader from cached cluster status
                 operationProgress.update(2, "Finding cluster leader...");
                 int leaderNode = clusterStatus.getLeaderId();
+
+                if (leaderNode < 0) {
+                    // Try to detect from cluster
+                    leaderNode = detectLeaderFromCluster();
+                }
 
                 if (leaderNode < 0) {
                     operationProgress.finish(false, "Could not find cluster leader");
@@ -614,21 +655,36 @@ public class ClusterAdminService {
                     if (i != leaderNode) followers[idx++] = i;
                 }
 
-                // Steps 3-12: Update both followers (5 steps each)
+                // Track if JAR has been swapped
+                boolean jarSwapped = false;
+
+                // Steps 3-8: Update both followers
                 int step = 3;
                 for (int f = 0; f < 2; f++) {
                     int nodeId = followers[f];
                     String nodeLabel = "Node " + nodeId;
 
+                    // Stop follower
                     operationProgress.update(step, "Stopping " + nodeLabel + "...");
                     clusterStatus.setNodeStatus(nodeId, "STOPPING", false);
                     executeCommand("systemctl", "--user", "stop", "node" + nodeId);
                     Thread.sleep(1000);
+                    clusterStatus.setNodeStatus(nodeId, "OFFLINE", false);
                     step++;
 
-                    operationProgress.update(step, "Starting " + nodeLabel + "...");
+                    // Swap JAR after FIRST node is stopped (minimizes risk window)
+                    // At this point: 1 node stopped, 2 nodes running with old JAR in memory
+                    // The running nodes should not lazy-load during this brief window
+                    if (!jarSwapped) {
+                        operationProgress.update(step, "Deploying new JAR...");
+                        executeCommand("mv", stagingJarPath, jarPath);
+                        jarSwapped = true;
+                        Thread.sleep(100);
+                    }
+
+                    // Start follower (will load NEW JAR)
+                    operationProgress.update(step, "Starting " + nodeLabel + " with new code...");
                     clusterStatus.setNodeStatus(nodeId, "STARTING", false);
-                    Thread.sleep(300);
                     executeCommand("systemctl", "--user", "start", "node" + nodeId);
                     Thread.sleep(2000);
                     step++;
@@ -651,13 +707,17 @@ public class ClusterAdminService {
                 }
                 executeCommand("systemctl", "--user", "stop", "node" + leaderNode);
                 Thread.sleep(1000);
+                clusterStatus.setNodeStatus(leaderNode, "OFFLINE", false);
 
                 // Wait for election - new leader will be detected by gateway heartbeats
-                operationProgress.update(9, "Leader election in progress...");
+                operationProgress.update(10, "Leader election in progress...");
                 Thread.sleep(3000);
 
-                // Find new leader from followers (one of them should become leader)
-                int newLeader = followers[0]; // Default to first follower
+                // Detect new leader
+                int newLeader = detectLeaderFromCluster();
+                if (newLeader < 0) {
+                    newLeader = followers[0]; // Default to first follower
+                }
                 clusterStatus.updateLeader(newLeader, clusterStatus.getLeadershipTermId() + 1);
                 for (int nodeId : followers) {
                     if (nodeId == newLeader) {
@@ -666,10 +726,10 @@ public class ClusterAdminService {
                         clusterStatus.setNodeStatus(nodeId, "FOLLOWER", true);
                     }
                 }
-                operationProgress.update(9, "New leader elected: Node " + newLeader);
+                operationProgress.update(10, "New leader elected: Node " + newLeader);
 
-                // Step 10: Start old leader as follower
-                operationProgress.update(10, "Starting Node " + leaderNode + " as follower...");
+                // Step 11: Start old leader as follower (will load NEW JAR)
+                operationProgress.update(11, "Starting Node " + leaderNode + " as follower...");
                 clusterStatus.setNodeStatus(leaderNode, "STARTING", false);
                 executeCommand("systemctl", "--user", "start", "node" + leaderNode);
                 Thread.sleep(2000);
@@ -678,9 +738,12 @@ public class ClusterAdminService {
                 // Wait for old leader to rejoin as follower
                 Thread.sleep(5000);
                 clusterStatus.setNodeStatus(leaderNode, "FOLLOWER", true);
-                operationProgress.update(10, "Node " + leaderNode + " rejoined as follower");
+                operationProgress.update(11, "Node " + leaderNode + " rejoined as follower");
 
-                operationProgress.finish(true, "All nodes updated successfully");
+                // Cleanup staging directory
+                executeCommand("rm", "-rf", projectDir + "/match/target/staging");
+
+                operationProgress.finish(true, "All nodes updated successfully with new code");
 
             } catch (Exception e) {
                 e.printStackTrace();
