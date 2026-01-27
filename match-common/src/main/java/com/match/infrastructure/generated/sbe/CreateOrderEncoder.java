@@ -1,0 +1,454 @@
+/* Generated SBE (Simple Binary Encoding) message codec. */
+package com.match.infrastructure.generated.sbe;
+
+import org.agrona.MutableDirectBuffer;
+
+
+/**
+ * Create order event
+ */
+@SuppressWarnings("all")
+public final class CreateOrderEncoder
+{
+    public static final int BLOCK_LENGTH = 38;
+    public static final int TEMPLATE_ID = 1;
+    public static final int SCHEMA_ID = 1;
+    public static final int SCHEMA_VERSION = 2;
+    public static final String SEMANTIC_VERSION = "5.2";
+    public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
+
+    private final CreateOrderEncoder parentMessage = this;
+    private MutableDirectBuffer buffer;
+    private int offset;
+    private int limit;
+
+    public int sbeBlockLength()
+    {
+        return BLOCK_LENGTH;
+    }
+
+    public int sbeTemplateId()
+    {
+        return TEMPLATE_ID;
+    }
+
+    public int sbeSchemaId()
+    {
+        return SCHEMA_ID;
+    }
+
+    public int sbeSchemaVersion()
+    {
+        return SCHEMA_VERSION;
+    }
+
+    public String sbeSemanticType()
+    {
+        return "";
+    }
+
+    public MutableDirectBuffer buffer()
+    {
+        return buffer;
+    }
+
+    public int offset()
+    {
+        return offset;
+    }
+
+    public CreateOrderEncoder wrap(final MutableDirectBuffer buffer, final int offset)
+    {
+        if (buffer != this.buffer)
+        {
+            this.buffer = buffer;
+        }
+        this.offset = offset;
+        limit(offset + BLOCK_LENGTH);
+
+        return this;
+    }
+
+    public CreateOrderEncoder wrapAndApplyHeader(
+        final MutableDirectBuffer buffer, final int offset, final MessageHeaderEncoder headerEncoder)
+    {
+        headerEncoder
+            .wrap(buffer, offset)
+            .blockLength(BLOCK_LENGTH)
+            .templateId(TEMPLATE_ID)
+            .schemaId(SCHEMA_ID)
+            .version(SCHEMA_VERSION);
+
+        return wrap(buffer, offset + MessageHeaderEncoder.ENCODED_LENGTH);
+    }
+
+    public int encodedLength()
+    {
+        return limit - offset;
+    }
+
+    public int limit()
+    {
+        return limit;
+    }
+
+    public void limit(final int limit)
+    {
+        this.limit = limit;
+    }
+
+    public static int userIdId()
+    {
+        return 1;
+    }
+
+    public static int userIdSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int userIdEncodingOffset()
+    {
+        return 0;
+    }
+
+    public static int userIdEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String userIdMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long userIdNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long userIdMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long userIdMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public CreateOrderEncoder userId(final long value)
+    {
+        buffer.putLong(offset + 0, value, BYTE_ORDER);
+        return this;
+    }
+
+
+    public static int priceId()
+    {
+        return 2;
+    }
+
+    public static int priceSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int priceEncodingOffset()
+    {
+        return 8;
+    }
+
+    public static int priceEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String priceMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long priceNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long priceMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long priceMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public CreateOrderEncoder price(final long value)
+    {
+        buffer.putLong(offset + 8, value, BYTE_ORDER);
+        return this;
+    }
+
+
+    public static int quantityId()
+    {
+        return 3;
+    }
+
+    public static int quantitySinceVersion()
+    {
+        return 0;
+    }
+
+    public static int quantityEncodingOffset()
+    {
+        return 16;
+    }
+
+    public static int quantityEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String quantityMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long quantityNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long quantityMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long quantityMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public CreateOrderEncoder quantity(final long value)
+    {
+        buffer.putLong(offset + 16, value, BYTE_ORDER);
+        return this;
+    }
+
+
+    public static int totalPriceId()
+    {
+        return 4;
+    }
+
+    public static int totalPriceSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int totalPriceEncodingOffset()
+    {
+        return 24;
+    }
+
+    public static int totalPriceEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String totalPriceMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long totalPriceNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long totalPriceMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long totalPriceMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public CreateOrderEncoder totalPrice(final long value)
+    {
+        buffer.putLong(offset + 24, value, BYTE_ORDER);
+        return this;
+    }
+
+
+    public static int marketIdId()
+    {
+        return 5;
+    }
+
+    public static int marketIdSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int marketIdEncodingOffset()
+    {
+        return 32;
+    }
+
+    public static int marketIdEncodingLength()
+    {
+        return 4;
+    }
+
+    public static String marketIdMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static int marketIdNullValue()
+    {
+        return -2147483648;
+    }
+
+    public static int marketIdMinValue()
+    {
+        return -2147483647;
+    }
+
+    public static int marketIdMaxValue()
+    {
+        return 2147483647;
+    }
+
+    public CreateOrderEncoder marketId(final int value)
+    {
+        buffer.putInt(offset + 32, value, BYTE_ORDER);
+        return this;
+    }
+
+
+    public static int orderTypeId()
+    {
+        return 6;
+    }
+
+    public static int orderTypeSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int orderTypeEncodingOffset()
+    {
+        return 36;
+    }
+
+    public static int orderTypeEncodingLength()
+    {
+        return 1;
+    }
+
+    public static String orderTypeMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public CreateOrderEncoder orderType(final OrderType value)
+    {
+        buffer.putByte(offset + 36, (byte)value.value());
+        return this;
+    }
+
+    public static int orderSideId()
+    {
+        return 7;
+    }
+
+    public static int orderSideSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int orderSideEncodingOffset()
+    {
+        return 37;
+    }
+
+    public static int orderSideEncodingLength()
+    {
+        return 1;
+    }
+
+    public static String orderSideMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public CreateOrderEncoder orderSide(final OrderSide value)
+    {
+        buffer.putByte(offset + 37, (byte)value.value());
+        return this;
+    }
+
+    public String toString()
+    {
+        if (null == buffer)
+        {
+            return "";
+        }
+
+        return appendTo(new StringBuilder()).toString();
+    }
+
+    public StringBuilder appendTo(final StringBuilder builder)
+    {
+        if (null == buffer)
+        {
+            return builder;
+        }
+
+        final CreateOrderDecoder decoder = new CreateOrderDecoder();
+        decoder.wrap(buffer, offset, BLOCK_LENGTH, SCHEMA_VERSION);
+
+        return decoder.appendTo(builder);
+    }
+}

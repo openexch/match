@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
+                   package="com.match.infrastructure.generated"
+                   id="1"
+                   version="2"
+                   semanticVersion="5.2"
+                   description="Match Order Schema - Optimized for Ultra-Low Latency"
+>
+    <types>
+        <composite name="messageHeader" description="Message identifiers and length of message root">
+            <type name="blockLength" primitiveType="uint16"/>
+            <type name="templateId" primitiveType="uint16"/>
+            <type name="schemaId" primitiveType="uint16"/>
+            <type name="version" primitiveType="uint16"/>
+        </composite>
+        <enum name="OrderType" encodingType="uint8">
+            <validValue name="LIMIT">0</validValue>
+            <validValue name="MARKET">1</validValue>
+            <validValue name="LIMIT_MAKER">2</validValue>
+        </enum>
+        <enum name="OrderSide" encodingType="uint8">
+            <validValue name="BID">0</validValue>
+            <validValue name="ASK">1</validValue>
+        </enum>
+        <enum name="CommandType" encodingType="uint8">
+            <validValue name="CREATE">0</validValue>
+            <validValue name="CANCEL">1</validValue>
+            <validValue name="UPDATE">2</validValue>
+        </enum>
+        <enum name="OrderStatus" encodingType="uint8">
+            <validValue name="NEW">0</validValue>
+            <validValue name="PARTIALLY_FILLED">1</validValue>
+            <validValue name="FILLED">2</validValue>
+            <validValue name="CANCELLED">3</validValue>
+            <validValue name="REJECTED">4</validValue>
+        </enum>
+        <enum name="BookUpdateType" encodingType="uint8">
+            <validValue name="NEW_LEVEL">0</validValue>
+            <validValue name="UPDATE_LEVEL">1</validValue>
+            <validValue name="DELETE_LEVEL">2</validValue>
+        </enum>
+        <!-- Group size encoding for variable-length groups -->
+        <composite name="groupSizeEncoding" description="Repeating group dimensions">
+            <type name="blockLength" primitiveType="uint16"/>
+            <type name="numInGroup" primitiveType="uint16"/>
+        </composite>
+    </types>
+
+    <!-- Optimized: All numeric fields, no string parsing -->
+    <sbe:message name="CreateOrder" id="1" description="Create order event">
+        <field name="userId" id="1" type="int64"/>
+        <field name="price" id="2" type="int64"/>
+        <field name="quantity" id="3" type="int64"/>
+        <field name="totalPrice" id="4" type="int64"/>
+        <field name="marketId" id="5" type="int32"/>
+        <field name="orderType" id="6" type="OrderType"/>
+        <field name="orderSide" id="7" type="OrderSide"/>
+    </sbe:message>
+
+    <sbe:message name="CancelOrder" id="2" description="Cancel order event">
+        <field name="userId" id="1" type="int64"/>
+        <field name="orderId" id="2" type="int64"/>
+        <field name="marketId" id="3" type="int32"/>
+    </sbe:message>
+
+    <sbe:message name="UpdateOrder" id="3" description="Update order event">
+        <field name="userId" id="1" type="int64"/>
+        <field name="orderId" id="2" type="int64"/>
+        <field name="price" id="3" type="int64"/>
+        <field name="quantity" id="4" type="int64"/>
+        <field name="marketId" id="5" type="int32"/>
+        <field name="orderType" id="6" type="OrderType"/>
+        <field name="orderSide" id="7" type="OrderSide"/>
+    </sbe:message>
+
+    <!-- ========== OUTBOUND MESSAGES (Server to Client) ========== -->
+
+    <!-- Trade Execution - Published for each match during order processing -->
+    <sbe:message name="TradeExecution" id="4" description="Trade execution/fill event">
+        <field name="tradeId" id="1" type="int64"/>
+        <field name="takerOrderId" id="2" type="int64"/>
+        <field name="makerOrderId" id="3" type="int64"/>
+        <field name="takerUserId" id="4" type="int64"/>
+        <field name="makerUserId" id="5" type="int64"/>
+        <field name="price" id="6" type="int64"/>
+        <field name="quantity" id="7" type="int64"/>
+        <field name="marketId" id="8" type="int32"/>
+        <field name="takerSide" id="9" type="OrderSide"/>
+        <field name="timestamp" id="10" type="int64"/>
+    </sbe:message>
+
+    <!-- Order Status Update - Published when order state changes -->
+    <sbe:message name="OrderStatusUpdate" id="5" description="Order status update">
+        <field name="orderId" id="1" type="int64"/>
+        <field name="userId" id="2" type="int64"/>
+        <field name="price" id="3" type="int64"/>
+        <field name="remainingQty" id="4" type="int64"/>
+        <field name="filledQty" id="5" type="int64"/>
+        <field name="marketId" id="6" type="int32"/>
+        <field name="orderSide" id="7" type="OrderSide"/>
+        <field name="status" id="8" type="OrderStatus"/>
+        <field name="timestamp" id="9" type="int64"/>
+    </sbe:message>
+
+    <!-- Order Book Update - Published for level changes -->
+    <sbe:message name="OrderBookUpdate" id="6" description="Order book level update">
+        <field name="price" id="1" type="int64"/>
+        <field name="quantity" id="2" type="int64"/>
+        <field name="orderCount" id="3" type="int32"/>
+        <field name="marketId" id="4" type="int32"/>
+        <field name="side" id="5" type="OrderSide"/>
+        <field name="updateType" id="6" type="BookUpdateType"/>
+        <field name="timestamp" id="7" type="int64"/>
+    </sbe:message>
+
+    <!-- ========== CONTROL MESSAGES ========== -->
+
+    <!-- Gateway Heartbeat - Sent by gateway every 250ms to maintain connection -->
+    <sbe:message name="GatewayHeartbeat" id="21" description="Gateway heartbeat for connection tracking">
+        <field name="gatewayId" id="1" type="int64"/>
+        <field name="timestamp" id="2" type="int64"/>
+    </sbe:message>
+
+    <!-- ========== EGRESS BATCH MESSAGES (Cluster to Gateway) ========== -->
+
+    <!-- Book Snapshot - Full order book state with bid/ask levels -->
+    <sbe:message name="BookSnapshot" id="22" description="Order book snapshot with all levels">
+        <field name="marketId" id="1" type="int32"/>
+        <field name="timestamp" id="2" type="int64"/>
+        <field name="bidVersion" id="3" type="int64"/>
+        <field name="askVersion" id="4" type="int64"/>
+        <group name="bids" id="10" dimensionType="groupSizeEncoding">
+            <field name="price" id="1" type="int64"/>
+            <field name="quantity" id="2" type="int64"/>
+            <field name="orderCount" id="3" type="int32"/>
+        </group>
+        <group name="asks" id="11" dimensionType="groupSizeEncoding">
+            <field name="price" id="1" type="int64"/>
+            <field name="quantity" id="2" type="int64"/>
+            <field name="orderCount" id="3" type="int32"/>
+        </group>
+    </sbe:message>
+
+    <!-- Trades Batch - Aggregated trades within flush interval -->
+    <sbe:message name="TradesBatch" id="23" description="Batch of aggregated trades">
+        <field name="marketId" id="1" type="int32"/>
+        <field name="timestamp" id="2" type="int64"/>
+        <group name="trades" id="10" dimensionType="groupSizeEncoding">
+            <field name="price" id="1" type="int64"/>
+            <field name="quantity" id="2" type="int64"/>
+            <field name="tradeCount" id="3" type="int32"/>
+            <field name="timestamp" id="4" type="int64"/>
+        </group>
+    </sbe:message>
+
+    <!-- Order Status Batch - Multiple order status updates -->
+    <sbe:message name="OrderStatusBatch" id="24" description="Batch of order status updates">
+        <field name="marketId" id="1" type="int32"/>
+        <field name="timestamp" id="2" type="int64"/>
+        <group name="orders" id="10" dimensionType="groupSizeEncoding">
+            <field name="orderId" id="1" type="int64"/>
+            <field name="userId" id="2" type="int64"/>
+            <field name="status" id="3" type="OrderStatus"/>
+            <field name="price" id="4" type="int64"/>
+            <field name="remainingQty" id="5" type="int64"/>
+            <field name="filledQty" id="6" type="int64"/>
+            <field name="side" id="7" type="OrderSide"/>
+            <field name="timestamp" id="8" type="int64"/>
+        </group>
+    </sbe:message>
+
+    <!-- Book Delta - Incremental book level changes (reduces bandwidth vs full snapshots) -->
+    <sbe:message name="BookDelta" id="25" description="Incremental book level changes">
+        <field name="marketId" id="1" type="int32"/>
+        <field name="timestamp" id="2" type="int64"/>
+        <field name="bidVersion" id="3" type="int64"/>
+        <field name="askVersion" id="4" type="int64"/>
+        <group name="changes" id="10" dimensionType="groupSizeEncoding">
+            <field name="price" id="1" type="int64"/>
+            <field name="quantity" id="2" type="int64"/>
+            <field name="orderCount" id="3" type="int32"/>
+            <field name="side" id="4" type="OrderSide"/>
+            <field name="updateType" id="5" type="BookUpdateType"/>
+        </group>
+    </sbe:message>
+
+</sbe:messageSchema>

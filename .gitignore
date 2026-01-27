@@ -37,3 +37,5 @@ match/src/main/resources/static/ui/assets/
 
 # SBE intermediate representation files
 *.sbeir
+*/target/
+dependency-reduced-pom.xml

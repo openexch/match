@@ -15,7 +15,7 @@
 #
 # ==================================================================
 
-.PHONY: install install-deps optimize-os status logs help services leader install-services uninstall-services reinstall-services build build-java build-ui sbe migrate-services setup-sudoers
+.PHONY: install install-deps optimize-os status logs help services leader install-services uninstall-services reinstall-services build build-java build-cluster build-gateway build-loadtest build-ui sbe migrate-services setup-sudoers
 
 # ==================== CONFIGURATION ====================
 # Absolute project directory (captured at make time)
@@ -273,7 +273,7 @@ status:
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@echo "=== Cluster Nodes ==="
-	@cluster_nodes=$$(pgrep -f "cluster-engine-1.0.jar" 2>/dev/null | xargs -I{} sh -c 'ps -p {} -o args= 2>/dev/null | grep -v "ClusterBackupApp\|HttpController"' | wc -l); \
+	@cluster_nodes=$$(pgrep -f "match-cluster.jar" 2>/dev/null | xargs -I{} sh -c 'ps -p {} -o args= 2>/dev/null | grep -v "ClusterBackupApp\|HttpController"' | wc -l); \
 	if [ "$$cluster_nodes" -ge 3 ]; then \
 		echo "  ✓ $$cluster_nodes/3 cluster nodes running"; \
 	elif [ "$$cluster_nodes" -gt 0 ]; then \
@@ -335,8 +335,11 @@ help:
 	@echo "  make install-deps       Install system dependencies (Java, Node.js, Maven)"
 	@echo "  make install            Build and start everything fresh"
 	@echo "  make optimize-os        Apply OS optimizations for low latency (sudo)"
-	@echo "  make build              Build Java and UI components"
-	@echo "  make build-java         Build Java components only"
+	@echo "  make build              Build all Java modules and UI"
+	@echo "  make build-java         Build all Java modules"
+	@echo "  make build-cluster      Build cluster module only"
+	@echo "  make build-gateway      Build gateway module only"
+	@echo "  make build-loadtest     Build loadtest module only"
 	@echo "  make build-ui           Build UI only"
 	@echo ""
 	@echo "Systemd Service Management:"
@@ -396,35 +399,35 @@ install-services:
 	$(call JAVA_SERVICE,node0,Match Engine Cluster Node 0,\
 		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=0"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/tmp/aeron-cluster/node0"',\
 		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node0',\
-		/usr/bin/taskset -c $(CPU_NODE0) /usr/bin/java $(JAVA_OPTS) -jar match/target/cluster-engine-1.0.jar,10,)
+		/usr/bin/taskset -c $(CPU_NODE0) /usr/bin/java $(JAVA_OPTS) -jar $(CLUSTER_JAR),10,)
 	@echo "→ Installing node1.service (CPU cores 4-7)..."
 	$(call JAVA_SERVICE,node1,Match Engine Cluster Node 1,\
 		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=1"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/tmp/aeron-cluster/node1"',\
 		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node1' 'ExecStartPre=/bin/sleep 2',\
-		/usr/bin/taskset -c $(CPU_NODE1) /usr/bin/java $(JAVA_OPTS) -jar match/target/cluster-engine-1.0.jar,10,)
+		/usr/bin/taskset -c $(CPU_NODE1) /usr/bin/java $(JAVA_OPTS) -jar $(CLUSTER_JAR),10,)
 	@echo "→ Installing node2.service (CPU cores 8-11)..."
 	$(call JAVA_SERVICE,node2,Match Engine Cluster Node 2,\
 		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=2"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/tmp/aeron-cluster/node2"',\
 		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node2' 'ExecStartPre=/bin/sleep 2',\
-		/usr/bin/taskset -c $(CPU_NODE2) /usr/bin/java $(JAVA_OPTS) -jar match/target/cluster-engine-1.0.jar,10,)
+		/usr/bin/taskset -c $(CPU_NODE2) /usr/bin/java $(JAVA_OPTS) -jar $(CLUSTER_JAR),10,)
 	@echo "→ Installing backup.service..."
 	$(call JAVA_SERVICE,backup,Match Engine Cluster Backup Node,,\
 		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/backup' 'ExecStartPre=/bin/sleep 3',\
-		/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.persistence.ClusterBackupApp,10,)
+		/usr/bin/java $(JAVA_OPTS) -cp $(CLUSTER_JAR) com.match.infrastructure.persistence.ClusterBackupApp,10,)
 	@echo "→ Installing market.service..."
 	$(call JAVA_SERVICE,market,Match Engine Market Gateway,\
 		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' 'Environment="EGRESS_PORT=9091"',\
 		'ExecStartPre=/bin/sleep 5',\
-		/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.MarketGatewayMain,5,)
+		/usr/bin/java $(JAVA_OPTS) -cp $(GATEWAY_JAR) com.match.infrastructure.gateway.MarketGatewayMain,5,)
 	@echo "→ Installing order.service..."
 	$(call JAVA_SERVICE,order,Match Engine Order Gateway,\
 		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' 'Environment="EGRESS_PORT=9092"',\
 		'ExecStartPre=/bin/sleep 5',\
-		/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.OrderGatewayMain,5,)
+		/usr/bin/java $(JAVA_OPTS) -cp $(GATEWAY_JAR) com.match.infrastructure.gateway.OrderGatewayMain,5,)
 	@echo "→ Installing admin.service..."
 	$(call JAVA_SERVICE,admin,Match Engine Admin Gateway,\
 		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"',,\
-		/usr/bin/java $(JAVA_OPTS) -cp match/target/cluster-engine-1.0.jar com.match.infrastructure.gateway.AdminGatewayMain,5,)
+		/usr/bin/java $(JAVA_OPTS) -cp $(GATEWAY_JAR) com.match.infrastructure.gateway.AdminGatewayMain,5,)
 	@echo "→ Installing ui.service (port 3000)..."
 	$(call UI_SERVICE)
 	@echo ""
@@ -555,7 +558,12 @@ setup-sudoers:
 
 # ==================== CLUSTER STATUS (READ-ONLY) ====================
 
-JAR_PATH = match/target/cluster-engine-1.0.jar
+# JAR paths for multi-module structure
+CLUSTER_JAR = match-cluster/target/match-cluster.jar
+GATEWAY_JAR = match-gateway/target/match-gateway.jar
+LOADTEST_JAR = match-loadtest/target/match-loadtest.jar
+# Legacy path for compatibility checks
+JAR_PATH = $(CLUSTER_JAR)
 
 # Show current cluster leader
 leader:
@@ -587,9 +595,21 @@ leader:
 build: build-ui build-java
 	@echo "✓ Build complete"
 
-# Build only Java
+# Build all Java modules (multi-module Maven project)
 build-java:
-	cd match && mvn clean package -DskipTests -q
+	mvn clean package -DskipTests -q
+
+# Build only cluster module
+build-cluster:
+	mvn package -pl match-cluster -am -DskipTests -q
+
+# Build only gateway module
+build-gateway:
+	mvn package -pl match-gateway -am -DskipTests -q
+
+# Build only loadtest module
+build-loadtest:
+	mvn package -pl match-loadtest -am -DskipTests -q
 
 # Build the React UI
 build-ui:
@@ -598,7 +618,7 @@ build-ui:
 # ==================== SBE CODE GENERATION ====================
 
 sbe:
-	java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED -Dsbe.generate.ir=true -Dsbe.target.language=Java -Dsbe.target.namespace=com.match.infrastructure.generated.sbe -Dsbe.output.dir=match/src/main/java -Dsbe.errorLog=yes -jar binaries/sbe-all-1.35.3.jar match/src/main/resources/sbe/order-schema.xml
+	java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED -Dsbe.generate.ir=true -Dsbe.target.language=Java -Dsbe.target.namespace=com.match.infrastructure.generated.sbe -Dsbe.output.dir=match-common/src/main/java -Dsbe.errorLog=yes -jar binaries/sbe-all-1.35.3.jar match-common/src/main/resources/sbe/order-schema.xml
 
 # ==================== CONFIGURATION ====================
 
