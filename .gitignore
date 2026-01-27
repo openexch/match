@@ -39,3 +39,4 @@ match/src/main/resources/static/ui/assets/
 *.sbeir
 */target/
 dependency-reduced-pom.xml
+node*/
