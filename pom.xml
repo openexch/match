@@ -24,7 +24,7 @@
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <aeron.version>1.48.1</aeron.version>
-        <agrona.version>1.23.0</agrona.version>
+        <agrona.version>2.2.2</agrona.version>
         <sbe.version>1.33.1</sbe.version>
         <disruptor.version>4.0.0</disruptor.version>
         <netty.version>4.1.100.Final</netty.version>

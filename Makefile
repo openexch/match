@@ -166,9 +166,9 @@ install:
 	@echo ""
 	@echo "→ Step 4/5: Cleaning cluster state..."
 	@rm -rf /dev/shm/aeron-* 2>/dev/null || true
-	@rm -rf /tmp/aeron-cluster/node0/* /tmp/aeron-cluster/node1/* /tmp/aeron-cluster/node2/* 2>/dev/null || true
-	@rm -rf /tmp/aeron-cluster/backup/* 2>/dev/null || true
-	@mkdir -p /tmp/aeron-cluster/node0 /tmp/aeron-cluster/node1 /tmp/aeron-cluster/node2 /tmp/aeron-cluster/backup
+	@rm -rf /dev/shm/aeron-cluster/node0/* /dev/shm/aeron-cluster/node1/* /dev/shm/aeron-cluster/node2/* 2>/dev/null || true
+	@rm -rf /dev/shm/aeron-cluster/backup/* 2>/dev/null || true
+	@mkdir -p /dev/shm/aeron-cluster/node0 /dev/shm/aeron-cluster/node1 /dev/shm/aeron-cluster/node2 /dev/shm/aeron-cluster/backup
 	@echo "  ✓ Cluster state cleaned"
 	@echo ""
 	@echo "→ Step 5/5: Starting cluster..."
@@ -318,8 +318,8 @@ status:
 	fi
 	@echo ""
 	@echo "=== Archive Storage ==="
-	@total=$$(du -sh /tmp/aeron-cluster/node*/archive/ 2>/dev/null | awk '{sum+=$$1} END {print sum}'); \
-	echo "  → Total archive size: $$(du -sh /tmp/aeron-cluster/ 2>/dev/null | cut -f1)"
+	@total=$$(du -sh /dev/shm/aeron-cluster/node*/archive/ 2>/dev/null | awk '{sum+=$$1} END {print sum}'); \
+	echo "  → Total archive size: $$(du -sh /dev/shm/aeron-cluster/ 2>/dev/null | cut -f1)"
 	@echo ""
 	@echo "For management, use Admin API: http://localhost:8082/api/admin/"
 
@@ -397,22 +397,22 @@ install-services:
 	@mkdir -p $(LOG_DIR)
 	@echo "→ Installing node0.service (CPU cores 0-3)..."
 	$(call JAVA_SERVICE,node0,Match Engine Cluster Node 0,\
-		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=0"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/tmp/aeron-cluster/node0"',\
-		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node0',\
+		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=0"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/dev/shm/aeron-cluster/node0"',\
+		'ExecStartPre=/bin/mkdir -p /dev/shm/aeron-cluster/node0',\
 		/usr/bin/taskset -c $(CPU_NODE0) /usr/bin/java $(JAVA_OPTS) -jar $(CLUSTER_JAR),10,)
 	@echo "→ Installing node1.service (CPU cores 4-7)..."
 	$(call JAVA_SERVICE,node1,Match Engine Cluster Node 1,\
-		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=1"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/tmp/aeron-cluster/node1"',\
-		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node1' 'ExecStartPre=/bin/sleep 2',\
+		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=1"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/dev/shm/aeron-cluster/node1"',\
+		'ExecStartPre=/bin/mkdir -p /dev/shm/aeron-cluster/node1' 'ExecStartPre=/bin/sleep 2',\
 		/usr/bin/taskset -c $(CPU_NODE1) /usr/bin/java $(JAVA_OPTS) -jar $(CLUSTER_JAR),10,)
 	@echo "→ Installing node2.service (CPU cores 8-11)..."
 	$(call JAVA_SERVICE,node2,Match Engine Cluster Node 2,\
-		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=2"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/tmp/aeron-cluster/node2"',\
-		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/node2' 'ExecStartPre=/bin/sleep 2',\
+		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=2"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/dev/shm/aeron-cluster/node2"',\
+		'ExecStartPre=/bin/mkdir -p /dev/shm/aeron-cluster/node2' 'ExecStartPre=/bin/sleep 2',\
 		/usr/bin/taskset -c $(CPU_NODE2) /usr/bin/java $(JAVA_OPTS) -jar $(CLUSTER_JAR),10,)
 	@echo "→ Installing backup.service..."
 	$(call JAVA_SERVICE,backup,Match Engine Cluster Backup Node,,\
-		'ExecStartPre=/bin/mkdir -p /tmp/aeron-cluster/backup' 'ExecStartPre=/bin/sleep 3',\
+		'ExecStartPre=/bin/mkdir -p /dev/shm/aeron-cluster/backup' 'ExecStartPre=/bin/sleep 3',\
 		/usr/bin/java $(JAVA_OPTS) -cp $(CLUSTER_JAR) com.match.infrastructure.persistence.ClusterBackupApp,10,)
 	@echo "→ Installing market.service..."
 	$(call JAVA_SERVICE,market,Match Engine Market Gateway,\
@@ -572,7 +572,7 @@ leader:
 	for check_node in 0 1 2; do \
 		result=$$(java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
 			-cp $(JAR_PATH) io.aeron.cluster.ClusterTool \
-			/tmp/aeron-cluster/node$$check_node/cluster list-members 2>&1); \
+			/dev/shm/aeron-cluster/node$$check_node/cluster list-members 2>&1); \
 		if echo "$$result" | grep -q "leaderMemberId="; then \
 			leader_id=$$(echo "$$result" | grep -o "leaderMemberId=[0-9]*" | cut -d= -f2); \
 			echo "→ Node $$leader_id is LEADER"; \

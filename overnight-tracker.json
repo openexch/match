@@ -1,0 +1,69 @@
+{
+  "startTime": "2026-01-27T00:50:57",
+  "endTime": "2026-01-27T06:50:57",
+  "totalRuns": 3,
+  "runs": [
+    {
+      "timestamp": "2026-01-27T00:50:57",
+      "runNumber": 1,
+      "clusterStatus": "healthy",
+      "leader": 0,
+      "nodesRunning": "3/3",
+      "memory": {"node0": 2630, "node1": 2424, "node2": 2427},
+      "archives": {"node0": "1.1M", "node1": "1.1M", "node2": "1.1M"},
+      "loadTest": {"success": 0, "failed": 100, "durationMs": 620},
+      "snapshotOk": true,
+      "warnings": ["⚠️ High failure rate on order burst: 0/100"]
+    },
+    {
+      "timestamp": "2026-01-27T01:06:26",
+      "runNumber": 2,
+      "clusterStatus": "DEAD",
+      "leader": "none",
+      "nodesRunning": "0/3",
+      "memory": {"node0": 2238, "node1": 2185, "node2": 2186},
+      "archives": {"node0": "1.2M", "node1": "1.5M", "node2": "1.5M"},
+      "loadTest": {"success": 0, "failed": 100, "durationMs": 833},
+      "snapshotOk": true,
+      "warnings": ["🔴 CLUSTER OFFLINE - all 3 nodes down"]
+    },
+    {
+      "timestamp": "2026-01-27T01:22:27",
+      "runNumber": 3,
+      "clusterStatus": "healthy",
+      "leader": 1,
+      "nodesRunning": "3/3",
+      "memory": {"node0": 2237, "node1": 2611, "node2": 2420},
+      "archives": {"node0": "1.1M", "node1": "1.1M", "node2": "1.1M"},
+      "loadTest": {"success": 100, "failed": 0, "durationMs": 953},
+      "snapshotOk": true,
+      "warnings": [],
+      "notes": "✅ Cluster recovered! Leader changed to node 1. Perfect order throughput."
+    }
+  ],
+  "criticalEvents": [
+    "[01:06:26] CLUSTER CRASH - All 3 nodes went OFFLINE",
+    "[01:22:27] CLUSTER RECOVERED - New leader: node 1"
+  ],
+  "warningsAndErrors": [
+    "[Run 1] ⚠️ High failure rate: 0/100 orders",
+    "[Run 2] 🔴 CLUSTER OFFLINE - all nodes down",
+    "[00:53:38] ⚠️ Snapshot failed: Could not find cluster leader"
+  ],
+  "memoryTrend": [
+    {"run": 1, "node0": 2630, "node1": 2424, "node2": 2427},
+    {"run": 2, "node0": 2238, "node1": 2185, "node2": 2186},
+    {"run": 3, "node0": 2237, "node1": 2611, "node2": 2420}
+  ],
+  "archiveTrend": [
+    {"run": 1, "node0": "1.1M", "node1": "1.1M", "node2": "1.1M"},
+    {"run": 2, "node0": "1.2M", "node1": "1.5M", "node2": "1.5M"},
+    {"run": 3, "node0": "1.1M", "node1": "1.1M", "node2": "1.1M"}
+  ],
+  "orderSuccessRate": {
+    "totalOrders": 600,
+    "totalSuccess": 200,
+    "totalFailed": 400,
+    "rate": "33%"
+  }
+}
