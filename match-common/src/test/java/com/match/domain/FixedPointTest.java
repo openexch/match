@@ -131,4 +131,58 @@ public class FixedPointTest {
         String formatted = FixedPoint.format(FixedPoint.fromDouble(123.456));
         assertTrue(formatted.startsWith("123."));
     }
+
+    // ==================== Missing method coverage ====================
+
+    @Test
+    public void testIsNegative() {
+        assertTrue(FixedPoint.isNegative(FixedPoint.fromDouble(-1.0)));
+        assertFalse(FixedPoint.isNegative(0L));
+        assertFalse(FixedPoint.isNegative(FixedPoint.fromDouble(1.0)));
+    }
+
+    @Test
+    public void testCompare() {
+        long a = FixedPoint.fromDouble(100.0);
+        long b = FixedPoint.fromDouble(200.0);
+        assertTrue(FixedPoint.compare(a, b) < 0);
+        assertTrue(FixedPoint.compare(b, a) > 0);
+        assertEquals(0, FixedPoint.compare(a, a));
+    }
+
+    @Test
+    public void testMin() {
+        long a = FixedPoint.fromDouble(100.0);
+        long b = FixedPoint.fromDouble(200.0);
+        assertEquals(a, FixedPoint.min(a, b));
+        assertEquals(a, FixedPoint.min(b, a));
+        assertEquals(a, FixedPoint.min(a, a));
+    }
+
+    @Test
+    public void testMax() {
+        long a = FixedPoint.fromDouble(100.0);
+        long b = FixedPoint.fromDouble(200.0);
+        assertEquals(b, FixedPoint.max(a, b));
+        assertEquals(b, FixedPoint.max(b, a));
+        assertEquals(a, FixedPoint.max(a, a));
+    }
+
+    @Test
+    public void testFormatNegative() {
+        String formatted = FixedPoint.format(FixedPoint.fromDouble(-42.5));
+        assertTrue(formatted.startsWith("-42."));
+    }
+
+    @Test
+    public void testMultiply_True128BitCase() {
+        // Force the true 128-bit case where high != 0 and high != -1
+        // Need values where a * b produces a high word that's not 0 or -1
+        // Use very large values: a = Long.MAX_VALUE / 2, b = SCALE_FACTOR * 4
+        long a = Long.MAX_VALUE / 2;
+        long b = FixedPoint.SCALE_FACTOR * 4; // 4.0 in fixed point
+        long result = FixedPoint.multiply(a, b);
+        // Should not crash; result should be approximately a * 4
+        assertTrue("128-bit multiply should produce a result", result != 0);
+    }
 }

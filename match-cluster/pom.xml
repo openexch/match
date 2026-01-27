@@ -44,6 +44,10 @@
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+            </plugin>
             <!-- Create uber JAR for cluster nodes -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
