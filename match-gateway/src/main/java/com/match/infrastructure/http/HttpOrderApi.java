@@ -44,11 +44,21 @@ public class HttpOrderApi implements HttpHandler {
             try (InputStreamReader reader = new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8)) {
                 Order order = gson.fromJson(reader, Order.class);
 
-                if (order == null || order.market == null) {
+                if (order == null) {
                     responseText = "Error: Invalid or empty JSON body.";
                     statusCode = 400;
                 } else {
-                    sendOrder(order);
+                    // Validate at the gateway — reject before it reaches the engine
+                    String validationError = order.validate();
+                    if (validationError != null) {
+                        responseText = "Error: " + validationError;
+                        statusCode = 400;
+                    } else if (!gateway.isConnected()) {
+                        responseText = "Error: Cluster is not connected.";
+                        statusCode = 503;
+                    } else {
+                        sendOrder(order);
+                    }
                 }
             } catch (JsonSyntaxException e) {
                 responseText = "Error: Malformed JSON.";

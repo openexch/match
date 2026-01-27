@@ -176,7 +176,7 @@ public class DirectIndexOrderBook {
         levels[levelBase + 3] += quantity; // Total quantity
 
         // Store order location for O(1) cancel
-        int locationIdx = (int) (orderId % MAX_ACTIVE_ORDERS);
+        int locationIdx = (int) (Math.abs(orderId) % MAX_ACTIVE_ORDERS);
         orderLocations[locationIdx] = packLocation(priceIdx, slot);
 
         // Memory barrier - increment version AFTER all writes complete
@@ -194,7 +194,7 @@ public class DirectIndexOrderBook {
      * Cancel order by ID. O(1)
      */
     public boolean cancelOrder(long orderId) {
-        int locationIdx = (int) (orderId % MAX_ACTIVE_ORDERS);
+        int locationIdx = (int) (Math.abs(orderId) % MAX_ACTIVE_ORDERS);
         long location = orderLocations[locationIdx];
         if (location == EMPTY_LOCATION) return false;
 
@@ -238,7 +238,7 @@ public class DirectIndexOrderBook {
      * Reduce order quantity (after match). O(1)
      */
     public void reduceOrderQuantity(long orderId, long reduceBy) {
-        int locationIdx = (int) (orderId % MAX_ACTIVE_ORDERS);
+        int locationIdx = (int) (Math.abs(orderId) % MAX_ACTIVE_ORDERS);
         long location = orderLocations[locationIdx];
         if (location == EMPTY_LOCATION) return;
 
@@ -313,14 +313,15 @@ public class DirectIndexOrderBook {
         int headSlot = (int) levels[levelBase];
         int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + headSlot) * ORDER_FIELDS;
 
-        // Skip deleted orders
-        while (orders[orderBase + 2] == 0) {
+        // Skip deleted orders (bounded to prevent infinite loop on corrupted data)
+        int guard = MAX_ORDERS_PER_LEVEL;
+        while (orders[orderBase + 2] == 0 && --guard > 0) {
             int nextSlot = (int) orders[orderBase + 3];
-            if (nextSlot < 0) return -1;
+            if (nextSlot < 0 || nextSlot >= MAX_ORDERS_PER_LEVEL) return -1;
             orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + nextSlot) * ORDER_FIELDS;
         }
 
-        return orders[orderBase];
+        return guard > 0 ? orders[orderBase] : -1;
     }
 
     /**
@@ -334,14 +335,15 @@ public class DirectIndexOrderBook {
         int headSlot = (int) levels[levelBase];
         int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + headSlot) * ORDER_FIELDS;
 
-        // Skip deleted orders
-        while (orders[orderBase + 2] == 0) {
+        // Skip deleted orders (bounded)
+        int guard = MAX_ORDERS_PER_LEVEL;
+        while (orders[orderBase + 2] == 0 && --guard > 0) {
             int nextSlot = (int) orders[orderBase + 3];
-            if (nextSlot < 0) return 0;
+            if (nextSlot < 0 || nextSlot >= MAX_ORDERS_PER_LEVEL) return 0;
             orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + nextSlot) * ORDER_FIELDS;
         }
 
-        return orders[orderBase + 2];
+        return guard > 0 ? orders[orderBase + 2] : 0;
     }
 
     /**
@@ -356,14 +358,15 @@ public class DirectIndexOrderBook {
         int headSlot = (int) levels[levelBase];
         int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + headSlot) * ORDER_FIELDS;
 
-        // Skip deleted orders
-        while (orders[orderBase + 2] == 0) {
+        // Skip deleted orders (bounded)
+        int guard = MAX_ORDERS_PER_LEVEL;
+        while (orders[orderBase + 2] == 0 && --guard > 0) {
             int nextSlot = (int) orders[orderBase + 3];
-            if (nextSlot < 0) return 0;
+            if (nextSlot < 0 || nextSlot >= MAX_ORDERS_PER_LEVEL) return 0;
             orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + nextSlot) * ORDER_FIELDS;
         }
 
-        return orders[orderBase + 1]; // userId is at index 1
+        return guard > 0 ? orders[orderBase + 1] : 0;
     }
 
     /**

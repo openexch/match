@@ -43,8 +43,10 @@ public class AppClusteredService implements ClusteredService {
     private final SbeDemuxer sbeDemuxer = new SbeDemuxer(engine);
 
     // Gateway heartbeat tracking - only broadcast to active gateway
-    private volatile long gatewaySessionId = -1;  // -1 = no gateway connected
-    private volatile long gatewayLastHeartbeatMs = 0;
+    // Both fields updated atomically via gatewayLock to prevent stale reads
+    private long gatewaySessionId = -1;  // -1 = no gateway connected
+    private long gatewayLastHeartbeatMs = 0;
+    private final Object gatewayLock = new Object();
     private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
     private final GatewayHeartbeatDecoder heartbeatDecoder = new GatewayHeartbeatDecoder();
 
@@ -90,7 +92,9 @@ public class AppClusteredService implements ClusteredService {
             if (!marketDataQueue.offer(new QueuedMessage(copy, length))) {
                 long dropped = droppedMessages.incrementAndGet();
                 if (dropped % 10000 == 1) {
-                    System.err.println("QUEUE FULL: Dropped " + dropped + " messages");
+                    System.err.println("WARNING: Market data queue full! Dropped " + dropped +
+                        " total messages. Queue capacity: " + MARKET_DATA_QUEUE_CAPACITY +
+                        ". Clients may have stale data.");
                 }
             }
         }
@@ -327,9 +331,12 @@ public class AppClusteredService implements ClusteredService {
      */
     private void handleGatewayHeartbeat(ClientSession session, DirectBuffer buffer, int offset, long timestamp) {
         heartbeatDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
-        long prevSessionId = gatewaySessionId;
-        gatewaySessionId = session.id();
-        gatewayLastHeartbeatMs = System.currentTimeMillis();
+        long prevSessionId;
+        synchronized (gatewayLock) {
+            prevSessionId = gatewaySessionId;
+            gatewaySessionId = session.id();
+            gatewayLastHeartbeatMs = System.currentTimeMillis();
+        }
         heartbeatReceivedCount++;
 
         // Log gateway session changes for debugging
@@ -373,9 +380,11 @@ public class AppClusteredService implements ClusteredService {
      * Check if gateway is alive (received heartbeat within timeout).
      */
     private boolean isGatewayAlive() {
-        if (gatewaySessionId < 0) return false;
-        long age = System.currentTimeMillis() - gatewayLastHeartbeatMs;
-        return age < GATEWAY_TIMEOUT_MS;
+        synchronized (gatewayLock) {
+            if (gatewaySessionId < 0) return false;
+            long age = System.currentTimeMillis() - gatewayLastHeartbeatMs;
+            return age < GATEWAY_TIMEOUT_MS;
+        }
     }
 
     /**
@@ -383,9 +392,15 @@ public class AppClusteredService implements ClusteredService {
      * Returns null if gateway is dead or not connected.
      */
     private ClientSession getGatewaySession() {
-        if (!isGatewayAlive()) return null;
+        long sessionId;
+        synchronized (gatewayLock) {
+            if (gatewaySessionId < 0) return null;
+            long age = System.currentTimeMillis() - gatewayLastHeartbeatMs;
+            if (age >= GATEWAY_TIMEOUT_MS) return null;
+            sessionId = gatewaySessionId;
+        }
         for (ClientSession session : clientSessions.getAllSessions()) {
-            if (session.id() == gatewaySessionId) {
+            if (session.id() == sessionId) {
                 return session;
             }
         }

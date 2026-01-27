@@ -161,8 +161,7 @@ public class AeronCluster {
         {
             if (SystemEpochClock.INSTANCE.time() > endTime)
             {
-                System.err.println("FATAL: Cannot resolve DNS name " + host + ", exiting");
-                System.exit(-1);
+                throw new RuntimeException("FATAL: Cannot resolve DNS name '" + host + "' after 60s timeout");
             }
 
             try

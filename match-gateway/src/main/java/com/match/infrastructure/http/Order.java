@@ -33,6 +33,77 @@ public class Order {
     public Order() {
     }
 
+    // ==================== Validation ====================
+
+    /**
+     * Validate order fields. Returns null if valid, error message if invalid.
+     * All validation happens HERE at the gateway — engine stays clean and fast.
+     */
+    public String validate() {
+        // Market is required and must be known
+        if (market == null || market.isEmpty()) {
+            return "market is required";
+        }
+        if (!MARKET_IDS.containsKey(market)) {
+            return "unknown market: " + market + ". Valid: " + MARKET_IDS.keySet();
+        }
+
+        // Order side is required
+        if (orderSide == null || orderSide.isEmpty()) {
+            return "orderSide is required (BUY/SELL)";
+        }
+        String side = orderSide.toUpperCase();
+        if (!side.equals("BUY") && !side.equals("SELL") && !side.equals("BID") && !side.equals("ASK")) {
+            return "invalid orderSide: " + orderSide + ". Valid: BUY, SELL, BID, ASK";
+        }
+
+        // Order type defaults to LIMIT but must be valid if provided
+        if (orderType != null && !orderType.isEmpty()) {
+            if (!orderType.equals("LIMIT") && !orderType.equals("MARKET") && !orderType.equals("LIMIT_MAKER")) {
+                return "invalid orderType: " + orderType + ". Valid: LIMIT, MARKET, LIMIT_MAKER";
+            }
+        }
+
+        // Quantity must be positive
+        if (quantity <= 0) {
+            return "quantity must be positive, got: " + quantity;
+        }
+
+        // Quantity sanity bound (prevent fixed-point overflow: qty * SCALE_FACTOR must fit long)
+        if (quantity > 90_000_000_000.0) { // ~9e10, well under Long.MAX_VALUE / SCALE_FACTOR
+            return "quantity too large: " + quantity;
+        }
+
+        String effectiveType = (orderType == null || orderType.isEmpty()) ? "LIMIT" : orderType;
+
+        if (effectiveType.equals("MARKET")) {
+            // Market buy needs totalPrice (budget), market sell just needs quantity
+            if (side.equals("BUY") || side.equals("BID")) {
+                if (totalPrice <= 0) {
+                    return "market buy requires positive totalPrice (budget)";
+                }
+                if (totalPrice > 90_000_000_000.0) {
+                    return "totalPrice too large: " + totalPrice;
+                }
+            }
+        } else {
+            // Limit orders need a positive price
+            if (price <= 0) {
+                return "limit order requires positive price, got: " + price;
+            }
+            if (price > 90_000_000_000.0) {
+                return "price too large: " + price;
+            }
+        }
+
+        // UserId
+        if (userId == null || userId.isEmpty()) {
+            return "userId is required";
+        }
+
+        return null; // Valid
+    }
+
     @Override
     public String toString() {
         return "Order{" +
