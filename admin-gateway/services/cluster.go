@@ -152,3 +152,84 @@ func (c *Cluster) GetArchiveDiskUsage(nodeId int) int64 {
 	}
 	return -1
 }
+
+// SeedRecordingLogFromSnapshot resets a node's recording-log from its latest snapshot
+func (c *Cluster) SeedRecordingLogFromSnapshot(nodeId int) (string, error) {
+	return c.clusterTool(nodeId, "seed-recording-log-from-snapshot")
+}
+
+// ArchiveToolCompact runs ArchiveTool compact on a node's archive
+func (c *Cluster) ArchiveToolCompact(nodeId int) (string, error) {
+	archiveDir := fmt.Sprintf("%s/node%d/archive", c.cfg.ClusterDir, nodeId)
+	cmd := exec.Command("bash", "-c",
+		fmt.Sprintf("echo 'y' | java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED -cp %s io.aeron.archive.ArchiveTool %s compact",
+			c.cfg.JarPath, archiveDir))
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+// ArchiveToolDeleteOrphanedSegments removes orphaned segment files
+func (c *Cluster) ArchiveToolDeleteOrphanedSegments(nodeId int) (string, error) {
+	archiveDir := fmt.Sprintf("%s/node%d/archive", c.cfg.ClusterDir, nodeId)
+	cmd := exec.Command("bash", "-c",
+		fmt.Sprintf("echo 'y' | java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED -cp %s io.aeron.archive.ArchiveTool %s delete-orphaned-segments",
+			c.cfg.JarPath, archiveDir))
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+// ArchiveToolMarkInvalid marks a recording as INVALID in the archive catalog
+func (c *Cluster) ArchiveToolMarkInvalid(nodeId int, recordingId int64) (string, error) {
+	archiveDir := fmt.Sprintf("%s/node%d/archive", c.cfg.ClusterDir, nodeId)
+	cmd := exec.Command("java",
+		"--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
+		"-cp", c.cfg.JarPath,
+		"io.aeron.archive.ArchiveTool",
+		archiveDir, "mark-invalid", strconv.FormatInt(recordingId, 10))
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+// ArchiveToolDescribe describes the archive catalog for a node
+func (c *Cluster) ArchiveToolDescribe(nodeId int) (string, error) {
+	archiveDir := fmt.Sprintf("%s/node%d/archive", c.cfg.ClusterDir, nodeId)
+	cmd := exec.Command("java",
+		"--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
+		"-cp", c.cfg.JarPath,
+		"io.aeron.archive.ArchiveTool",
+		archiveDir, "describe")
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+// GetRecordingLogRecordingIds parses recording IDs from the recording-log
+func (c *Cluster) GetRecordingLogRecordingIds(nodeId int) []int64 {
+	output, err := c.clusterTool(nodeId, "recording-log")
+	if err != nil {
+		return nil
+	}
+	return extractRecordingIds(output)
+}
+
+// GetArchiveCatalogRecordingIds parses recording IDs from the archive catalog
+func (c *Cluster) GetArchiveCatalogRecordingIds(nodeId int) []int64 {
+	output, err := c.ArchiveToolDescribe(nodeId)
+	if err != nil {
+		return nil
+	}
+	return extractRecordingIds(output)
+}
+
+// extractRecordingIds parses recordingId=N from tool output
+func extractRecordingIds(output string) []int64 {
+	re := regexp.MustCompile(`recordingId=(\d+)`)
+	matches := re.FindAllStringSubmatch(output, -1)
+	ids := make([]int64, 0, len(matches))
+	for _, match := range matches {
+		if len(match) > 1 {
+			id, _ := strconv.ParseInt(match[1], 10, 64)
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}

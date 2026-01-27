@@ -27,9 +27,11 @@ func main() {
 
 	statusSvc := services.NewStatusService(cfg, systemd, cluster, clusterStatus)
 	opsSvc := services.NewOperationsService(cfg, systemd, cluster, progress, clusterStatus)
+	autoSnapshot := services.NewAutoSnapshot(opsSvc)
+	logSvc := services.NewLogService(cfg)
 
 	// Initialize handlers
-	h := handlers.New(statusSvc, opsSvc, systemd, cluster, progress, clusterStatus)
+	h := handlers.New(statusSvc, opsSvc, systemd, cluster, progress, clusterStatus, autoSnapshot, logSvc)
 
 	// Setup router
 	r := chi.NewRouter()

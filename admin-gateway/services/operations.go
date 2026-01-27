@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/match/admin-gateway/config"
@@ -334,15 +335,358 @@ func (o *OperationsService) doRebuildCluster() {
 		fmt.Sprintf("Cluster JAR built to staging: %s. Use rolling-update to deploy.", stagingJar))
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
+// Compact runs ArchiveTool compact + delete-orphaned-segments on all 3 nodes
+func (o *OperationsService) Compact() error {
+	if o.progress.IsRunning() {
+		return fmt.Errorf("another operation in progress")
+	}
+
+	go o.doCompact()
+	return nil
 }
 
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
+func (o *OperationsService) doCompact() {
+	o.progress.Start("compact", 7)
+
+	step := 1
+	for i := 0; i < 3; i++ {
+		o.progress.Update(step, fmt.Sprintf("Compacting Node %d archive...", i))
+		if _, err := o.cluster.ArchiveToolCompact(i); err != nil {
+			fmt.Printf("Warning: compact failed for node %d: %v\n", i, err)
+		}
+		step++
+
+		o.progress.Update(step, fmt.Sprintf("Cleaning Node %d orphaned segments...", i))
+		if _, err := o.cluster.ArchiveToolDeleteOrphanedSegments(i); err != nil {
+			fmt.Printf("Warning: delete-orphaned-segments failed for node %d: %v\n", i, err)
+		}
+		step++
+	}
+
+	o.progress.Update(7, "Compaction complete!")
+	time.Sleep(500 * time.Millisecond)
+	o.progress.Finish(true, "Archives compacted successfully")
+}
+
+// CompactArchive performs full archive compaction with brief cluster downtime
+func (o *OperationsService) CompactArchive() error {
+	if o.progress.IsRunning() {
+		return fmt.Errorf("another operation in progress")
+	}
+
+	go o.doCompactArchive()
+	return nil
+}
+
+func (o *OperationsService) doCompactArchive() {
+	o.progress.Start("compact-archive", 12)
+
+	// Step 1: Take final snapshot
+	o.progress.Update(1, "Taking final snapshot...")
+	leader := o.cluster.DetectLeader()
+	if leader < 0 {
+		leader = o.clusterStatus.GetLeaderId()
+	}
+	if leader < 0 {
+		o.progress.Finish(false, "Could not find cluster leader")
+		return
+	}
+
+	output, err := o.cluster.TakeSnapshot(leader)
+	if err != nil || !strings.Contains(output, "SNAPSHOT") {
+		o.progress.Finish(false, "Failed to take snapshot before compaction")
+		return
+	}
+	time.Sleep(3 * time.Second)
+
+	// Steps 2-4: Stop all 3 nodes
+	for i := 0; i < 3; i++ {
+		o.progress.Update(2+i, fmt.Sprintf("Stopping node %d...", i))
+		o.clusterStatus.SetNodeStatus(i, "STOPPING", false)
+		o.systemd.Stop(fmt.Sprintf("node%d", i))
+		time.Sleep(500 * time.Millisecond)
+		o.clusterStatus.SetNodeStatus(i, "OFFLINE", false)
+	}
+	time.Sleep(2 * time.Second)
+
+	// Step 5: Seed fresh recording log from snapshot
+	o.progress.Update(5, "Seeding recording-log from snapshot...")
+	for i := 0; i < 3; i++ {
+		if out, err := o.cluster.SeedRecordingLogFromSnapshot(i); err != nil {
+			fmt.Printf("Warning: seed failed for node %d: %v output: %s\n", i, err, out)
+		} else {
+			fmt.Printf("Node %d recording-log seeded from snapshot\n", i)
 		}
 	}
-	return false
+
+	// Step 6: Mark unreferenced recordings as INVALID and compact
+	o.progress.Update(6, "Compacting archives...")
+	for i := 0; i < 3; i++ {
+		o.compactNodeArchive(i)
+	}
+
+	// Steps 7-9: Start all 3 nodes
+	for i := 0; i < 3; i++ {
+		o.progress.Update(7+i, fmt.Sprintf("Starting node %d...", i))
+		o.clusterStatus.SetNodeStatus(i, "STARTING", false)
+		o.systemd.Start(fmt.Sprintf("node%d", i))
+		time.Sleep(2 * time.Second)
+		o.clusterStatus.SetNodeStatus(i, "REJOINING", true)
+	}
+
+	// Step 10: Wait for cluster to elect leader
+	o.progress.Update(10, "Waiting for cluster election...")
+	time.Sleep(5 * time.Second)
+
+	newLeader := o.cluster.DetectLeader()
+	if newLeader >= 0 {
+		o.clusterStatus.UpdateLeader(newLeader, 0)
+		for i := 0; i < 3; i++ {
+			if i == newLeader {
+				o.clusterStatus.SetNodeStatus(i, "LEADER", true)
+			} else {
+				o.clusterStatus.SetNodeStatus(i, "FOLLOWER", true)
+			}
+		}
+		o.progress.Finish(true, fmt.Sprintf("Archive compacted successfully. Leader: Node %d", newLeader))
+	} else {
+		for i := 0; i < 3; i++ {
+			o.clusterStatus.SetNodeStatus(i, "FOLLOWER", true)
+		}
+		o.progress.Finish(true, "Archive compacted. Cluster restarted (leader detection pending)")
+	}
+}
+
+// compactNodeArchive marks unreferenced recordings as INVALID and compacts
+func (o *OperationsService) compactNodeArchive(nodeId int) {
+	referencedIds := o.cluster.GetRecordingLogRecordingIds(nodeId)
+	catalogIds := o.cluster.GetArchiveCatalogRecordingIds(nodeId)
+
+	// Build a set of referenced IDs
+	refSet := make(map[int64]bool)
+	for _, id := range referencedIds {
+		refSet[id] = true
+	}
+
+	// Find unreferenced recordings
+	var unreferenced []int64
+	for _, id := range catalogIds {
+		if !refSet[id] {
+			unreferenced = append(unreferenced, id)
+		}
+	}
+
+	fmt.Printf("Node %d: referenced=%v catalog=%v unreferenced=%v\n", nodeId, referencedIds, catalogIds, unreferenced)
+
+	// Mark unreferenced as INVALID
+	for _, id := range unreferenced {
+		if _, err := o.cluster.ArchiveToolMarkInvalid(nodeId, id); err != nil {
+			fmt.Printf("Warning: failed to mark recording %d invalid on node %d: %v\n", id, nodeId, err)
+		}
+	}
+
+	// Compact to delete INVALID recordings
+	if len(unreferenced) > 0 {
+		if _, err := o.cluster.ArchiveToolCompact(nodeId); err != nil {
+			fmt.Printf("Warning: compact failed for node %d: %v\n", nodeId, err)
+		}
+	}
+}
+
+// RollingArchiveCleanup performs zero-downtime rolling archive cleanup
+func (o *OperationsService) RollingArchiveCleanup() error {
+	if o.progress.IsRunning() {
+		return fmt.Errorf("another operation in progress")
+	}
+
+	go o.doRollingArchiveCleanup()
+	return nil
+}
+
+func (o *OperationsService) doRollingArchiveCleanup() {
+	o.progress.Start("rolling-cleanup", 7)
+
+	// Step 1: Take snapshot
+	o.progress.Update(1, "Taking snapshot...")
+	leader := o.cluster.DetectLeader()
+	if leader < 0 {
+		leader = o.clusterStatus.GetLeaderId()
+	}
+	if leader < 0 {
+		o.progress.Finish(false, "Could not find cluster leader")
+		return
+	}
+
+	output, err := o.cluster.TakeSnapshot(leader)
+	if err != nil || !strings.Contains(output, "SNAPSHOT") {
+		o.progress.Finish(false, "Failed to take snapshot")
+		return
+	}
+	time.Sleep(5 * time.Second)
+
+	// Verify snapshot in recording-log
+	recordingLog, _ := o.cluster.GetRecordingLog(leader)
+	if !strings.Contains(recordingLog, "type=SNAPSHOT") {
+		o.progress.Finish(false, "Snapshot not found in recording-log. Try taking a snapshot first or use compact-archive.")
+		return
+	}
+
+	// Steps 2-5: Clean followers first
+	step := 2
+	for nodeId := 0; nodeId < 3; nodeId++ {
+		if nodeId == leader {
+			continue
+		}
+
+		o.progress.Update(step, fmt.Sprintf("Cleaning Node %d archive...", nodeId))
+		if !o.cleanSingleNodeArchive(nodeId) {
+			o.progress.Finish(false, fmt.Sprintf("Failed to clean Node %d", nodeId))
+			return
+		}
+		step++
+
+		o.progress.Update(step, fmt.Sprintf("Waiting for Node %d rejoin...", nodeId))
+		o.waitForNodeRejoin(nodeId, 30*time.Second)
+		step++
+	}
+
+	// Step 6: Clean leader last
+	o.progress.Update(6, fmt.Sprintf("Cleaning leader Node %d...", leader))
+	if !o.cleanSingleNodeArchive(leader) {
+		o.progress.Finish(false, "Failed to clean leader node")
+		return
+	}
+
+	// Step 7: Wait for new leader election
+	o.progress.Update(7, "Waiting for leader election...")
+	time.Sleep(5 * time.Second)
+
+	newLeader := o.cluster.DetectLeader()
+	if newLeader >= 0 {
+		o.clusterStatus.UpdateLeader(newLeader, 0)
+		for i := 0; i < 3; i++ {
+			if i == newLeader {
+				o.clusterStatus.SetNodeStatus(i, "LEADER", true)
+			} else {
+				o.clusterStatus.SetNodeStatus(i, "FOLLOWER", true)
+			}
+		}
+		o.progress.Finish(true, fmt.Sprintf("Rolling cleanup complete. New leader: Node %d", newLeader))
+	} else {
+		for i := 0; i < 3; i++ {
+			o.clusterStatus.SetNodeStatus(i, "FOLLOWER", true)
+		}
+		o.progress.Finish(true, "Rolling cleanup complete (leader detection pending)")
+	}
+}
+
+// cleanSingleNodeArchive wipes a node's data and lets it rebuild from cluster
+func (o *OperationsService) cleanSingleNodeArchive(nodeId int) bool {
+	nodeDir := fmt.Sprintf("%s/node%d", o.cfg.ClusterDir, nodeId)
+
+	o.clusterStatus.SetNodeStatus(nodeId, "STOPPING", false)
+	o.systemd.Stop(fmt.Sprintf("node%d", nodeId))
+	time.Sleep(2 * time.Second)
+	o.clusterStatus.SetNodeStatus(nodeId, "OFFLINE", false)
+
+	// Wipe and recreate
+	exec.Command("rm", "-rf", nodeDir).Run()
+	exec.Command("mkdir", "-p", nodeDir).Run()
+	fmt.Printf("Node %d data wiped, will rebuild from cluster\n", nodeId)
+
+	// Restart — node syncs from leader via catchup
+	o.clusterStatus.SetNodeStatus(nodeId, "STARTING", false)
+	o.systemd.Start(fmt.Sprintf("node%d", nodeId))
+	time.Sleep(3 * time.Second)
+	o.clusterStatus.SetNodeStatus(nodeId, "REJOINING", true)
+
+	return true
+}
+
+// waitForNodeRejoin polls cluster membership until the node rejoins
+func (o *OperationsService) waitForNodeRejoin(nodeId int, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		for i := 0; i < 3; i++ {
+			if i == nodeId {
+				continue
+			}
+			output, err := o.cluster.clusterTool(i, "list-members")
+			if err != nil {
+				continue
+			}
+			if strings.Contains(output, fmt.Sprintf("memberId=%d", nodeId)) {
+				fmt.Printf("Node %d confirmed in cluster membership\n", nodeId)
+				newLeader := o.cluster.DetectLeader()
+				if newLeader >= 0 {
+					for j := 0; j < 3; j++ {
+						if j == newLeader {
+							o.clusterStatus.SetNodeStatus(j, "LEADER", true)
+						} else {
+							o.clusterStatus.SetNodeStatus(j, "FOLLOWER", true)
+						}
+					}
+				}
+				return
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+	fmt.Printf("Node %d rejoin timeout after %v, continuing...\n", nodeId, timeout)
+}
+
+// Cleanup removes stale Aeron files (requires all nodes stopped)
+func (o *OperationsService) Cleanup() map[string]interface{} {
+	result := map[string]interface{}{}
+	var cleaned []string
+	var errors []string
+
+	// Check if any nodes are running
+	for i := 0; i < 3; i++ {
+		if o.systemd.IsActive(fmt.Sprintf("node%d", i)) {
+			result["success"] = false
+			result["error"] = fmt.Sprintf("Node %d is still running. Stop all nodes before cleanup.", i)
+			return result
+		}
+	}
+
+	// Clean shared memory aeron files
+	if err := exec.Command("bash", "-c", "rm -rf /dev/shm/aeron-* 2>/dev/null || true").Run(); err != nil {
+		errors = append(errors, "Failed to clean /dev/shm: "+err.Error())
+	} else {
+		cleaned = append(cleaned, "/dev/shm/aeron-*")
+	}
+
+	// Clean cluster mark files and lock files
+	for i := 0; i < 3; i++ {
+		nodeDir := fmt.Sprintf("/dev/shm/aeron-cluster/node%d", i)
+		exec.Command("bash", "-c", fmt.Sprintf("rm -rf %s/cluster/cluster-mark*.dat 2>/dev/null || true", nodeDir)).Run()
+		exec.Command("bash", "-c", fmt.Sprintf("rm -rf %s/cluster/*.lck 2>/dev/null || true", nodeDir)).Run()
+		exec.Command("bash", "-c", fmt.Sprintf("rm -rf %s/archive/archive-mark.dat 2>/dev/null || true", nodeDir)).Run()
+		cleaned = append(cleaned, fmt.Sprintf("%s (mark files, locks)", nodeDir))
+	}
+
+	// Clean gateway aeron files
+	if err := exec.Command("bash", "-c", "rm -rf /tmp/aeron-* 2>/dev/null || true").Run(); err != nil {
+		errors = append(errors, "Failed to clean /tmp/aeron-*: "+err.Error())
+	} else {
+		cleaned = append(cleaned, "/tmp/aeron-* (gateway files)")
+	}
+
+	result["success"] = len(errors) == 0
+	result["cleaned"] = cleaned
+	if len(errors) > 0 {
+		result["errors"] = errors
+	}
+	if len(errors) == 0 {
+		result["message"] = "Cleanup completed successfully. You can now start the cluster."
+	} else {
+		result["message"] = "Cleanup completed with some errors."
+	}
+
+	return result
+}
+
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
 }

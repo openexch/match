@@ -10,12 +10,14 @@ import (
 )
 
 type Handlers struct {
-	statusSvc *services.StatusService
-	opsSvc    *services.OperationsService
-	systemd   *services.Systemd
-	cluster   *services.Cluster
-	progress  *services.Progress
-	status    *services.ClusterStatus
+	statusSvc    *services.StatusService
+	opsSvc       *services.OperationsService
+	systemd      *services.Systemd
+	cluster      *services.Cluster
+	progress     *services.Progress
+	status       *services.ClusterStatus
+	autoSnapshot *services.AutoSnapshot
+	logSvc       *services.LogService
 }
 
 func New(
@@ -25,14 +27,18 @@ func New(
 	cluster *services.Cluster,
 	progress *services.Progress,
 	status *services.ClusterStatus,
+	autoSnapshot *services.AutoSnapshot,
+	logSvc *services.LogService,
 ) *Handlers {
 	return &Handlers{
-		statusSvc: statusSvc,
-		opsSvc:    opsSvc,
-		systemd:   systemd,
-		cluster:   cluster,
-		progress:  progress,
-		status:    status,
+		statusSvc:    statusSvc,
+		opsSvc:       opsSvc,
+		systemd:      systemd,
+		cluster:      cluster,
+		progress:     progress,
+		status:       status,
+		autoSnapshot: autoSnapshot,
+		logSvc:       logSvc,
 	}
 }
 
@@ -75,6 +81,22 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 	// Build operations (multi-module safe)
 	r.Post("/api/admin/rebuild-gateway", h.handleRebuildGateway)
 	r.Post("/api/admin/rebuild-cluster", h.handleRebuildCluster)
+
+	// Archive compaction operations
+	r.Post("/api/admin/compact", h.handleCompact)
+	r.Post("/api/admin/compact-archive", h.handleCompactArchive)
+	r.Post("/api/admin/rolling-cleanup", h.handleRollingCleanup)
+
+	// Auto-snapshot (GET/POST/DELETE)
+	r.Get("/api/admin/auto-snapshot", h.handleAutoSnapshotGet)
+	r.Post("/api/admin/auto-snapshot", h.handleAutoSnapshotPost)
+	r.Delete("/api/admin/auto-snapshot", h.handleAutoSnapshotDelete)
+
+	// Logs
+	r.Get("/api/admin/logs", h.handleLogs)
+
+	// Cleanup
+	r.Post("/api/admin/cleanup", h.handleCleanup)
 
 	// Health check
 	r.Get("/health", h.handleHealth)
@@ -295,6 +317,110 @@ func (h *Handlers) handleRebuildCluster(w http.ResponseWriter, r *http.Request) 
 	jsonResponse(w, http.StatusAccepted, map[string]string{
 		"message": "Cluster rebuild initiated (builds to staging, use rolling-update to deploy)",
 	})
+}
+
+// Compact operations
+func (h *Handlers) handleCompact(w http.ResponseWriter, r *http.Request) {
+	if err := h.opsSvc.Compact(); err != nil {
+		jsonResponse(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusAccepted, map[string]string{
+		"message": "Archive compaction initiated",
+	})
+}
+
+func (h *Handlers) handleCompactArchive(w http.ResponseWriter, r *http.Request) {
+	if err := h.opsSvc.CompactArchive(); err != nil {
+		jsonResponse(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusAccepted, map[string]interface{}{
+		"message": "Full archive compaction initiated",
+		"warning": "This operation requires brief cluster downtime",
+	})
+}
+
+func (h *Handlers) handleRollingCleanup(w http.ResponseWriter, r *http.Request) {
+	if err := h.opsSvc.RollingArchiveCleanup(); err != nil {
+		jsonResponse(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusAccepted, map[string]interface{}{
+		"message": "Rolling archive cleanup initiated",
+		"info":    "Cluster remains operational throughout",
+	})
+}
+
+// Auto-snapshot handlers
+func (h *Handlers) handleAutoSnapshotGet(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, http.StatusOK, h.autoSnapshot.ToMap())
+}
+
+func (h *Handlers) handleAutoSnapshotPost(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IntervalMinutes int64 `json:"intervalMinutes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.IntervalMinutes <= 0 {
+		jsonResponse(w, http.StatusBadRequest, map[string]string{
+			"error": "intervalMinutes must be a positive number",
+		})
+		return
+	}
+
+	h.autoSnapshot.Start(req.IntervalMinutes)
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"status":          "started",
+		"intervalMinutes": req.IntervalMinutes,
+		"message":         "Auto-snapshot enabled: every " + strconv.FormatInt(req.IntervalMinutes, 10) + " minutes",
+	})
+}
+
+func (h *Handlers) handleAutoSnapshotDelete(w http.ResponseWriter, r *http.Request) {
+	h.autoSnapshot.Stop()
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"status":  "stopped",
+		"message": "Auto-snapshot disabled",
+	})
+}
+
+// Logs handler
+func (h *Handlers) handleLogs(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+
+	lines := 50
+	if l := query.Get("lines"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil {
+			lines = parsed
+			if lines > 500 {
+				lines = 500
+			}
+		}
+	}
+
+	if service := query.Get("service"); service != "" {
+		jsonResponse(w, http.StatusOK, h.logSvc.GetServiceLogs(service, lines))
+		return
+	}
+
+	nodeId := 0
+	if n := query.Get("node"); n != "" {
+		if parsed, err := strconv.Atoi(n); err == nil {
+			nodeId = parsed
+		}
+	}
+
+	jsonResponse(w, http.StatusOK, h.logSvc.GetNodeLogs(nodeId, lines))
+}
+
+// Cleanup handler
+func (h *Handlers) handleCleanup(w http.ResponseWriter, r *http.Request) {
+	result := h.opsSvc.Cleanup()
+	status := http.StatusOK
+	if success, ok := result["success"].(bool); ok && !success {
+		status = http.StatusBadRequest
+	}
+	jsonResponse(w, status, result)
 }
 
 // Helpers

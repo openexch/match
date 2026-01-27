@@ -10,7 +10,7 @@
 #
 # ==================================================================
 
-.PHONY: install install-deps optimize-os help install-services uninstall-services reinstall-services build build-java build-cluster build-gateway build-loadtest build-ui sbe setup-port-80 os-check
+.PHONY: install install-deps optimize-os help install-services uninstall-services reinstall-services build build-java build-cluster build-gateway build-admin build-loadtest build-ui sbe setup-port-80 os-check
 
 # ==================== CONFIGURATION ====================
 PROJECT_DIR := $(shell pwd)
@@ -261,10 +261,27 @@ install-services:
 		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' 'Environment="EGRESS_PORT=9092"',\
 		'ExecStartPre=/bin/sleep 5',\
 		/usr/bin/java $(JAVA_OPTS) -cp $(GATEWAY_JAR) com.match.infrastructure.gateway.OrderGatewayMain,5,)
-	@echo "→ Installing admin.service..."
-	$(call JAVA_SERVICE,admin,Match Engine Admin Gateway,\
-		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"',,\
-		/usr/bin/java $(JAVA_OPTS) -cp $(GATEWAY_JAR) com.match.infrastructure.gateway.AdminGatewayMain,5,)
+	@echo "→ Installing admin.service (Go)..."
+	@printf '%s\n' \
+		'[Unit]' \
+		'Description=Match Engine Admin Gateway (Go)' \
+		'After=default.target' \
+		'' \
+		'[Service]' \
+		'Type=simple' \
+		'WorkingDirectory=$(PROJECT_DIR)' \
+		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' \
+		'ExecStartPre=$(call LOG_ROTATE,admin)' \
+		'ExecStart=$(PROJECT_DIR)/admin-gateway/admin-gateway' \
+		'Restart=on-failure' \
+		'RestartSec=5' \
+		'TimeoutStopSec=5' \
+		'KillMode=mixed' \
+		'StandardOutput=append:$(LOG_DIR)/admin.log' \
+		'StandardError=append:$(LOG_DIR)/admin.log' \
+		'' \
+		'[Install]' \
+		'WantedBy=default.target' > $(USER_SERVICE_DIR)/admin.service
 	@echo "→ Installing ui.service (port 3000)..."
 	$(call UI_SERVICE)
 	@echo ""
@@ -307,6 +324,9 @@ build-cluster:
 build-gateway:
 	mvn package -pl match-gateway -am -DskipTests -q
 
+build-admin:
+	cd admin-gateway && go build -o admin-gateway .
+
 build-loadtest:
 	mvn package -pl match-loadtest -am -DskipTests -q
 
@@ -347,6 +367,7 @@ help:
 	@echo "  make build-java         Build all Java modules"
 	@echo "  make build-cluster      Build cluster module only"
 	@echo "  make build-gateway      Build gateway module only"
+	@echo "  make build-admin        Build admin gateway (Go)"
 	@echo "  make build-ui           Build UI only"
 	@echo "  make sbe                Generate SBE codec classes"
 	@echo ""
