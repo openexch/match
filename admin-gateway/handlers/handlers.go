@@ -72,6 +72,10 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 	r.Post("/api/admin/rolling-update", h.handleRollingUpdate)
 	r.Post("/api/admin/snapshot", h.handleSnapshot)
 
+	// Build operations (multi-module safe)
+	r.Post("/api/admin/rebuild-gateway", h.handleRebuildGateway)
+	r.Post("/api/admin/rebuild-cluster", h.handleRebuildCluster)
+
 	// Health check
 	r.Get("/health", h.handleHealth)
 }
@@ -260,6 +264,36 @@ func (h *Handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonResponse(w, http.StatusAccepted, map[string]string{
 		"message": "Snapshot initiated",
+	})
+}
+
+func (h *Handlers) handleRebuildGateway(w http.ResponseWriter, r *http.Request) {
+	// Check if restart was requested
+	var req struct {
+		Restart bool `json:"restart"`
+	}
+	json.NewDecoder(r.Body).Decode(&req) // ignore error - defaults to false
+
+	if err := h.opsSvc.RebuildGateway(req.Restart); err != nil {
+		jsonResponse(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	msg := "Gateway rebuild initiated"
+	if req.Restart {
+		msg += " (will restart order & market gateways after build)"
+	}
+	jsonResponse(w, http.StatusAccepted, map[string]string{
+		"message": msg,
+	})
+}
+
+func (h *Handlers) handleRebuildCluster(w http.ResponseWriter, r *http.Request) {
+	if err := h.opsSvc.RebuildCluster(); err != nil {
+		jsonResponse(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusAccepted, map[string]string{
+		"message": "Cluster rebuild initiated (builds to staging, use rolling-update to deploy)",
 	})
 }
 

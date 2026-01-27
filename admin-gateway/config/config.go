@@ -8,7 +8,8 @@ import (
 type Config struct {
 	Port        string
 	ProjectDir  string
-	JarPath     string
+	JarPath     string // Cluster JAR (for ClusterTool operations)
+	GatewayJar  string // Gateway JAR
 	LogDir      string
 	ClusterDir  string
 }
@@ -26,7 +27,8 @@ func Load() *Config {
 	return &Config{
 		Port:        getEnvOrDefault("ADMIN_PORT", "8082"),
 		ProjectDir:  projectDir,
-		JarPath:     filepath.Join(projectDir, "match/target/cluster-engine-1.0.jar"),
+		JarPath:     filepath.Join(projectDir, "match-cluster/target/match-cluster.jar"),
+		GatewayJar:  filepath.Join(projectDir, "match-gateway/target/match-gateway.jar"),
 		LogDir:      filepath.Join(homeDir, ".local/log/cluster"),
 		ClusterDir:  "/dev/shm/aeron-cluster",
 	}

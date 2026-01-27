@@ -18,7 +18,7 @@ public class ClusterAdminService {
     // User-accessible log directory (no sudo required)
     private static final String LOG_DIR = System.getProperty("user.home") + "/.local/log/cluster";
 
-    // JAR paths for multi-module structure
+    // Multi-module JAR paths
     private static final String CLUSTER_JAR = "match-cluster/target/match-cluster.jar";
     private static final String GATEWAY_JAR = "match-gateway/target/match-gateway.jar";
 

@@ -43,11 +43,12 @@ func (o *OperationsService) doRollingUpdate() {
 	o.progress.Start("rolling-update", 11)
 
 	jarPath := o.cfg.JarPath
-	stagingDir := filepath.Join(o.cfg.ProjectDir, "match/target/staging")
-	stagingJar := filepath.Join(stagingDir, "cluster-engine-1.0.jar")
+	stagingDir := filepath.Join(o.cfg.ProjectDir, "match-cluster/target/staging")
+	stagingJar := filepath.Join(stagingDir, "match-cluster.jar")
 
 	// Step 1: Build in isolated directory (NEVER touch live JAR)
-	o.progress.Update(1, "Building application in isolated directory...")
+	// Multi-module: copy entire project tree (excluding target dirs), build match-cluster
+	o.progress.Update(1, "Building cluster module in isolated directory...")
 	buildId := fmt.Sprintf("%d", time.Now().UnixMilli())
 	tempBuildDir := "/tmp/match-rolling-build-" + buildId
 
@@ -55,20 +56,19 @@ func (o *OperationsService) doRollingUpdate() {
 		rm -rf %s &&
 		mkdir -p %s &&
 		mkdir -p %s &&
-		cp %s/match/pom.xml %s/ &&
-		cp -r %s/match/src %s/ &&
+		rsync -a --exclude='*/target' --exclude='.git' --exclude='admin-gateway' --exclude='backup' --exclude='binaries' --exclude='binance-replay' %s/ %s/ &&
 		cd %s &&
-		mvn package -DskipTests -q &&
-		cp %s/target/cluster-engine-1.0.jar %s &&
+		mvn package -pl match-cluster -am -DskipTests -q &&
+		cp %s/match-cluster/target/match-cluster.jar %s &&
 		rm -rf %s
 	`, tempBuildDir, tempBuildDir, stagingDir,
 		o.cfg.ProjectDir, tempBuildDir,
-		o.cfg.ProjectDir, tempBuildDir,
-		tempBuildDir, tempBuildDir, stagingJar, tempBuildDir)
+		tempBuildDir,
+		tempBuildDir, stagingJar, tempBuildDir)
 
 	cmd := exec.Command("bash", "-c", buildScript)
-	if err := cmd.Run(); err != nil {
-		o.progress.Finish(false, "Build failed: "+err.Error())
+	if output, err := cmd.CombinedOutput(); err != nil {
+		o.progress.Finish(false, "Build failed: "+err.Error()+" output: "+string(output))
 		return
 	}
 
@@ -177,7 +177,7 @@ func (o *OperationsService) doRollingUpdate() {
 	o.clusterStatus.SetNodeStatus(leader, "FOLLOWER", true)
 	o.progress.Update(11, fmt.Sprintf("Node %d rejoined as follower", leader))
 
-	// Cleanup
+	// Cleanup staging
 	exec.Command("rm", "-rf", stagingDir).Run()
 
 	o.progress.Finish(true, "All nodes updated successfully with new code")
@@ -226,6 +226,112 @@ func (o *OperationsService) doSnapshot() {
 	}
 
 	o.progress.Finish(true, fmt.Sprintf("Snapshot created at position %d", pos))
+}
+
+// RebuildGateway builds the gateway module and optionally restarts gateways.
+// This is SAFE while the cluster is running since gateway JAR is separate from cluster JAR.
+func (o *OperationsService) RebuildGateway(restart bool) error {
+	if o.progress.IsRunning() {
+		return fmt.Errorf("another operation in progress")
+	}
+
+	go o.doRebuildGateway(restart)
+	return nil
+}
+
+func (o *OperationsService) doRebuildGateway(restart bool) {
+	totalSteps := 2
+	if restart {
+		totalSteps = 3
+	}
+	o.progress.Start("rebuild-gateway", totalSteps)
+
+	// Step 1: Build gateway module (safe - separate JAR from cluster)
+	o.progress.Update(1, "Building gateway module...")
+	cmd := exec.Command("bash", "-c",
+		fmt.Sprintf("cd %s && mvn package -pl match-gateway -am -DskipTests -q 2>&1", o.cfg.ProjectDir))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		o.progress.Finish(false, "Gateway build failed: "+err.Error()+" output: "+string(output))
+		return
+	}
+
+	// Step 2: Verify JAR exists
+	o.progress.Update(2, "Verifying gateway JAR...")
+	if _, err := os.Stat(o.cfg.GatewayJar); os.IsNotExist(err) {
+		o.progress.Finish(false, "Build succeeded but JAR not found at: "+o.cfg.GatewayJar)
+		return
+	}
+
+	if !restart {
+		o.progress.Finish(true, "Gateway JAR rebuilt successfully")
+		return
+	}
+
+	// Step 3: Restart gateways (order + market, not admin since we'd kill ourselves)
+	o.progress.Update(3, "Restarting order & market gateways...")
+	for _, svc := range []string{"order", "market"} {
+		o.systemd.Restart(svc)
+	}
+	time.Sleep(3 * time.Second)
+
+	o.progress.Finish(true, "Gateway rebuilt and restarted successfully")
+}
+
+// RebuildCluster builds the cluster module to staging (does NOT deploy).
+// WARNING: The built JAR goes to staging, NOT the live location.
+// Use rolling-update to deploy, or manually swap the JAR.
+func (o *OperationsService) RebuildCluster() error {
+	if o.progress.IsRunning() {
+		return fmt.Errorf("another operation in progress")
+	}
+
+	go o.doRebuildCluster()
+	return nil
+}
+
+func (o *OperationsService) doRebuildCluster() {
+	o.progress.Start("rebuild-cluster", 3)
+
+	stagingDir := filepath.Join(o.cfg.ProjectDir, "match-cluster/target/staging")
+	stagingJar := filepath.Join(stagingDir, "match-cluster.jar")
+
+	// Step 1: Build cluster module in isolated directory
+	o.progress.Update(1, "Building cluster module in isolated directory...")
+	buildId := fmt.Sprintf("%d", time.Now().UnixMilli())
+	tempBuildDir := "/tmp/match-cluster-build-" + buildId
+
+	buildScript := fmt.Sprintf(`
+		rm -rf %s &&
+		mkdir -p %s &&
+		mkdir -p %s &&
+		rsync -a --exclude='*/target' --exclude='.git' --exclude='admin-gateway' --exclude='backup' --exclude='binaries' --exclude='binance-replay' %s/ %s/ &&
+		cd %s &&
+		mvn package -pl match-cluster -am -DskipTests -q &&
+		cp %s/match-cluster/target/match-cluster.jar %s &&
+		rm -rf %s
+	`, tempBuildDir, tempBuildDir, stagingDir,
+		o.cfg.ProjectDir, tempBuildDir,
+		tempBuildDir,
+		tempBuildDir, stagingJar, tempBuildDir)
+
+	cmd := exec.Command("bash", "-c", buildScript)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		o.progress.Finish(false, "Cluster build failed: "+err.Error()+" output: "+string(output))
+		return
+	}
+
+	// Step 2: Verify staging JAR
+	o.progress.Update(2, "Verifying staged cluster JAR...")
+	if _, err := os.Stat(stagingJar); os.IsNotExist(err) {
+		o.progress.Finish(false, "Build succeeded but staging JAR not found")
+		return
+	}
+
+	// Step 3: Report
+	o.progress.Update(3, "Cluster JAR built and staged")
+	o.progress.Finish(true,
+		fmt.Sprintf("Cluster JAR built to staging: %s. Use rolling-update to deploy.", stagingJar))
 }
 
 func contains(s, substr string) bool {
