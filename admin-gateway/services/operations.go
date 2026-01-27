@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,7 +111,7 @@ func (o *OperationsService) doRollingUpdate() {
 		o.progress.Update(step, "Stopping "+nodeLabel+"...")
 		o.clusterStatus.SetNodeStatus(nodeId, "STOPPING", false)
 		o.systemd.Stop(fmt.Sprintf("node%d", nodeId))
-		time.Sleep(1 * time.Second)
+		o.waitForNodeStopped(nodeId, 15*time.Second)
 		o.clusterStatus.SetNodeStatus(nodeId, "OFFLINE", false)
 		step++
 
@@ -122,21 +123,28 @@ func (o *OperationsService) doRollingUpdate() {
 			time.Sleep(100 * time.Millisecond)
 		}
 
+		// Clean stale MediaDriver directory for this node
+		o.cleanNodeMediaDriver(nodeId)
+
 		// Start follower with new code
 		o.progress.Update(step, "Starting "+nodeLabel+" with new code...")
 		o.clusterStatus.SetNodeStatus(nodeId, "STARTING", false)
 		o.systemd.Start(fmt.Sprintf("node%d", nodeId))
-		time.Sleep(2 * time.Second)
 		step++
 
-		// Wait for rejoin
+		// Wait for the node to actually rejoin — verify via ingress port
 		o.progress.Update(step, nodeLabel+": Waiting to rejoin cluster...")
 		o.clusterStatus.SetNodeStatus(nodeId, "REJOINING", true)
-		time.Sleep(5 * time.Second)
-		o.clusterStatus.SetNodeStatus(nodeId, "FOLLOWER", true)
-		o.progress.Update(step, nodeLabel+" rejoined as follower")
+		ingressPort := 9000 + (nodeId * 100) + 2 // 9002, 9102, 9202
+		if o.waitForPort("127.0.0.1", ingressPort, 60*time.Second) {
+			o.clusterStatus.SetNodeStatus(nodeId, "FOLLOWER", true)
+			o.progress.Update(step, nodeLabel+" rejoined as follower")
+		} else {
+			o.progress.Update(step, nodeLabel+" rejoin timeout — continuing")
+			o.clusterStatus.SetNodeStatus(nodeId, "FOLLOWER", true)
+		}
 		step++
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2 * time.Second) // Brief stabilization
 	}
 
 	// Step 9: Stop old leader
@@ -146,37 +154,65 @@ func (o *OperationsService) doRollingUpdate() {
 		o.clusterStatus.SetNodeStatus(nodeId, "ELECTION", true)
 	}
 	o.systemd.Stop(fmt.Sprintf("node%d", leader))
-	time.Sleep(1 * time.Second)
+	o.waitForNodeStopped(leader, 15*time.Second)
 	o.clusterStatus.SetNodeStatus(leader, "OFFLINE", false)
 
-	// Step 10: Wait for election
-	o.progress.Update(10, "Leader election in progress...")
-	time.Sleep(3 * time.Second)
+	// Clean stale MediaDriver directory for old leader
+	o.cleanNodeMediaDriver(leader)
 
-	newLeader := o.cluster.DetectLeader()
-	if newLeader < 0 {
-		newLeader = followers[0]
-	}
-	o.clusterStatus.UpdateLeader(newLeader, 0)
-	for _, nodeId := range followers {
-		if nodeId == newLeader {
-			o.clusterStatus.SetNodeStatus(nodeId, "LEADER", true)
-		} else {
-			o.clusterStatus.SetNodeStatus(nodeId, "FOLLOWER", true)
+	// Step 10: Wait for new leader election — verify by checking ingress ports
+	o.progress.Update(10, "Waiting for leader election...")
+	electionOk := false
+	for attempt := 0; attempt < 30; attempt++ {
+		time.Sleep(2 * time.Second)
+		newLeader := o.cluster.DetectLeader()
+		if newLeader >= 0 {
+			o.clusterStatus.UpdateLeader(newLeader, 0)
+			for _, nodeId := range followers {
+				if nodeId == newLeader {
+					o.clusterStatus.SetNodeStatus(nodeId, "LEADER", true)
+				} else {
+					o.clusterStatus.SetNodeStatus(nodeId, "FOLLOWER", true)
+				}
+			}
+			o.progress.Update(10, fmt.Sprintf("New leader elected: Node %d", newLeader))
+			electionOk = true
+			break
 		}
 	}
-	o.progress.Update(10, fmt.Sprintf("New leader elected: Node %d", newLeader))
+	if !electionOk {
+		// Fallback: check if ingress ports are open
+		for _, nodeId := range followers {
+			port := 9000 + (nodeId * 100) + 2
+			if o.isPortOpen("127.0.0.1", port) {
+				o.clusterStatus.SetNodeStatus(nodeId, "LEADER", true)
+				o.clusterStatus.UpdateLeader(nodeId, 0)
+				o.progress.Update(10, fmt.Sprintf("Leader detected via ingress: Node %d", nodeId))
+				electionOk = true
+				break
+			}
+		}
+	}
+	if !electionOk {
+		o.progress.Finish(false, "Leader election failed after 60s — cluster may need manual recovery")
+		return
+	}
 
 	// Step 11: Start old leader as follower
 	o.progress.Update(11, fmt.Sprintf("Starting Node %d as follower...", leader))
 	o.clusterStatus.SetNodeStatus(leader, "STARTING", false)
 	o.systemd.Start(fmt.Sprintf("node%d", leader))
-	time.Sleep(2 * time.Second)
 
+	// Wait for old leader to rejoin
 	o.clusterStatus.SetNodeStatus(leader, "REJOINING", true)
-	time.Sleep(5 * time.Second)
-	o.clusterStatus.SetNodeStatus(leader, "FOLLOWER", true)
-	o.progress.Update(11, fmt.Sprintf("Node %d rejoined as follower", leader))
+	ingressPort := 9000 + (leader * 100) + 2
+	if o.waitForPort("127.0.0.1", ingressPort, 60*time.Second) {
+		o.clusterStatus.SetNodeStatus(leader, "FOLLOWER", true)
+		o.progress.Update(11, fmt.Sprintf("Node %d rejoined as follower", leader))
+	} else {
+		o.clusterStatus.SetNodeStatus(leader, "FOLLOWER", true)
+		o.progress.Update(11, fmt.Sprintf("Node %d rejoin timeout — may still be catching up", leader))
+	}
 
 	// Cleanup staging
 	exec.Command("rm", "-rf", stagingDir).Run()
@@ -685,6 +721,63 @@ func (o *OperationsService) Cleanup() map[string]interface{} {
 	}
 
 	return result
+}
+
+// waitForPort polls until a UDP port is open (bound) on the given host
+func (o *OperationsService) waitForPort(host string, port int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	addr := fmt.Sprintf("%s:%d", host, port)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("udp", addr, 500*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			// UDP "connect" always succeeds — check if port is actually bound via ss
+			if o.isPortOpen(host, port) {
+				return true
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return false
+}
+
+// isPortOpen checks if a UDP port is bound using ss
+func (o *OperationsService) isPortOpen(host string, port int) bool {
+	cmd := exec.Command("ss", "-ulnp")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	target := fmt.Sprintf("%s:%d", host, port)
+	return strings.Contains(string(output), target)
+}
+
+// waitForNodeStopped waits until a node's process is no longer running
+func (o *OperationsService) waitForNodeStopped(nodeId int, timeout time.Duration) {
+	service := fmt.Sprintf("node%d", nodeId)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !o.systemd.IsActive(service) {
+			return
+		}
+		time.Sleep(1 * time.Second)
+	}
+	// Force kill if still running
+	fmt.Printf("Node %d still running after timeout, force killing\n", nodeId)
+	pid := o.systemd.GetPID(service)
+	if pid > 0 {
+		exec.Command("kill", "-9", fmt.Sprintf("%d", pid)).Run()
+		time.Sleep(1 * time.Second)
+	}
+}
+
+// cleanNodeMediaDriver removes stale Aeron MediaDriver directories for a node
+func (o *OperationsService) cleanNodeMediaDriver(nodeId int) {
+	driverDir := fmt.Sprintf("/dev/shm/aeron-emre-%d-driver", nodeId)
+	if _, err := os.Stat(driverDir); err == nil {
+		os.RemoveAll(driverDir)
+		fmt.Printf("Cleaned stale MediaDriver: %s\n", driverDir)
+	}
 }
 
 func contains(s, substr string) bool {
