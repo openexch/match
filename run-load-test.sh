@@ -5,7 +5,7 @@
 
 set -e
 
-JAR_PATH="match/target/cluster-engine-1.0.jar"
+JAR_PATH="match-loadtest/target/match-loadtest.jar"
 MAIN_CLASS="com.match.loadtest.LoadGenerator"
 
 # Colors for output

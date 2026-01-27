@@ -22,7 +22,7 @@ fi
 
 # 2. Check memory usage of cluster processes
 echo "[$(TIMESTAMP)] Memory check..." >> $LOG
-for pid in $(pgrep -f "cluster-engine-1.0.jar" | head -3); do
+for pid in $(pgrep -f "match-cluster.jar" | head -3); do
     MEM=$(ps -p $pid -o rss= 2>/dev/null | tr -d ' ')
     if [ -n "$MEM" ]; then
         MEM_MB=$((MEM / 1024))
