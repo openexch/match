@@ -14,7 +14,7 @@ import io.aeron.cluster.service.ClusteredService;
 import io.aeron.cluster.service.Cluster.Role;
 import io.aeron.cluster.codecs.CloseReason;
 import io.aeron.logbuffer.Header;
-import io.aeron.logbuffer.FragmentHandler;
+// FragmentHandler replaced with FragmentAssembler for proper multi-fragment reassembly
 import io.aeron.ExclusivePublication;
 import io.aeron.Image;
 import org.agrona.DirectBuffer;
@@ -205,71 +205,93 @@ public class AppClusteredService implements ClusteredService {
 
     private void loadSnapshot(final Image snapshotImage) {
         System.out.println("[SNAPSHOT] loadSnapshot called, image position: " + snapshotImage.position());
-        final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();
 
-        final FragmentHandler handler = (buf, offset, length, header) -> {
-            System.out.println("[SNAPSHOT] Fragment received: offset=" + offset + ", length=" + length);
-            // Copy to our buffer for processing
-            buffer.putBytes(0, buf, offset, length);
-
-            int pos = 0;
-
-            // Read order ID generator
-            long orderIdGen = buffer.getLong(pos);
-            pos += 8;
-            engine.setOrderIdGenerator(orderIdGen);
-            System.out.println("[SNAPSHOT] Restored OrderIdGenerator: " + orderIdGen);
-
-            // Read trade ID generator (for event publisher)
-            long tradeIdGen = buffer.getLong(pos);
-            pos += 8;
-            eventPublisher.setTradeIdGenerator(tradeIdGen);
-            System.out.println("[SNAPSHOT] Restored TradeIdGenerator: " + tradeIdGen);
-
-            // Read number of markets
-            int numMarkets = buffer.getInt(pos);
-            pos += 4;
-            System.out.println("[SNAPSHOT] Restoring " + numMarkets + " markets");
-
-            for (int m = 0; m < numMarkets; m++) {
-                int marketId = buffer.getInt(pos);
-                pos += 4;
-
-                DirectMatchingEngine matchingEngine = engine.getEngine(marketId);
-                if (matchingEngine == null) {
-                    System.out.println("[SNAPSHOT] WARNING: No engine for market " + marketId);
-                    continue;
-                }
-
-                // Read bid orders
-                int numBidOrders = buffer.getInt(pos);
-                pos += 4;
-                long[] bidOrders = new long[numBidOrders * 4];
-                for (int i = 0; i < bidOrders.length; i++) {
-                    bidOrders[i] = buffer.getLong(pos);
-                    pos += 8;
-                }
-
-                // Read ask orders
-                int numAskOrders = buffer.getInt(pos);
-                pos += 4;
-                long[] askOrders = new long[numAskOrders * 4];
-                for (int i = 0; i < askOrders.length; i++) {
-                    askOrders[i] = buffer.getLong(pos);
-                    pos += 8;
-                }
-
-                matchingEngine.restoreFromSnapshot(bidOrders, askOrders);
-                System.out.println("[SNAPSHOT] Market " + marketId + ": restored " + numBidOrders + " bids, " + numAskOrders + " asks");
+        // Use FragmentAssembler to reassemble messages that span multiple fragments.
+        // Without this, snapshots larger than MTU (8KB) would be delivered as separate
+        // fragments, and the handler would try to parse an incomplete snapshot — causing
+        // either IndexOutOfBoundsException or silently corrupted state.
+        final io.aeron.FragmentAssembler assembler = new io.aeron.FragmentAssembler(
+            (buf, offset, length, header) -> {
+                System.out.println("[SNAPSHOT] Reassembled message: offset=" + offset + ", length=" + length);
+                processSnapshotPayload(buf, offset, length);
             }
-            System.out.println("[SNAPSHOT] Snapshot load complete");
-        };
+        );
 
         int fragmentCount = 0;
-        while (snapshotImage.poll(handler, 1) > 0) {
+        while (snapshotImage.poll(assembler, 10) > 0) {
             fragmentCount++;
         }
         System.out.println("[SNAPSHOT] Total fragments polled: " + fragmentCount);
+    }
+
+    /**
+     * Process a complete (reassembled) snapshot payload.
+     * Separated from loadSnapshot for clarity — this expects the FULL snapshot
+     * data, not individual fragments.
+     */
+    private void processSnapshotPayload(final DirectBuffer buf, final int offset, final int length) {
+        final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(length);
+        buffer.putBytes(0, buf, offset, length);
+
+        int pos = 0;
+
+        // Read order ID generator
+        long orderIdGen = buffer.getLong(pos);
+        pos += 8;
+        engine.setOrderIdGenerator(orderIdGen);
+        System.out.println("[SNAPSHOT] Restored OrderIdGenerator: " + orderIdGen);
+
+        // Read trade ID generator (for event publisher)
+        long tradeIdGen = buffer.getLong(pos);
+        pos += 8;
+        eventPublisher.setTradeIdGenerator(tradeIdGen);
+        System.out.println("[SNAPSHOT] Restored TradeIdGenerator: " + tradeIdGen);
+
+        // Read number of markets
+        int numMarkets = buffer.getInt(pos);
+        pos += 4;
+        System.out.println("[SNAPSHOT] Restoring " + numMarkets + " markets");
+
+        for (int m = 0; m < numMarkets; m++) {
+            int marketId = buffer.getInt(pos);
+            pos += 4;
+
+            DirectMatchingEngine matchingEngine = engine.getEngine(marketId);
+            if (matchingEngine == null) {
+                System.out.println("[SNAPSHOT] WARNING: No engine for market " + marketId + ", skipping");
+                // Need to skip this market's data to continue parsing
+                int numBidOrders = buffer.getInt(pos);
+                pos += 4;
+                pos += numBidOrders * 4 * 8; // 4 longs per order
+                int numAskOrders = buffer.getInt(pos);
+                pos += 4;
+                pos += numAskOrders * 4 * 8;
+                continue;
+            }
+
+            // Read bid orders
+            int numBidOrders = buffer.getInt(pos);
+            pos += 4;
+            long[] bidOrders = new long[numBidOrders * 4];
+            for (int i = 0; i < bidOrders.length; i++) {
+                bidOrders[i] = buffer.getLong(pos);
+                pos += 8;
+            }
+
+            // Read ask orders
+            int numAskOrders = buffer.getInt(pos);
+            pos += 4;
+            long[] askOrders = new long[numAskOrders * 4];
+            for (int i = 0; i < askOrders.length; i++) {
+                askOrders[i] = buffer.getLong(pos);
+                pos += 8;
+            }
+
+            matchingEngine.restoreFromSnapshot(bidOrders, askOrders);
+            System.out.println("[SNAPSHOT] Market " + marketId + ": restored " + numBidOrders + " bids, " + numAskOrders + " asks");
+        }
+
+        System.out.println("[SNAPSHOT] Snapshot load complete. Processed " + pos + " bytes of " + length);
     }
 
     @Override
