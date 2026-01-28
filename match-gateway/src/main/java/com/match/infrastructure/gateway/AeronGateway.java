@@ -63,7 +63,7 @@ public class AeronGateway implements EgressListener, AutoCloseable {
 
     // Leader transition tracking — during this window, offers return 503 instead of 500
     private volatile long leaderTransitionDeadlineMs = 0;
-    private static final long LEADER_TRANSITION_TIMEOUT_MS = 30_000; // 30s max transition
+    private static final long LEADER_TRANSITION_TIMEOUT_MS = 10_000; // 10s max transition
 
     // Cluster connection config
     private final String ingressEndpoints;

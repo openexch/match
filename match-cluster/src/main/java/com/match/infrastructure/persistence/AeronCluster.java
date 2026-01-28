@@ -56,7 +56,7 @@ public class AeronCluster {
                             .dirDeleteOnStart(true)
                             .dirDeleteOnShutdown(true)
                             // Timeouts
-                            .driverTimeoutMs(50)
+                            .driverTimeoutMs(500)
                             .timerIntervalNs(TimeUnit.MICROSECONDS.toNanos(500))  // 500us for faster polling
                             .clientLivenessTimeoutNs(TimeUnit.SECONDS.toNanos(5))
                             .publicationUnblockTimeoutNs(TimeUnit.SECONDS.toNanos(10))

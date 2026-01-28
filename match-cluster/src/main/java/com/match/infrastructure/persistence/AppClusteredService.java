@@ -334,10 +334,8 @@ public class AppClusteredService implements ClusteredService {
             throw new RuntimeException(e);
         }
 
-        // Flush market data after every message (ensures flush even under heavy load)
-        if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
-            aeronBroadcaster.flush();
-        }
+        // Market data flushed via gateway heartbeats (~20/sec) and MarketPublisher's 20ms scheduler.
+        // Removed per-message flush to eliminate O(n²) amplification under load.
     }
 
     // Heartbeat ACK message format (simple JSON)

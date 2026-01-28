@@ -11,6 +11,7 @@ import com.match.infrastructure.generated.*;
 import com.match.infrastructure.generated.BookDeltaEncoder;
 
 import org.agrona.collections.Long2ObjectHashMap;
+import org.agrona.ExpandableDirectByteBuffer;
 import org.agrona.concurrent.UnsafeBuffer;
 
 import java.util.ArrayDeque;
@@ -38,7 +39,7 @@ public class MarketPublisher implements MarketEventHandler {
     private static final int ENCODE_BUFFER_SIZE = 256 * 1024;
     // Max order status entries per batch to prevent buffer overflow (~60 bytes each)
     private static final int MAX_ORDER_STATUS_PER_BATCH = 2000;
-    private final UnsafeBuffer encodeBuffer = new UnsafeBuffer(new byte[ENCODE_BUFFER_SIZE]);
+    private final ExpandableDirectByteBuffer encodeBuffer = new ExpandableDirectByteBuffer(ENCODE_BUFFER_SIZE);
 
     // Pre-allocated SBE encoders (reused, zero allocation)
     private final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
