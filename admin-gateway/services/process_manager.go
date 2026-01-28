@@ -487,6 +487,14 @@ func (pm *ProcessManager) startByName(name string) error {
 }
 
 func (pm *ProcessManager) startProcess(def ServiceDef) error {
+	return pm.startProcessInner(def, true)
+}
+
+func (pm *ProcessManager) startProcessNoRotate(def ServiceDef) error {
+	return pm.startProcessInner(def, false)
+}
+
+func (pm *ProcessManager) startProcessInner(def ServiceDef, rotateLogs bool) error {
 	proc := pm.procs[def.Name]
 	proc.mu.Lock()
 	defer proc.mu.Unlock()
@@ -496,6 +504,11 @@ func (pm *ProcessManager) startProcess(def ServiceDef) error {
 	}
 
 	proc.status = "starting"
+
+	// Clean stale Aeron state for cluster nodes
+	if def.Role == RoleClusterNode {
+		pm.cleanStaleAeronState(def.Name)
+	}
 
 	// Run pre-start commands
 	for _, preCmd := range def.PreStart {
@@ -510,9 +523,11 @@ func (pm *ProcessManager) startProcess(def ServiceDef) error {
 		}
 	}
 
-	// Rotate log file
+	// Rotate log file (skip on auto-restart to preserve crash context)
 	logPath := filepath.Join(pm.logDir, def.Name+".log")
-	pm.rotateLog(logPath)
+	if rotateLogs {
+		pm.rotateLog(logPath)
+	}
 
 	// Open log file
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -699,9 +714,6 @@ func (pm *ProcessManager) monitor(def ServiceDef, proc *managedProcess) {
 			exitMsg = err.Error()
 		}
 		fmt.Printf("[PM] %s crashed (PID %d, exit: %s)\n", def.Name, oldPid, exitMsg)
-		proc.mu.Lock()
-		proc.status = "crashed"
-		proc.mu.Unlock()
 	}
 
 	// Auto-restart if enabled
@@ -710,6 +722,10 @@ func (pm *ProcessManager) monitor(def ServiceDef, proc *managedProcess) {
 		if restartSec <= 0 {
 			restartSec = 5
 		}
+
+		proc.mu.Lock()
+		proc.status = "restarting"
+		proc.mu.Unlock()
 
 		fmt.Printf("[PM] Will restart %s in %ds\n", def.Name, restartSec)
 
@@ -726,12 +742,17 @@ func (pm *ProcessManager) monitor(def ServiceDef, proc *managedProcess) {
 		proc.mu.Unlock()
 
 		fmt.Printf("[PM] Auto-restarting %s (attempt %d)\n", def.Name, proc.restartCount)
-		if err := pm.startProcess(def); err != nil {
+		// Use startProcessNoRotate to preserve crash logs
+		if err := pm.startProcessNoRotate(def); err != nil {
 			fmt.Printf("[PM] Failed to restart %s: %v\n", def.Name, err)
 			proc.mu.Lock()
 			proc.status = "failed"
 			proc.mu.Unlock()
 		}
+	} else {
+		proc.mu.Lock()
+		proc.status = "crashed"
+		proc.mu.Unlock()
 	}
 }
 
@@ -795,6 +816,54 @@ func (pm *ProcessManager) readPID(name string) int {
 func (pm *ProcessManager) removePID(name string) {
 	path := filepath.Join(pm.pidDir, name+".pid")
 	os.Remove(path)
+}
+
+// --- Aeron Cleanup ---
+
+// cleanStaleAeronState removes stale mark files and media driver directories
+// that prevent a node from restarting after a crash
+func (pm *ProcessManager) cleanStaleAeronState(name string) {
+	// Map service name to node ID for media driver cleanup
+	nodeIds := map[string]int{"node0": 0, "node1": 1, "node2": 2}
+	if nodeId, ok := nodeIds[name]; ok {
+		// Clean stale MediaDriver directory
+		driverDir := fmt.Sprintf("/dev/shm/aeron-emre-%d-driver", nodeId)
+		if _, err := os.Stat(driverDir); err == nil {
+			os.RemoveAll(driverDir)
+			fmt.Printf("[PM] Cleaned stale MediaDriver: %s\n", driverDir)
+		}
+
+		// Clean stale mark files and locks
+		nodeDir := fmt.Sprintf("/dev/shm/aeron-cluster/%s", name)
+		patterns := []string{
+			nodeDir + "/cluster/cluster-mark*.dat",
+			nodeDir + "/cluster/*.lck",
+			nodeDir + "/archive/archive-mark.dat",
+		}
+		for _, pattern := range patterns {
+			matches, _ := filepath.Glob(pattern)
+			for _, m := range matches {
+				os.Remove(m)
+				fmt.Printf("[PM] Cleaned stale file: %s\n", m)
+			}
+		}
+	}
+
+	// Backup node
+	if name == "backup" {
+		backupDir := "/dev/shm/aeron-cluster/backup"
+		patterns := []string{
+			backupDir + "/cluster/cluster-mark*.dat",
+			backupDir + "/cluster/*.lck",
+			backupDir + "/archive/archive-mark.dat",
+		}
+		for _, pattern := range patterns {
+			matches, _ := filepath.Glob(pattern)
+			for _, m := range matches {
+				os.Remove(m)
+			}
+		}
+	}
 }
 
 // --- Log Management ---

@@ -1089,8 +1089,8 @@ export function AdminPage() {
                     <div className="service-actions">
                       {!isOperating && proc.running ? (
                         <>
-                          <button className="btn-icon stop" onClick={() => requestProcessAction(proc.name, 'stop')} disabled={isOperationRunning} title="Stop">{Icons.stop}</button>
-                          <button className="btn-icon restart" onClick={() => requestProcessAction(proc.name, 'restart')} disabled={isOperationRunning} title="Restart">{Icons.restart}</button>
+                          <button className="btn-icon stop" onClick={() => requestProcessAction(proc.name, 'stop')} disabled={isOperationRunning || isOperating} title="Stop">{Icons.stop}</button>
+                          <button className="btn-icon restart" onClick={() => requestProcessAction(proc.name, 'restart')} disabled={isOperationRunning || isOperating} title="Restart">{Icons.restart}</button>
                           {proc.name === 'backup' && (
                             <button
                               className={`btn-icon snapshot ${snapshotOp ? 'active' : ''}`}
@@ -1105,7 +1105,7 @@ export function AdminPage() {
                             <button
                               className="btn-icon self-update"
                               onClick={requestSelfUpdate}
-                              disabled={isOperationRunning}
+                              disabled={isOperationRunning || isOperating}
                               title="Self-Update"
                             >
                               {Icons.update}
@@ -1113,7 +1113,7 @@ export function AdminPage() {
                           )}
                         </>
                       ) : !isOperating ? (
-                        <button className="btn-icon start" onClick={() => requestProcessAction(proc.name, 'start')} disabled={isOperationRunning} title="Start">{Icons.play}</button>
+                        <button className="btn-icon start" onClick={() => requestProcessAction(proc.name, 'start')} disabled={isOperationRunning || isOperating} title="Start">{Icons.play}</button>
                       ) : null}
                       <button
                         className={`btn-icon logs ${logSelected ? 'active' : ''}`}
