@@ -208,10 +208,9 @@ public class TradeRingBufferTest {
         assertNotNull(json);
 
         JsonObject parsed = JsonParser.parseString(json).getAsJsonObject();
-        assertEquals("TRADES_HISTORY", parsed.get("type").getAsString());
+        assertEquals("TRADES_BATCH", parsed.get("type").getAsString());
         assertEquals(1, parsed.get("marketId").getAsInt());
         assertEquals("BTC-USD", parsed.get("market").getAsString());
-        assertEquals(2, parsed.get("count").getAsInt());
 
         JsonArray arr = parsed.getAsJsonArray("trades");
         assertEquals(2, arr.size());
@@ -232,7 +231,6 @@ public class TradeRingBufferTest {
 
         String json = buffer.toJson(2);
         JsonObject parsed = JsonParser.parseString(json).getAsJsonObject();
-        assertEquals(2, parsed.get("count").getAsInt());
         assertEquals(2, parsed.getAsJsonArray("trades").size());
     }
 
@@ -241,7 +239,6 @@ public class TradeRingBufferTest {
         String json = buffer.toJson(10);
         assertNotNull(json);
         JsonObject parsed = JsonParser.parseString(json).getAsJsonObject();
-        assertEquals(0, parsed.get("count").getAsInt());
         assertEquals(0, parsed.getAsJsonArray("trades").size());
     }
 

@@ -150,8 +150,8 @@ public class GatewayStateManagerSbeTest {
 
         String json = manager.getRecentTradesJson(10);
         assertNotNull(json);
-        assertTrue(json.contains("TRADES_HISTORY"));
-        assertTrue(json.contains("\"count\":1"));
+        assertTrue(json.contains("TRADES_BATCH"));
+        assertTrue(json.contains("\"trades\""));
     }
 
     @Test

@@ -18,8 +18,9 @@ public class TradeRingBuffer {
     private volatile int head = 0;  // Points to next write position
     private volatile int count = 0; // Number of valid entries
 
-    private volatile int marketId;
-    private volatile String marketName;
+    // Per-trade market tracking (each slot knows its market)
+    private final int[] tradeMarketIds;
+    private final String[] tradeMarketNames;
 
     public TradeRingBuffer() {
         this(DEFAULT_CAPACITY);
@@ -28,6 +29,8 @@ public class TradeRingBuffer {
     public TradeRingBuffer(int capacity) {
         this.capacity = capacity;
         this.trades = new AggregatedTrade[capacity];
+        this.tradeMarketIds = new int[capacity];
+        this.tradeMarketNames = new String[capacity];
         // Pre-allocate all entries
         for (int i = 0; i < capacity; i++) {
             trades[i] = new AggregatedTrade();
@@ -39,14 +42,13 @@ public class TradeRingBuffer {
      * Called from egress polling thread (single writer).
      */
     public void addBatch(int marketId, String marketName, JsonArray tradesArray) {
-        this.marketId = marketId;
-        this.marketName = marketName;
-
         for (int i = 0; i < tradesArray.size(); i++) {
             JsonObject trade = tradesArray.get(i).getAsJsonObject();
 
             // Get the slot to write to
             AggregatedTrade entry = trades[head];
+            tradeMarketIds[head] = marketId;
+            tradeMarketNames[head] = marketName;
 
             // Parse trade data
             entry.price = trade.get("price").getAsDouble();
@@ -65,40 +67,77 @@ public class TradeRingBuffer {
     }
 
     /**
-     * Get the most recent N trades.
+     * Get the most recent N trades (all markets).
      * Returns a copy for thread safety.
      */
     public List<AggregatedTrade> getRecent(int n) {
+        return getRecentForMarket(n, 0); // 0 = all markets
+    }
+
+    /**
+     * Get the most recent N trades for a specific market.
+     * @param n max number of trades to return
+     * @param filterMarketId market ID to filter by, or 0 for all markets
+     * Returns a copy for thread safety.
+     */
+    public List<AggregatedTrade> getRecentForMarket(int n, int filterMarketId) {
         // Capture volatile reads
         int localHead = head;
         int localCount = count;
 
-        int toRead = Math.min(n, localCount);
-        List<AggregatedTrade> result = new ArrayList<>(toRead);
+        List<AggregatedTrade> result = new ArrayList<>(Math.min(n, localCount));
 
         // Read backwards from head (most recent first)
-        for (int i = 0; i < toRead; i++) {
+        for (int i = 0; i < localCount && result.size() < n; i++) {
             int idx = (localHead - 1 - i + capacity) % capacity;
-            AggregatedTrade copy = new AggregatedTrade();
-            copy.copyFrom(trades[idx]);
-            result.add(copy);
+            if (filterMarketId == 0 || tradeMarketIds[idx] == filterMarketId) {
+                AggregatedTrade copy = new AggregatedTrade();
+                copy.copyFrom(trades[idx]);
+                result.add(copy);
+            }
         }
 
         return result;
     }
 
     /**
-     * Get JSON representation of recent trades.
+     * Get JSON representation of recent trades for a specific market.
+     * Uses TRADES_BATCH type so the UI handles it uniformly.
      */
     public String toJson(int limit) {
-        List<AggregatedTrade> recent = getRecent(limit);
+        return toJsonForMarket(limit, 0);
+    }
+
+    /**
+     * Get JSON representation of recent trades for a specific market.
+     * @param limit max number of trades
+     * @param marketId market to filter by, or 0 for all
+     */
+    public String toJsonForMarket(int limit, int marketId) {
+        List<AggregatedTrade> recent = getRecentForMarket(limit, marketId);
+
+        // Resolve market info
+        int resolvedMarketId = marketId;
+        String resolvedName = "UNKNOWN";
+        int localHead = head;
+        int localCount = count;
+        for (int i = 0; i < localCount; i++) {
+            int idx = (localHead - 1 - i + capacity) % capacity;
+            if (marketId == 0 || tradeMarketIds[idx] == marketId) {
+                if (tradeMarketNames[idx] != null) {
+                    resolvedName = tradeMarketNames[idx];
+                    resolvedMarketId = tradeMarketIds[idx];
+                    break;
+                }
+            }
+        }
 
         JsonObject json = new JsonObject();
-        json.addProperty("type", "TRADES_HISTORY");
-        json.addProperty("marketId", marketId);
-        json.addProperty("market", marketName != null ? marketName : "UNKNOWN");
+        // Use TRADES_BATCH so the UI handles it the same as live trades
+        json.addProperty("type", "TRADES_BATCH");
+        json.addProperty("marketId", resolvedMarketId);
+        json.addProperty("market", resolvedName);
         json.addProperty("timestamp", System.currentTimeMillis());
-        json.addProperty("count", recent.size());
 
         JsonArray tradesArray = new JsonArray();
         for (AggregatedTrade t : recent) {

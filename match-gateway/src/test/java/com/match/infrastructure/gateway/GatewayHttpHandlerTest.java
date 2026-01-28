@@ -148,8 +148,8 @@ public class GatewayHttpHandlerTest {
         FullHttpResponse response = sendRequest(channel, HttpMethod.GET, "/api/trades");
         assertEquals(HttpResponseStatus.OK, response.status());
         String body = getBody(response);
-        assertTrue(body.contains("\"type\":\"TRADES_HISTORY\""));
-        assertTrue(body.contains("\"count\":0"));
+        assertTrue(body.contains("\"type\":\"TRADES_BATCH\""));
+        assertTrue(body.contains("\"trades\""));
         channel.finish();
     }
 
@@ -159,7 +159,7 @@ public class GatewayHttpHandlerTest {
         FullHttpResponse response = sendRequest(channel, HttpMethod.GET, "/api/trades?limit=10");
         assertEquals(HttpResponseStatus.OK, response.status());
         String body = getBody(response);
-        assertTrue(body.contains("\"type\":\"TRADES_HISTORY\""));
+        assertTrue(body.contains("\"type\":\"TRADES_BATCH\""));
         channel.finish();
     }
 

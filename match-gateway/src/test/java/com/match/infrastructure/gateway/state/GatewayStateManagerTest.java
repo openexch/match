@@ -53,16 +53,15 @@ public class GatewayStateManagerTest {
         assertNotNull(json);
         // Should be parseable JSON containing required fields
         assertTrue("Should contain type field", json.contains("\"type\""));
-        assertTrue("Should contain TRADES_HISTORY", json.contains("TRADES_HISTORY"));
+        assertTrue("Should contain TRADES_BATCH", json.contains("TRADES_BATCH"));
         assertTrue("Should contain trades array", json.contains("\"trades\""));
-        assertTrue("Should contain count", json.contains("\"count\""));
     }
 
     @Test
     public void getRecentTradesJsonWithZeroLimit() {
         String json = manager.getRecentTradesJson(0);
         assertNotNull(json);
-        assertTrue(json.contains("\"count\":0"));
+        assertTrue(json.contains("\"trades\""));
     }
 
     // ==================== Ticker Stats ====================

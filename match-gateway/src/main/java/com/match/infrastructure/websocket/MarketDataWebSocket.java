@@ -306,9 +306,9 @@ public class MarketDataWebSocket implements AutoCloseable {
                     ctx.write(new TextWebSocketFrame(buildEmptyBookSnapshot(requestedMarketId)));
                 }
 
-                // Send recent trades (last 20)
+                // Send recent trades for this market (last 50)
                 if (stateManager.getTrades().hasData()) {
-                    String tradesJson = stateManager.getTrades().toJson(20);
+                    String tradesJson = stateManager.getTrades().toJsonForMarket(50, requestedMarketId);
                     ctx.write(new TextWebSocketFrame(tradesJson));
                 }
 
