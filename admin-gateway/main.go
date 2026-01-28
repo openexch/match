@@ -24,6 +24,7 @@ func main() {
 	cluster := services.NewCluster(cfg)
 	progress := services.NewProgress()
 	clusterStatus := services.NewClusterStatus()
+	procMgr := services.NewProcessManager(cfg, systemd)
 
 	statusSvc := services.NewStatusService(cfg, systemd, cluster, clusterStatus)
 	opsSvc := services.NewOperationsService(cfg, systemd, cluster, progress, clusterStatus)
@@ -31,7 +32,7 @@ func main() {
 	logSvc := services.NewLogService(cfg)
 
 	// Initialize handlers
-	h := handlers.New(statusSvc, opsSvc, systemd, cluster, progress, clusterStatus, autoSnapshot, logSvc)
+	h := handlers.New(statusSvc, opsSvc, systemd, cluster, progress, clusterStatus, autoSnapshot, logSvc, procMgr)
 
 	// Setup router
 	r := chi.NewRouter()
@@ -58,6 +59,8 @@ func main() {
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 		<-sigChan
 		log.Println("Shutting down...")
+		procMgr.Shutdown()
+		statusSvc.Stop()
 		server.Close()
 	}()
 

@@ -112,34 +112,43 @@
    ================================================================ */
 @media (max-width: 768px) {
   .connection-status {
-    padding: 6px 10px;
+    padding: 4px 8px;
     font-size: 10px;
-    min-height: 36px;
+    min-height: 32px;
+    gap: 5px;
   }
 
+  /* Hide status text on mobile, just show dot */
   .connection-status .status-text {
-    font-size: 10px;
+    display: none;
   }
 
   .reconnect-btn {
-    padding: 4px 12px;
-    font-size: 11px;
-    min-height: 30px;
+    padding: 4px 10px;
+    font-size: 10px;
+    min-height: 28px;
   }
 
   .leader-badge {
-    font-size: 9px;
-    padding: 2px 5px;
+    display: none;
+  }
+
+  .status-indicator {
+    width: 8px;
+    height: 8px;
   }
 }
 
 @media (max-width: 480px) {
   .connection-status {
-    padding: 5px 8px;
-    gap: 6px;
+    padding: 3px 6px;
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    justify-content: center;
   }
 
-  .leader-badge {
+  .reconnect-btn {
     display: none;
   }
 }

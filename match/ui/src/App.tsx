@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { Routes, Route, Link } from 'react-router-dom';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useOrderBook } from './hooks/useOrderBook';
@@ -17,6 +17,19 @@ import { AdminPage } from './pages/AdminPage';
 import type { WebSocketMessage, Market, OrderRequest, ClusterStatusMessage, ClusterEventMessage, ExtendedConnectionStatus, BookDeltaMessage, TickerStatsMessage, CandleData, CandleHistoryMessage, CandleUpdateMessage } from './types/market';
 import { MARKETS } from './types/market';
 import './App.css';
+
+// Mobile detection hook
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= breakpoint);
+  useEffect(() => {
+    const mql = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mql.addEventListener('change', handler);
+    setIsMobile(mql.matches);
+    return () => mql.removeEventListener('change', handler);
+  }, [breakpoint]);
+  return isMobile;
+}
 
 // Icons
 const Icons = {
@@ -46,8 +59,14 @@ const Icons = {
 };
 
 function MarketPage() {
+  const isMobile = useIsMobile();
   const [selectedMarket, setSelectedMarket] = useState<Market>(MARKETS[0]);
   const selectedMarketIdRef = useRef(selectedMarket.id);
+
+  // Mobile-specific state
+  const [mobileTab, setMobileTab] = useState<'chart' | 'orderbook' | 'trades'>('chart');
+  const [showMarketSelector, setShowMarketSelector] = useState(false);
+  const [mobileOrderSide, setMobileOrderSide] = useState<'BID' | 'ASK' | null>(null);
 
   // Price click-to-fill state
   const [clickedPrice, setClickedPrice] = useState<number | null>(null);
@@ -219,6 +238,7 @@ function MarketPage() {
     chartIntervalRef.current = '1m';
     setChartInterval('1m');
     resetAllState();
+    setShowMarketSelector(false);
   }, [resetAllState]);
 
   const handleReconnect = useCallback(() => {
@@ -238,23 +258,31 @@ function MarketPage() {
   const bestAsk = orderBook.asks.length > 0 ? orderBook.asks[0] : null;
 
   return (
-    <div className="app">
+    <div className={`app ${isMobile ? 'is-mobile' : ''}`}>
       <header className="app-header">
         <div className="header-left">
           <div className="logo">
             <span className="logo-icon">{Icons.initexLogo}</span>
             <span className="logo-text"><span className="init">init</span><span className="ex">EX</span></span>
           </div>
-          <MarketSelector
-            markets={MARKETS}
-            selectedMarket={selectedMarket}
-            onSelectMarket={handleMarketChange}
-          />
+          {isMobile && (
+            <button
+              className="mobile-market-btn"
+              onClick={() => setShowMarketSelector(true)}
+            >
+              <span>{selectedMarket.symbol}</span>
+              <svg viewBox="0 0 12 12" width="10" height="10" fill="currentColor">
+                <path d="M2 4l4 4 4-4"/>
+              </svg>
+            </button>
+          )}
         </div>
         <div className="header-right">
-          <Link to="/admin" className="admin-btn" title="Cluster Admin">
-            {Icons.settings}
-          </Link>
+          {!isMobile && (
+            <Link to="/admin" className="admin-btn" title="Cluster Admin">
+              {Icons.settings}
+            </Link>
+          )}
           <ConnectionStatus status={effectiveStatus} clusterState={clusterState} onReconnect={handleReconnect} />
         </div>
       </header>
@@ -265,7 +293,7 @@ function MarketPage() {
 
       <main className="app-main">
         {/* Left sidebar — Order Book (vertical) */}
-        <aside className="left-panel">
+        <aside className={`left-panel ${isMobile && mobileTab === 'orderbook' ? 'mobile-tab-active' : ''}`}>
           <OrderBook
             orderBook={orderBook}
             levelChanges={levelChanges}
@@ -275,32 +303,150 @@ function MarketPage() {
 
         {/* Center — Chart + Order Form */}
         <section className="center-panel">
-          <div className="chart-area">
-            <Chart
-              candles={candles}
-              currentCandle={currentCandle}
-              symbol={selectedMarket.symbol}
-              onIntervalChange={handleIntervalChange}
-              activeInterval={chartInterval}
+          {/* Desktop: chart always visible */}
+          {!isMobile && (
+            <div className="chart-area">
+              <Chart
+                candles={candles}
+                currentCandle={currentCandle}
+                symbol={selectedMarket.symbol}
+                onIntervalChange={handleIntervalChange}
+                activeInterval={chartInterval}
+              />
+            </div>
+          )}
+
+          {/* Mobile Tab Bar */}
+          {isMobile && (
+            <div className="mobile-tab-bar">
+              <button
+                className={`mobile-tab ${mobileTab === 'chart' ? 'active' : ''}`}
+                onClick={() => setMobileTab('chart')}
+              >
+                Chart
+              </button>
+              <button
+                className={`mobile-tab ${mobileTab === 'orderbook' ? 'active' : ''}`}
+                onClick={() => setMobileTab('orderbook')}
+              >
+                Order Book
+              </button>
+              <button
+                className={`mobile-tab ${mobileTab === 'trades' ? 'active' : ''}`}
+                onClick={() => setMobileTab('trades')}
+              >
+                Trades
+              </button>
+            </div>
+          )}
+
+          {/* Mobile: show selected tab content */}
+          {isMobile && (
+            <div className="mobile-tab-content">
+              {mobileTab === 'chart' && (
+                <Chart
+                  candles={candles}
+                  currentCandle={currentCandle}
+                  symbol={selectedMarket.symbol}
+                  onIntervalChange={handleIntervalChange}
+                  activeInterval={chartInterval}
+                />
+              )}
+              {mobileTab === 'orderbook' && (
+                <OrderBook
+                  orderBook={orderBook}
+                  levelChanges={levelChanges}
+                  onPriceClick={handlePriceClick}
+                />
+              )}
+              {mobileTab === 'trades' && (
+                <TradeList trades={trades} />
+              )}
+            </div>
+          )}
+
+          {/* Desktop: inline order form. Mobile: Buy/Sell buttons */}
+          {!isMobile ? (
+            <div className="order-area">
+              <OrderForm
+                market={selectedMarket}
+                bestBid={bestBid}
+                bestAsk={bestAsk}
+                onSubmitOrder={handleSubmitOrder}
+                loading={apiLoading}
+                externalPrice={clickedPrice}
+              />
+            </div>
+          ) : (
+            <div className="mobile-order-buttons">
+              <button className="mobile-buy-btn" onClick={() => setMobileOrderSide('BID')}>
+                Buy
+              </button>
+              <button className="mobile-sell-btn" onClick={() => setMobileOrderSide('ASK')}>
+                Sell
+              </button>
+            </div>
+          )}
+        </section>
+
+        {/* Right sidebar — Market Selector + Recent Trades */}
+        <aside className={`right-panel ${isMobile && mobileTab === 'trades' ? 'mobile-tab-active' : ''}`}>
+          {!isMobile && (
+            <MarketSelector
+              markets={MARKETS}
+              selectedMarket={selectedMarket}
+              onSelectMarket={handleMarketChange}
             />
-          </div>
-          <div className="order-area">
+          )}
+          <TradeList trades={trades} />
+        </aside>
+      </main>
+
+      {/* Mobile Market Selector Overlay */}
+      {isMobile && showMarketSelector && (
+        <MarketSelector
+          markets={MARKETS}
+          selectedMarket={selectedMarket}
+          onSelectMarket={handleMarketChange}
+          isOverlay={true}
+          onClose={() => setShowMarketSelector(false)}
+        />
+      )}
+
+      {/* Mobile Order Form Overlay */}
+      {isMobile && mobileOrderSide && (
+        <div className="mobile-order-overlay" onClick={(e) => {
+          if (e.target === e.currentTarget) setMobileOrderSide(null);
+        }}>
+          <div className="mobile-order-sheet">
+            <div className="mobile-order-sheet-header">
+              <span className="mobile-order-sheet-title">
+                {mobileOrderSide === 'BID' ? 'Buy' : 'Sell'} {selectedMarket.baseAsset}
+              </span>
+              <button className="mobile-order-sheet-close" onClick={() => setMobileOrderSide(null)}>
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18"/>
+                  <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
             <OrderForm
               market={selectedMarket}
               bestBid={bestBid}
               bestAsk={bestAsk}
-              onSubmitOrder={handleSubmitOrder}
+              onSubmitOrder={async (order) => {
+                const result = await handleSubmitOrder(order);
+                if (result.success) setMobileOrderSide(null);
+                return result;
+              }}
               loading={apiLoading}
               externalPrice={clickedPrice}
+              isMobile={true}
+              defaultSide={mobileOrderSide}
             />
           </div>
-        </section>
-
-        {/* Right sidebar — Recent Trades */}
-        <aside className="right-panel">
-          <TradeList trades={trades} />
-        </aside>
-      </main>
+        </div>
+      )}
 
       <footer className="app-footer">
         <div className="footer-left">

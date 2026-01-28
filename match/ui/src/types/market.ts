@@ -4,14 +4,15 @@ export interface Market {
   symbol: string;
   baseAsset: string;
   quoteAsset: string;
+  name: string;
 }
 
 export const MARKETS: Market[] = [
-  { id: 1, symbol: 'BTC-USD', baseAsset: 'BTC', quoteAsset: 'USD' },
-  { id: 2, symbol: 'ETH-USD', baseAsset: 'ETH', quoteAsset: 'USD' },
-  { id: 3, symbol: 'SOL-USD', baseAsset: 'SOL', quoteAsset: 'USD' },
-  { id: 4, symbol: 'XRP-USD', baseAsset: 'XRP', quoteAsset: 'USD' },
-  { id: 5, symbol: 'DOGE-USD', baseAsset: 'DOGE', quoteAsset: 'USD' },
+  { id: 1, symbol: 'BTC-USD', baseAsset: 'BTC', quoteAsset: 'USD', name: 'Bitcoin' },
+  { id: 2, symbol: 'ETH-USD', baseAsset: 'ETH', quoteAsset: 'USD', name: 'Ethereum' },
+  { id: 3, symbol: 'SOL-USD', baseAsset: 'SOL', quoteAsset: 'USD', name: 'Solana' },
+  { id: 4, symbol: 'XRP-USD', baseAsset: 'XRP', quoteAsset: 'USD', name: 'Ripple' },
+  { id: 5, symbol: 'DOGE-USD', baseAsset: 'DOGE', quoteAsset: 'USD', name: 'Dogecoin' },
 ];
 
 export interface BookLevel {

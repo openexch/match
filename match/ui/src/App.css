@@ -278,7 +278,6 @@ body::before {
 .chart-area {
   flex: 1 1 0;
   min-height: 200px;
-  max-height: 420px;
   display: flex;
   flex-direction: column;
   border-bottom: 1px solid var(--border-color);
@@ -417,70 +416,371 @@ body::before {
 
 @media (max-width: 768px) {
   .app {
-    padding: 0 6px;
-    height: auto;
-    min-height: 100vh;
+    padding: 0;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
   }
 
   .app-header {
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px 0;
+    flex-direction: row;
+    gap: 0;
+    padding: 8px 12px;
+    align-items: center;
   }
 
   .header-left {
-    width: 100%;
-    justify-content: space-between;
+    flex: 1;
+    gap: 10px;
   }
 
   .header-right {
-    width: 100%;
-    justify-content: flex-end;
+    flex-shrink: 0;
   }
 
   .logo-icon svg {
-    width: 24px;
-    height: 24px;
+    width: 22px;
+    height: 22px;
   }
 
   .logo-text {
-    font-size: 18px;
+    font-size: 16px;
   }
 
-  .admin-btn {
-    padding: 10px;
-    min-width: 44px;
-    min-height: 44px;
+  /* Mobile market button in header */
+  .mobile-market-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-bright);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 10px;
+    cursor: pointer;
+    min-height: 36px;
+    transition: all var(--transition-base);
+  }
+
+  .mobile-market-btn:active {
+    background: var(--bg-hover);
+  }
+
+  .mobile-market-btn svg {
+    color: var(--text-muted);
   }
 
   .stats-bar {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    padding: 4px 0;
+    padding: 0;
+    flex-shrink: 0;
   }
 
+  /* Main layout: flex column, no grid */
   .app-main {
     display: flex;
     flex-direction: column;
-    gap: 1px;
-    border-radius: 8px;
+    gap: 0;
+    border-radius: 0;
+    border: none;
+    background: var(--bg-primary);
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
   }
 
-  .left-panel { order: 1; }
-  .center-panel { order: 0; min-height: 400px; }
-  .right-panel { order: 2; max-height: 300px; }
+  /* Hide left/right panels on mobile — content shown via mobile tabs */
+  .left-panel {
+    display: none !important;
+  }
 
-  .app-footer {
+  .right-panel {
+    display: none !important;
+  }
+
+  .center-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
     flex-direction: column;
-    gap: 4px;
-    text-align: center;
-    padding: 8px 0;
-    font-size: 11px;
+    overflow: hidden;
+  }
+
+  /* Chart area hidden on mobile — shown via tab content instead */
+  .chart-area {
+    display: none;
+  }
+
+  /* Mobile tab bar below chart */
+  .mobile-tab-bar {
+    display: flex;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+    border-top: 1px solid var(--border-color);
+    flex-shrink: 0;
+  }
+
+  .mobile-tab {
+    flex: 1;
+    padding: 10px 0;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    position: relative;
+    transition: color var(--transition-base);
+    min-height: 44px;
+  }
+
+  .mobile-tab.active {
+    color: var(--text-bright);
+  }
+
+  .mobile-tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 20%;
+    right: 20%;
+    height: 2px;
+    background: var(--accent-primary);
+    border-radius: 1px 1px 0 0;
+  }
+
+  /* Mobile tab content area */
+  .mobile-tab-content {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    background: var(--bg-primary);
+  }
+
+  .mobile-tab-content .order-book,
+  .mobile-tab-content .trade-list,
+  .mobile-tab-content .chart-component {
+    height: 100%;
+    border: none;
+    border-radius: 0;
+  }
+
+  /* Hide desktop order area on mobile */
+  .order-area {
+    display: none;
+  }
+
+  /* Mobile Buy/Sell bottom bar */
+  .mobile-order-buttons {
+    display: flex;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    flex-shrink: 0;
+  }
+
+  .mobile-buy-btn,
+  .mobile-sell-btn {
+    flex: 1;
+    padding: 12px;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    min-height: 48px;
+    transition: all var(--transition-base);
+  }
+
+  .mobile-buy-btn {
+    background: var(--accent-green);
+    color: #fff;
+  }
+
+  .mobile-buy-btn:active {
+    background: var(--accent-green-hover);
+  }
+
+  .mobile-sell-btn {
+    background: var(--accent-red);
+    color: #fff;
+  }
+
+  .mobile-sell-btn:active {
+    background: var(--accent-red-hover);
+  }
+
+  /* Footer: hide on mobile */
+  .app-footer {
+    display: none;
   }
 }
 
+/* Market selector overlay (rendered by React on mobile) */
+.market-selector-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  animation: overlayFadeIn 0.2s ease-out;
+}
+
+.market-selector-overlay-content {
+  background: var(--bg-secondary);
+  border-radius: 16px 16px 0 0;
+  max-height: 70vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  animation: overlaySlideUp 0.3s ease-out;
+}
+
+.market-selector-overlay-content .market-selector {
+  border: none;
+  background: transparent;
+}
+
+.market-selector-overlay-content .market-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+  z-index: 1;
+}
+
+.market-selector-overlay-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-bright);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.market-selector-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: var(--bg-hover);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-base);
+}
+
+.market-selector-close:active {
+  background: var(--bg-tertiary);
+}
+
+.market-selector-overlay-content .market-list {
+  padding: 8px 12px 24px;
+}
+
+.market-selector-overlay-content .market-list-item {
+  padding: 14px 12px;
+  min-height: 48px;
+  border-radius: 10px;
+}
+
+/* ================================================================
+   MOBILE: Order Form Bottom Sheet
+   ================================================================ */
+.mobile-order-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  animation: overlayFadeIn 0.2s ease-out;
+}
+
+.mobile-order-sheet {
+  background: var(--bg-secondary);
+  border-radius: 16px 16px 0 0;
+  max-height: 85vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  animation: overlaySlideUp 0.3s ease-out;
+}
+
+.mobile-order-sheet-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 16px 8px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+  border-radius: 16px 16px 0 0;
+  z-index: 1;
+}
+
+.mobile-order-sheet-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-bright);
+}
+
+.mobile-order-sheet-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: var(--bg-hover);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.mobile-order-sheet-close:active {
+  background: var(--bg-tertiary);
+}
+
+/* Order form inside sheet: remove borders */
+.mobile-order-sheet .order-form-container {
+  border: none;
+  background: transparent;
+}
+
+@keyframes overlayFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes overlaySlideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+/* Hide mobile-only elements on desktop */
+@media (min-width: 769px) {
+  .mobile-market-btn { display: none; }
+  .mobile-tab-bar { display: none; }
+  .mobile-tab-content { display: none; }
+  .market-selector-overlay { display: none; }
+  .mobile-order-buttons { display: none; }
+  .mobile-order-overlay { display: none; }
+}
+
 @media (max-width: 480px) {
-  .app { padding: 0 4px; }
+  .app-header {
+    padding: 6px 8px;
+  }
 }
 
 /* ================================================================

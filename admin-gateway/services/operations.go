@@ -220,6 +220,66 @@ func (o *OperationsService) doRollingUpdate() {
 	o.progress.Finish(true, "All nodes updated successfully with new code")
 }
 
+// RebuildAdmin builds the admin gateway binary from source and restarts itself via systemd.
+// The flow: build to staging → swap binary → systemd restart (which kills us gracefully).
+func (o *OperationsService) RebuildAdmin() error {
+	if o.progress.IsRunning() {
+		return fmt.Errorf("another operation in progress")
+	}
+
+	go o.doRebuildAdmin()
+	return nil
+}
+
+func (o *OperationsService) doRebuildAdmin() {
+	o.progress.Start("rebuild-admin", 4)
+
+	adminDir := filepath.Join(o.cfg.ProjectDir, "admin-gateway")
+	liveBinary := filepath.Join(adminDir, "admin-gateway")
+	stagingBinary := filepath.Join(adminDir, "admin-gateway.staging")
+
+	// Step 1: Build new binary to staging path (never overwrite live binary directly)
+	o.progress.Update(1, "Building admin gateway from source...")
+	cmd := exec.Command("go", "build", "-o", stagingBinary, ".")
+	cmd.Dir = adminDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		os.Remove(stagingBinary)
+		o.progress.Finish(false, "Build failed: "+err.Error()+" output: "+string(output))
+		return
+	}
+
+	// Step 2: Verify the staged binary is valid (basic sanity: exists + executable)
+	o.progress.Update(2, "Verifying staged binary...")
+	info, err := os.Stat(stagingBinary)
+	if err != nil {
+		o.progress.Finish(false, "Staged binary not found after build: "+err.Error())
+		return
+	}
+	if info.Size() < 1024 {
+		os.Remove(stagingBinary)
+		o.progress.Finish(false, "Staged binary suspiciously small, aborting")
+		return
+	}
+
+	// Step 3: Atomic swap — rename staging over live binary
+	o.progress.Update(3, "Swapping binary (atomic rename)...")
+	if err := os.Rename(stagingBinary, liveBinary); err != nil {
+		os.Remove(stagingBinary)
+		o.progress.Finish(false, "Binary swap failed: "+err.Error())
+		return
+	}
+
+	// Step 4: Restart ourselves via systemd (this kills us — systemd brings us back with new binary)
+	o.progress.Update(4, "Restarting admin service...")
+	o.progress.Finish(true, "Admin gateway rebuilt. Restarting now...")
+
+	// Small delay so the progress response can be read by any polling clients
+	time.Sleep(500 * time.Millisecond)
+
+	// This is the kill-switch: systemd restarts us with the new binary
+	o.systemd.Restart("admin")
+}
+
 // Snapshot triggers a cluster snapshot
 func (o *OperationsService) Snapshot() error {
 	if o.progress.IsRunning() {

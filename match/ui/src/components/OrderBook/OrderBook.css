@@ -423,23 +423,57 @@
    ================================================================ */
 @media (max-width: 768px) {
   .order-book {
-    border-radius: 10px;
+    border-radius: 0;
+    border: none;
   }
 
   .order-book-header {
     padding: 8px 10px;
   }
 
+  /* Hide view toggle buttons on mobile */
+  .view-toggles {
+    display: none;
+  }
+
+  /* Hide header icon on mobile */
+  .header-title svg {
+    display: none;
+  }
+
+  .header-title h3 {
+    font-size: 12px;
+  }
+
   .book-row {
-    padding: 3px 8px;
+    padding: 2px 8px;
     font-size: 10.5px;
+    line-height: 1.6;
+  }
+
+  .vertical-header {
+    padding: 4px 8px;
+    font-size: 9px;
   }
 
   .spread-indicator {
-    padding: 5px 8px;
+    padding: 4px 8px;
   }
 
   .spread-price {
-    font-size: 14px;
+    font-size: 13px;
+  }
+
+  .spread-label {
+    font-size: 9px;
+  }
+
+  /* Force vertical mode — hide horizontal elements */
+  .book-sides {
+    display: none;
+  }
+
+  .spread-bar {
+    display: none;
   }
 }

@@ -100,6 +100,12 @@
   font-weight: 600;
 }
 
+/* Hidden but space-preserving (market order price field) */
+.form-group-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 /* ── Input Wrapper ── */
 .input-wrapper {
   display: flex;
@@ -330,13 +336,98 @@
   }
 }
 
+/* ================================================================
+   MOBILE SIDE TOGGLE (Buy/Sell tabs)
+   ================================================================ */
+.mobile-side-toggle {
+  display: none;
+}
+
 @media (max-width: 768px) {
   .order-form-container {
-    border-radius: 10px;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
   }
 
+  /* Show mobile side toggle */
+  .mobile-side-toggle {
+    display: flex;
+    gap: 0;
+    padding: 0;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+  }
+
+  .side-toggle-btn {
+    flex: 1;
+    padding: 10px 0;
+    border: none;
+    background: transparent;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    position: relative;
+    transition: all var(--transition-base);
+    min-height: 44px;
+  }
+
+  .side-toggle-btn.buy {
+    color: var(--text-muted);
+  }
+
+  .side-toggle-btn.buy.active {
+    color: var(--accent-green);
+    background: var(--accent-green-bg);
+  }
+
+  .side-toggle-btn.buy.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--accent-green);
+  }
+
+  .side-toggle-btn.sell {
+    color: var(--text-muted);
+  }
+
+  .side-toggle-btn.sell.active {
+    color: var(--accent-red);
+    background: var(--accent-red-bg);
+  }
+
+  .side-toggle-btn.sell.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--accent-red);
+  }
+
+  /* Mobile: single column, show only active side */
   .order-forms-row {
-    padding: 10px;
+    grid-template-columns: 1fr;
+    gap: 0;
+    padding: 10px 12px;
+  }
+
+  .form-divider {
+    display: none;
+  }
+
+  /* Hide inactive side on mobile */
+  .order-forms-row.mobile-side-buy .sell-form {
+    display: none;
+  }
+
+  .order-forms-row.mobile-side-sell .buy-form {
+    display: none;
   }
 
   .input-wrapper input {
@@ -345,8 +436,26 @@
   }
 
   .submit-btn {
-    padding: 12px;
-    font-size: 14px;
-    min-height: 46px;
+    padding: 14px;
+    font-size: 15px;
+    min-height: 48px;
+    border-radius: var(--radius-md);
+  }
+
+  /* Larger touch targets for slider marks */
+  .slider-mark {
+    width: 10px;
+    height: 10px;
+    min-width: 44px;
+    min-height: 44px;
+    background-clip: content-box;
+    padding: 19px;
+    margin: -19px 0;
+    position: relative;
+  }
+
+  .amount-slider::-webkit-slider-thumb {
+    width: 20px;
+    height: 20px;
   }
 }

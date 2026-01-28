@@ -194,22 +194,35 @@
    ================================================================ */
 @media (max-width: 768px) {
   .trade-list {
-    border-radius: 10px;
+    border-radius: 0;
+    border: none;
   }
 
   .trade-list-header-bar {
     padding: 8px 10px;
   }
 
+  .trade-list-header-bar h3 {
+    font-size: 12px;
+  }
+
   .trade-list-columns {
-    padding: 5px 10px;
+    padding: 4px 10px;
     font-size: 9px;
   }
 
   .trade-row {
-    padding: 3px 10px;
+    padding: 2px 10px;
     font-size: 10.5px;
-    min-height: 28px;
+    min-height: 26px;
     align-items: center;
+  }
+
+  .trade-time {
+    font-size: 9px;
+  }
+
+  .no-trades {
+    padding: 24px 16px;
   }
 }

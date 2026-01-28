@@ -10,6 +10,8 @@ interface OrderFormProps {
   onSubmitOrder: (order: OrderRequest) => Promise<{ success: boolean; message: string }>;
   loading: boolean;
   externalPrice?: number | null;
+  isMobile?: boolean;
+  defaultSide?: 'BID' | 'ASK';
 }
 
 const USER_ID = '1';
@@ -105,23 +107,23 @@ function OrderSideForm({
 
   return (
     <form onSubmit={handleSubmit} className={`order-side-form ${isBuy ? 'buy-form' : 'sell-form'}`}>
-      {/* Price Input */}
-      {orderType !== 'MARKET' && (
-        <div className="form-group">
-          <label>Price</label>
-          <div className="input-wrapper">
-            <input
-              type="number"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              placeholder="0.00"
-              step="0.01"
-              min="0"
-            />
-            <span className="input-suffix">{market.quoteAsset}</span>
-          </div>
+      {/* Price Input — always rendered to keep form height stable */}
+      <div className={`form-group ${orderType === 'MARKET' ? 'form-group-hidden' : ''}`}>
+        <label>Price</label>
+        <div className="input-wrapper">
+          <input
+            type="number"
+            value={orderType === 'MARKET' ? '' : price}
+            onChange={(e) => setPrice(e.target.value)}
+            placeholder={orderType === 'MARKET' ? 'Market' : '0.00'}
+            step="0.01"
+            min="0"
+            disabled={orderType === 'MARKET'}
+            tabIndex={orderType === 'MARKET' ? -1 : undefined}
+          />
+          <span className="input-suffix">{market.quoteAsset}</span>
         </div>
-      )}
+      </div>
 
       {/* Amount Input */}
       <div className="form-group">
@@ -189,11 +191,35 @@ function OrderSideForm({
   );
 }
 
-export function OrderForm({ market, onSubmitOrder, loading, externalPrice }: OrderFormProps) {
+export function OrderForm({ market, onSubmitOrder, loading, externalPrice, isMobile, defaultSide }: OrderFormProps) {
   const [orderType, setOrderType] = useState<OrderType>('LIMIT');
+  const [mobileSide, setMobileSide] = useState<'BID' | 'ASK'>(defaultSide || 'BID');
+
+  // Sync mobileSide when defaultSide changes (e.g. opening from Buy/Sell button)
+  useEffect(() => {
+    if (defaultSide) setMobileSide(defaultSide);
+  }, [defaultSide]);
 
   return (
     <div className="order-form-container">
+      {/* Mobile Buy/Sell side toggle */}
+      {isMobile && (
+        <div className="mobile-side-toggle">
+          <button
+            className={`side-toggle-btn buy ${mobileSide === 'BID' ? 'active' : ''}`}
+            onClick={() => setMobileSide('BID')}
+          >
+            Buy
+          </button>
+          <button
+            className={`side-toggle-btn sell ${mobileSide === 'ASK' ? 'active' : ''}`}
+            onClick={() => setMobileSide('ASK')}
+          >
+            Sell
+          </button>
+        </div>
+      )}
+
       {/* Shared Order Type Tabs */}
       <div className="order-type-tabs">
         <button
@@ -216,8 +242,8 @@ export function OrderForm({ market, onSubmitOrder, loading, externalPrice }: Ord
         </button>
       </div>
 
-      {/* Side-by-side Buy/Sell Forms */}
-      <div className="order-forms-row">
+      {/* Side-by-side Buy/Sell Forms (desktop) or single form (mobile) */}
+      <div className={`order-forms-row ${isMobile ? `mobile-side-${mobileSide === 'BID' ? 'buy' : 'sell'}` : ''}`}>
         <OrderSideForm
           side="BID"
           market={market}

@@ -18,6 +18,7 @@ type Handlers struct {
 	status       *services.ClusterStatus
 	autoSnapshot *services.AutoSnapshot
 	logSvc       *services.LogService
+	procMgr      *services.ProcessManager
 }
 
 func New(
@@ -29,6 +30,7 @@ func New(
 	status *services.ClusterStatus,
 	autoSnapshot *services.AutoSnapshot,
 	logSvc *services.LogService,
+	procMgr *services.ProcessManager,
 ) *Handlers {
 	return &Handlers{
 		statusSvc:    statusSvc,
@@ -39,6 +41,7 @@ func New(
 		status:       status,
 		autoSnapshot: autoSnapshot,
 		logSvc:       logSvc,
+		procMgr:      procMgr,
 	}
 }
 
@@ -94,6 +97,21 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 
 	// Logs
 	r.Get("/api/admin/logs", h.handleLogs)
+
+	// Self-update (admin gateway)
+	r.Post("/api/admin/rebuild-admin", h.handleRebuildAdmin)
+
+	// Process manager
+	r.Get("/api/admin/processes", h.handleProcessList)
+	r.Get("/api/admin/processes/summary", h.handleProcessSummary)
+	r.Get("/api/admin/processes/{name}", h.handleProcessGet)
+	r.Post("/api/admin/processes/{name}/start", h.handleProcessStart)
+	r.Post("/api/admin/processes/{name}/stop", h.handleProcessStop)
+	r.Post("/api/admin/processes/{name}/restart", h.handleProcessRestart)
+	r.Post("/api/admin/processes/{name}/force-stop", h.handleProcessForceStop)
+	r.Post("/api/admin/processes/start-all", h.handleProcessStartAll)
+	r.Post("/api/admin/processes/stop-all", h.handleProcessStopAll)
+	r.Post("/api/admin/processes/restart-all", h.handleProcessRestartAll)
 
 	// Cleanup
 	r.Post("/api/admin/cleanup", h.handleCleanup)
@@ -421,6 +439,109 @@ func (h *Handlers) handleCleanup(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusBadRequest
 	}
 	jsonResponse(w, status, result)
+}
+
+// --- Process Manager Handlers ---
+
+func (h *Handlers) handleProcessList(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, http.StatusOK, h.procMgr.List())
+}
+
+func (h *Handlers) handleProcessSummary(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, http.StatusOK, h.procMgr.Summary())
+}
+
+func (h *Handlers) handleProcessGet(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	info := h.procMgr.Get(name)
+	if info == nil {
+		jsonResponse(w, http.StatusNotFound, map[string]string{"error": "unknown service: " + name})
+		return
+	}
+	jsonResponse(w, http.StatusOK, info)
+}
+
+func (h *Handlers) handleProcessStart(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if err := h.procMgr.Start(name); err != nil {
+		jsonResponse(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusAccepted, map[string]string{
+		"message": name + " start initiated",
+	})
+}
+
+func (h *Handlers) handleProcessStop(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if err := h.procMgr.Stop(name); err != nil {
+		jsonResponse(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusAccepted, map[string]string{
+		"message": name + " stop initiated",
+	})
+}
+
+func (h *Handlers) handleProcessRestart(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if err := h.procMgr.Restart(name); err != nil {
+		jsonResponse(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusAccepted, map[string]string{
+		"message": name + " restart initiated",
+	})
+}
+
+func (h *Handlers) handleProcessForceStop(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if err := h.procMgr.ForceStop(name); err != nil {
+		jsonResponse(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusAccepted, map[string]string{
+		"message": name + " force-stop initiated",
+	})
+}
+
+func (h *Handlers) handleProcessStartAll(w http.ResponseWriter, r *http.Request) {
+	go func() {
+		// Runs in background — dependency-ordered start takes time
+		h.procMgr.StartAll()
+	}()
+	jsonResponse(w, http.StatusAccepted, map[string]string{
+		"message": "Start-all initiated (dependency-ordered)",
+	})
+}
+
+func (h *Handlers) handleProcessStopAll(w http.ResponseWriter, r *http.Request) {
+	go func() {
+		h.procMgr.StopAll()
+	}()
+	jsonResponse(w, http.StatusAccepted, map[string]string{
+		"message": "Stop-all initiated (reverse dependency order)",
+	})
+}
+
+func (h *Handlers) handleProcessRestartAll(w http.ResponseWriter, r *http.Request) {
+	go func() {
+		h.procMgr.RestartAll()
+	}()
+	jsonResponse(w, http.StatusAccepted, map[string]string{
+		"message": "Restart-all initiated (stop reverse → start forward)",
+	})
+}
+
+// Self-update: rebuild admin gateway binary and restart via systemd
+func (h *Handlers) handleRebuildAdmin(w http.ResponseWriter, r *http.Request) {
+	if err := h.opsSvc.RebuildAdmin(); err != nil {
+		jsonResponse(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusAccepted, map[string]string{
+		"message": "Admin gateway self-update initiated. Service will restart momentarily.",
+	})
 }
 
 // Helpers

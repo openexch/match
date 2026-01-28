@@ -255,16 +255,18 @@
    RESPONSIVE
    ================================================================ */
 @media (max-width: 768px) {
+  .chart-component {
+    border: none;
+    border-radius: 0;
+  }
+
   .chart-toolbar {
-    padding: 5px 8px;
-    gap: 6px;
+    padding: 4px 8px;
+    gap: 4px;
   }
 
+  /* Hide chart title text on mobile, just show intervals */
   .chart-title {
-    font-size: 11px;
-  }
-
-  .chart-title span {
     display: none;
   }
 
@@ -273,24 +275,34 @@
   }
 
   .interval-btn {
-    padding: 3px 6px;
+    padding: 4px 7px;
     font-size: 10px;
+    min-height: 28px;
   }
 
   .chart-ohlcv-legend {
     font-size: 9px;
-    top: 4px;
+    top: 3px;
     left: 6px;
   }
 
   .ohlcv-label {
-    font-size: 9px;
+    font-size: 8px;
   }
 
   .chart-ma-legend {
-    font-size: 9px;
-    top: 30px;
+    font-size: 8px;
+    top: 26px;
     left: 6px;
-    gap: 8px;
+    gap: 6px;
+  }
+
+  .chart-empty svg {
+    width: 32px;
+    height: 32px;
+  }
+
+  .chart-empty span {
+    font-size: 11px;
   }
 }
