@@ -59,24 +59,6 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 	r.Post("/api/admin/stop-all-nodes", h.handleStopAllNodes)
 	r.Post("/api/admin/start-all-nodes", h.handleStartAllNodes)
 
-	// Backup operations
-	r.Post("/api/admin/stop-backup", h.handleServiceAction("backup", "stop"))
-	r.Post("/api/admin/start-backup", h.handleServiceAction("backup", "start"))
-	r.Post("/api/admin/restart-backup", h.handleServiceAction("backup", "restart"))
-
-	// Gateway operations (all gateways)
-	r.Post("/api/admin/stop-gateway", h.handleAllGateways("stop"))
-	r.Post("/api/admin/start-gateway", h.handleAllGateways("start"))
-	r.Post("/api/admin/restart-gateway", h.handleAllGateways("restart"))
-
-	// Individual gateway operations
-	r.Post("/api/admin/stop-market-gateway", h.handleServiceAction("market", "stop"))
-	r.Post("/api/admin/start-market-gateway", h.handleServiceAction("market", "start"))
-	r.Post("/api/admin/restart-market-gateway", h.handleServiceAction("market", "restart"))
-	r.Post("/api/admin/stop-order-gateway", h.handleServiceAction("order", "stop"))
-	r.Post("/api/admin/start-order-gateway", h.handleServiceAction("order", "start"))
-	r.Post("/api/admin/restart-order-gateway", h.handleServiceAction("order", "restart"))
-
 	// Complex operations
 	r.Post("/api/admin/rolling-update", h.handleRollingUpdate)
 	r.Post("/api/admin/snapshot", h.handleSnapshot)
@@ -242,48 +224,6 @@ func (h *Handlers) handleStartAllNodes(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusAccepted, map[string]string{
 		"message": "All nodes start initiated",
 	})
-}
-
-// Service action handler factory
-func (h *Handlers) handleServiceAction(service, action string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		go func() {
-			switch action {
-			case "stop":
-				h.systemd.Stop(service)
-			case "start":
-				h.systemd.Start(service)
-			case "restart":
-				h.systemd.Restart(service)
-			}
-		}()
-
-		jsonResponse(w, http.StatusAccepted, map[string]string{
-			"message": service + " " + action + " initiated",
-		})
-	}
-}
-
-// All gateways handler factory
-func (h *Handlers) handleAllGateways(action string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		go func() {
-			for _, svc := range []string{"market", "order"} {
-				switch action {
-				case "stop":
-					h.systemd.Stop(svc)
-				case "start":
-					h.systemd.Start(svc)
-				case "restart":
-					h.systemd.Restart(svc)
-				}
-			}
-		}()
-
-		jsonResponse(w, http.StatusAccepted, map[string]string{
-			"message": "All gateways " + action + " initiated",
-		})
-	}
 }
 
 // Complex operations

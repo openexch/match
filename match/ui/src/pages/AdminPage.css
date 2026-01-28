@@ -690,7 +690,7 @@
   flex-direction: column;
   gap: 12px;
   transition: all var(--transition-base);
-  height: 106px;
+  min-height: 106px;
   box-sizing: border-box;
 }
 
@@ -799,6 +799,8 @@
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 /* ── Log Filters ── */
@@ -990,6 +992,134 @@
 }
 
 /* ================================================================
+   PROCESS SUMMARY BAR
+   ================================================================ */
+.process-summary-bar {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding: 10px 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.summary-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 50px;
+}
+
+.summary-count {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+.summary-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.summary-stat.running .summary-count {
+  color: var(--accent-green);
+}
+
+.summary-stat.stopped .summary-count {
+  color: var(--text-muted);
+}
+
+.summary-stat.failed .summary-count {
+  color: var(--accent-red);
+}
+
+.summary-stat.memory .summary-count {
+  color: var(--accent-primary);
+  font-size: 14px;
+}
+
+/* ================================================================
+   ROLE BADGE
+   ================================================================ */
+.role-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  letter-spacing: 0.5px;
+  vertical-align: middle;
+}
+
+.role-badge.gateway {
+  background: rgba(0, 184, 217, 0.12);
+  color: var(--accent-primary);
+}
+
+.role-badge.infra {
+  background: rgba(147, 112, 219, 0.1);
+  color: #9370db;
+}
+
+/* ================================================================
+   PROCESS METRICS
+   ================================================================ */
+.process-metrics {
+  display: flex;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 2px 0;
+  flex-wrap: wrap;
+}
+
+.process-metrics .metric {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.process-metrics .metric-value {
+  color: var(--text-secondary);
+}
+
+/* ================================================================
+   STATUS DOT — PROCESS STATUSES
+   ================================================================ */
+.status-dot.running {
+  background: var(--accent-green);
+  box-shadow: 0 0 6px rgba(14, 203, 129, 0.4);
+}
+
+.status-dot.stopped {
+  background: var(--text-muted);
+}
+
+.status-dot.failed {
+  background: var(--accent-red);
+  box-shadow: 0 0 6px rgba(246, 70, 93, 0.4);
+  animation: pulse 0.5s ease-in-out infinite;
+}
+
+/* ================================================================
+   SELF-UPDATE BUTTON
+   ================================================================ */
+.btn-icon.self-update {
+  background: rgba(100, 149, 237, 0.08);
+  color: #6495ed;
+}
+
+.btn-icon.self-update:hover:not(:disabled) {
+  background: rgba(100, 149, 237, 0.18);
+}
+
+/* ================================================================
    SKELETON LOADING
    ================================================================ */
 .skeleton {
@@ -1014,7 +1144,7 @@
 }
 
 .skeleton-service {
-  height: 106px;
+  min-height: 106px;
 }
 
 .skeleton-status-bar {
@@ -1144,6 +1274,28 @@
     flex-wrap: wrap;
     gap: 6px;
   }
+
+  .process-metrics {
+    gap: 6px;
+  }
+
+  .service-card {
+    min-height: auto;
+  }
+
+  .process-summary-bar {
+    justify-content: space-around;
+  }
+
+  .node-popover {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: auto;
+    top: 50%;
+    transform: translateY(-50%);
+    min-width: auto;
+  }
 }
 
 @media (max-width: 600px) {
@@ -1172,5 +1324,74 @@
   .confirm-modal {
     padding: 20px;
     width: 95%;
+  }
+}
+
+@media (max-width: 480px) {
+  .admin-page {
+    padding: 0 8px 8px;
+  }
+
+  .admin-header h1 {
+    font-size: 16px;
+  }
+
+  .status-bar {
+    padding: 10px;
+    margin: 10px 0;
+  }
+
+  .admin-section {
+    padding: 12px;
+    border-radius: 8px;
+  }
+
+  .node-card {
+    padding: 10px;
+  }
+
+  .node-data {
+    font-size: 9.5px;
+  }
+
+  .service-card {
+    padding: 10px;
+    min-height: auto;
+  }
+
+  .process-metrics {
+    font-size: 9px;
+  }
+
+  .logs-container {
+    height: 150px;
+    font-size: 10px;
+  }
+
+  .confirm-actions {
+    flex-direction: column;
+  }
+
+  .confirm-btn {
+    width: 100%;
+    text-align: center;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .process-summary-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+
+  .summary-stat {
+    min-width: 40px;
+  }
+
+  .bulk-actions span {
+    display: none;
   }
 }

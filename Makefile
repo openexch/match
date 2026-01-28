@@ -10,7 +10,7 @@
 #
 # ==================================================================
 
-.PHONY: install install-deps optimize-os help install-services uninstall-services reinstall-services build build-java build-cluster build-gateway build-admin build-loadtest build-ui sbe setup-port-80 os-check processes processes-summary rebuild-admin
+.PHONY: install install-deps optimize-os help install-services uninstall-services reinstall-services build build-java build-cluster build-gateway build-admin build-loadtest build-ui sbe setup-port-80 os-check rebuild-admin processes processes-summary
 
 # ==================== CONFIGURATION ====================
 PROJECT_DIR := $(shell pwd)

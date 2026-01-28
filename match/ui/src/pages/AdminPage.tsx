@@ -50,17 +50,42 @@ interface OperationProgress {
   elapsedMs: number;
 }
 
+interface ProcessInfo {
+  name: string;
+  display: string;
+  role: 'cluster' | 'gateway' | 'infra';
+  port: number;
+  running: boolean;
+  pid: number;
+  memoryBytes: number;
+  cpuPercent: number;
+  uptimeMs: number;
+  startedAt: string;
+  restartCount: number;
+  enabled: boolean;
+  status: string;
+}
+
+interface ProcessSummary {
+  total: number;
+  running: number;
+  stopped: number;
+  failed: number;
+  totalMemoryMB: number;
+  lastPollMs: number;
+}
+
 type LogSource =
   | { type: 'node'; id: number }
-  | { type: 'service'; name: 'backup' | 'market-gateway' | 'order-gateway' | 'admin-gateway' };
+  | { type: 'service'; name: string };
 
 type ConfirmAction = {
   type: 'stop-node' | 'restart-node' | 'start-node' |
-        'stop-backup' | 'restart-backup' | 'start-backup' |
-        'stop-market-gateway' | 'restart-market-gateway' | 'start-market-gateway' |
-        'stop-order-gateway' | 'restart-order-gateway' | 'start-order-gateway' |
+        'process-action' | 'self-update' |
         'rolling-update' | 'rolling-cleanup' | 'stop-all-nodes' | 'start-all-nodes' | 'cleanup';
   nodeId?: number;
+  service?: string;
+  action?: 'start' | 'stop' | 'restart';
   title: string;
   message: string;
   confirmLabel: string;
@@ -170,6 +195,12 @@ const Icons = {
       <line x1="12" y1="8" x2="12.01" y2="8"/>
     </svg>
   ),
+  ui: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="2" y="3" width="20" height="14" rx="2"/>
+      <path d="M8 21h8M12 17v4"/>
+    </svg>
+  ),
 };
 
 function getClusterStatus(progress: OperationProgress | null, nodes: NodeStatus[]): {
@@ -228,19 +259,51 @@ function getLogSourceLabel(source: LogSource | null): string {
     case 'market-gateway': return 'Market Gateway';
     case 'order-gateway': return 'Order Gateway';
     case 'admin-gateway': return 'Admin Gateway';
+    case 'ui': return 'Trading UI';
+    default: return source.name;
   }
+}
+
+function processToLogName(name: string): string {
+  switch (name) {
+    case 'market': return 'market-gateway';
+    case 'order': return 'order-gateway';
+    case 'admin': return 'admin-gateway';
+    default: return name;
+  }
+}
+
+function getProcessIcon(name: string) {
+  switch (name) {
+    case 'backup': return Icons.backup;
+    case 'market': return Icons.market;
+    case 'order': return Icons.order;
+    case 'admin': return Icons.admin;
+    case 'ui': return Icons.ui;
+    default: return Icons.server;
+  }
+}
+
+function formatUptime(ms: number): string {
+  if (ms <= 0) return '--';
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  if (days > 0) return `${days}d ${hours % 24}h`;
+  if (hours > 0) return `${hours}h ${minutes % 60}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${seconds}s`;
 }
 
 export function AdminPage() {
   const [status, setStatus] = useState<ClusterStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<OperationProgress | null>(null);
-  const [serviceOps, setServiceOps] = useState<{
-    backup: boolean;
-    marketGateway: boolean;
-    orderGateway: boolean;
-    snapshot: boolean;
-  }>({backup: false, marketGateway: false, orderGateway: false, snapshot: false});
+  const [processes, setProcesses] = useState<ProcessInfo[]>([]);
+  const [processSummary, setProcessSummary] = useState<ProcessSummary | null>(null);
+  const [operatingServices, setOperatingServices] = useState<Set<string>>(new Set());
+  const [snapshotOp, setSnapshotOp] = useState(false);
   const [logSource, setLogSource] = useState<LogSource | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [logFilters, setLogFilters] = useState({ error: true, warn: true, info: true, debug: true });
@@ -300,6 +363,23 @@ export function AdminPage() {
     }
   }, [logSource]);
 
+  const fetchProcesses = useCallback(async () => {
+    try {
+      const [listRes, summaryRes] = await Promise.all([
+        fetch('/api/admin/processes'),
+        fetch('/api/admin/processes/summary'),
+      ]);
+      if (listRes.ok) {
+        setProcesses(await listRes.json());
+      }
+      if (summaryRes.ok) {
+        setProcessSummary(await summaryRes.json());
+      }
+    } catch {
+      // Ignore
+    }
+  }, []);
+
   useEffect(() => {
     if (progress?.operation && !progress.complete) {
       // Fast polling (50ms) during active operations for accurate progress display
@@ -329,6 +409,12 @@ export function AdminPage() {
   }, [fetchStatus, fetchProgress]);
 
   useEffect(() => {
+    fetchProcesses();
+    const interval = setInterval(fetchProcesses, 5000);
+    return () => clearInterval(interval);
+  }, [fetchProcesses]);
+
+  useEffect(() => {
     if (logSource) {
       fetchLogs();
       const interval = setInterval(fetchLogs, 2000);
@@ -342,6 +428,8 @@ export function AdminPage() {
       logsRef.current.scrollTop = logsRef.current.scrollHeight;
     }
   }, [logs]);
+
+  // ── Node action handlers (unchanged — still use /api/admin/status for transitional state) ──
 
   const requestStopNode = (nodeId: number) => {
     if (progress?.operation && !progress.complete) return;
@@ -424,151 +512,119 @@ export function AdminPage() {
     }
   };
 
-  const requestStopBackup = () => {
-    if (serviceOps.backup || (progress?.operation && !progress.complete)) return;
+  // ── Generic process action handler (replaces all per-service handlers) ──
+
+  const requestProcessAction = (service: string, action: 'start' | 'stop' | 'restart') => {
+    if (operatingServices.has(service) || (progress?.operation && !progress.complete)) return;
+
+    const displayName = processes.find(p => p.name === service)?.display || service;
+    const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
+
+    const descriptions: Record<string, Record<string, string>> = {
+      stop: {
+        backup: 'This will stop the backup node. Cluster snapshots will not be available until restarted.',
+        market: 'This will stop the market data WebSocket. Clients will lose real-time market updates.',
+        order: 'This will stop the order API. Order submission will be unavailable.',
+        admin: 'This will stop the admin gateway. You will lose access to this dashboard.',
+        ui: 'This will stop the trading UI. Users will not be able to access the web interface.',
+      },
+      start: {
+        backup: 'This will start the backup node to enable cluster state backups.',
+        market: 'This will start the market data WebSocket for real-time updates.',
+        order: 'This will start the order API for order submission.',
+        admin: 'This will start the admin gateway.',
+        ui: 'This will start the trading UI web interface.',
+      },
+      restart: {
+        backup: 'This will restart the backup node. Backup service will be temporarily unavailable.',
+        market: 'This will restart the market gateway. Clients will be temporarily disconnected.',
+        order: 'This will restart the order gateway. Order submission will be temporarily unavailable.',
+        admin: 'This will restart the admin gateway. You will temporarily lose access to this dashboard.',
+        ui: 'This will restart the trading UI. Users will experience a brief interruption.',
+      },
+    };
+
+    const styles: Record<string, 'danger' | 'warning' | 'primary'> = {
+      stop: 'danger', start: 'primary', restart: 'warning',
+    };
+
     setPendingAction({
-      type: 'stop-backup',
-      title: 'Stop Backup Node?',
-      message: 'This will stop the backup node. Cluster snapshots will not be available until restarted.',
-      confirmLabel: 'Stop Backup',
-      confirmStyle: 'danger',
+      type: 'process-action',
+      service,
+      action,
+      title: `${actionLabel} ${displayName}?`,
+      message: descriptions[action]?.[service] || `This will ${action} the ${displayName} service.`,
+      confirmLabel: actionLabel,
+      confirmStyle: styles[action],
     });
   };
 
-  const requestStartBackup = () => {
-    if (serviceOps.backup || (progress?.operation && !progress.complete)) return;
-    setPendingAction({
-      type: 'start-backup',
-      title: 'Start Backup Node?',
-      message: 'This will start the backup node to enable cluster state backups.',
-      confirmLabel: 'Start Backup',
-      confirmStyle: 'primary',
-    });
+  const executeProcessAction = async (service: string, action: string) => {
+    setOperatingServices(prev => new Set(prev).add(service));
+    try {
+      await fetch(`/api/admin/processes/${service}/${action}`, { method: 'POST' });
+      const timeout = action === 'restart' ? 8000 : 3000;
+      setTimeout(() => {
+        setOperatingServices(prev => {
+          const next = new Set(prev);
+          next.delete(service);
+          return next;
+        });
+        fetchProcesses();
+      }, timeout);
+    } catch {
+      setError(`Failed to ${action} ${service}`);
+      setOperatingServices(prev => {
+        const next = new Set(prev);
+        next.delete(service);
+        return next;
+      });
+    }
   };
 
-  const requestRestartBackup = () => {
-    if (serviceOps.backup || (progress?.operation && !progress.complete)) return;
+  // ── Self-update (admin gateway rebuild) ──
+
+  const requestSelfUpdate = () => {
+    if (operatingServices.has('admin') || (progress?.operation && !progress.complete)) return;
     setPendingAction({
-      type: 'restart-backup',
-      title: 'Restart Backup Node?',
-      message: 'This will restart the backup node. Backup service will be temporarily unavailable.',
-      confirmLabel: 'Restart Backup',
+      type: 'self-update',
+      title: 'Self-Update Admin Gateway?',
+      message: 'This will rebuild the admin gateway from source and restart it. You will temporarily lose access to this dashboard.',
+      confirmLabel: 'Self-Update',
       confirmStyle: 'warning',
     });
   };
 
-  const executeBackupAction = async (action: string) => {
-    setServiceOps(prev => ({...prev, backup: true}));
+  const executeSelfUpdate = async () => {
+    setOperatingServices(prev => new Set(prev).add('admin'));
     try {
-      await fetch(`/api/admin/${action}`, { method: 'POST' });
-      setTimeout(() => { setServiceOps(prev => ({...prev, backup: false})); fetchStatus(); }, action === 'restart-backup' ? 5000 : 3000);
+      await fetch('/api/admin/rebuild-admin', { method: 'POST' });
+      // Admin will restart automatically — connection will drop
     } catch {
-      setError(`Failed to ${action.replace('-', ' ')}`);
-      setServiceOps(prev => ({...prev, backup: false}));
+      setError('Failed to trigger self-update');
+      setOperatingServices(prev => {
+        const next = new Set(prev);
+        next.delete('admin');
+        return next;
+      });
     }
   };
+
+  // ── Snapshot ──
 
   const takeSnapshot = async () => {
-    if (serviceOps.snapshot || (progress?.operation && !progress.complete)) return;
-    setServiceOps(prev => ({...prev, snapshot: true}));
+    if (snapshotOp || (progress?.operation && !progress.complete)) return;
+    setSnapshotOp(true);
     try {
       await fetch('/api/admin/snapshot', { method: 'POST' });
-      setTimeout(() => { setServiceOps(prev => ({...prev, snapshot: false})); }, 5000);
+      setTimeout(() => { setSnapshotOp(false); }, 5000);
     } catch {
       setError('Failed to take snapshot');
-      setServiceOps(prev => ({...prev, snapshot: false}));
+      setSnapshotOp(false);
     }
   };
 
-  const requestStopMarketGateway = () => {
-    if (serviceOps.marketGateway || (progress?.operation && !progress.complete)) return;
-    setPendingAction({
-      type: 'stop-market-gateway',
-      title: 'Stop Market Gateway?',
-      message: 'This will stop the market data WebSocket. Clients will lose real-time market updates.',
-      confirmLabel: 'Stop Gateway',
-      confirmStyle: 'danger',
-    });
-  };
-
-  const requestStartMarketGateway = () => {
-    if (serviceOps.marketGateway || (progress?.operation && !progress.complete)) return;
-    setPendingAction({
-      type: 'start-market-gateway',
-      title: 'Start Market Gateway?',
-      message: 'This will start the market data WebSocket for real-time updates.',
-      confirmLabel: 'Start Gateway',
-      confirmStyle: 'primary',
-    });
-  };
-
-  const requestRestartMarketGateway = () => {
-    if (serviceOps.marketGateway || (progress?.operation && !progress.complete)) return;
-    setPendingAction({
-      type: 'restart-market-gateway',
-      title: 'Restart Market Gateway?',
-      message: 'This will restart the market gateway. Clients will be temporarily disconnected.',
-      confirmLabel: 'Restart Gateway',
-      confirmStyle: 'warning',
-    });
-  };
-
-  const executeMarketGatewayAction = async (action: string) => {
-    setServiceOps(prev => ({...prev, marketGateway: true}));
-    try {
-      await fetch(`/api/admin/${action}`, { method: 'POST' });
-      const timeout = action.includes('stop') ? 3000 : action.includes('restart') ? 10000 : 8000;
-      setTimeout(() => { setServiceOps(prev => ({...prev, marketGateway: false})); fetchStatus(); }, timeout);
-    } catch {
-      setError(`Failed to ${action.replace(/-/g, ' ')}`);
-      setServiceOps(prev => ({...prev, marketGateway: false}));
-    }
-  };
-
-  const requestStopOrderGateway = () => {
-    if (serviceOps.orderGateway || (progress?.operation && !progress.complete)) return;
-    setPendingAction({
-      type: 'stop-order-gateway',
-      title: 'Stop Order Gateway?',
-      message: 'This will stop the order API. Order submission will be unavailable.',
-      confirmLabel: 'Stop Gateway',
-      confirmStyle: 'danger',
-    });
-  };
-
-  const requestStartOrderGateway = () => {
-    if (serviceOps.orderGateway || (progress?.operation && !progress.complete)) return;
-    setPendingAction({
-      type: 'start-order-gateway',
-      title: 'Start Order Gateway?',
-      message: 'This will start the order API for order submission.',
-      confirmLabel: 'Start Gateway',
-      confirmStyle: 'primary',
-    });
-  };
-
-  const requestRestartOrderGateway = () => {
-    if (serviceOps.orderGateway || (progress?.operation && !progress.complete)) return;
-    setPendingAction({
-      type: 'restart-order-gateway',
-      title: 'Restart Order Gateway?',
-      message: 'This will restart the order gateway. Order submission will be temporarily unavailable.',
-      confirmLabel: 'Restart Gateway',
-      confirmStyle: 'warning',
-    });
-  };
-
-  const executeOrderGatewayAction = async (action: string) => {
-    setServiceOps(prev => ({...prev, orderGateway: true}));
-    try {
-      await fetch(`/api/admin/${action}`, { method: 'POST' });
-      const timeout = action.includes('stop') ? 3000 : action.includes('restart') ? 10000 : 8000;
-      setTimeout(() => { setServiceOps(prev => ({...prev, orderGateway: false})); fetchStatus(); }, timeout);
-    } catch {
-      setError(`Failed to ${action.replace(/-/g, ' ')}`);
-      setServiceOps(prev => ({...prev, orderGateway: false}));
-    }
-  };
+  // ── Rolling operations ──
 
   const requestRollingUpdate = () => {
     if (progress?.operation && !progress.complete) return;
@@ -644,6 +700,8 @@ export function AdminPage() {
     }
   };
 
+  // ── Confirm action dispatch ──
+
   const confirmAction = async () => {
     if (!pendingAction) return;
     const action = pendingAction;
@@ -657,20 +715,13 @@ export function AdminPage() {
           await executeNodeAction(action.type, action.nodeId);
         }
         break;
-      case 'stop-backup':
-      case 'restart-backup':
-      case 'start-backup':
-        await executeBackupAction(action.type);
+      case 'process-action':
+        if (action.service && action.action) {
+          await executeProcessAction(action.service, action.action);
+        }
         break;
-      case 'stop-market-gateway':
-      case 'restart-market-gateway':
-      case 'start-market-gateway':
-        await executeMarketGatewayAction(action.type);
-        break;
-      case 'stop-order-gateway':
-      case 'restart-order-gateway':
-      case 'start-order-gateway':
-        await executeOrderGatewayAction(action.type);
+      case 'self-update':
+        await executeSelfUpdate();
         break;
       case 'rolling-update':
         await executeRollingUpdate();
@@ -689,6 +740,8 @@ export function AdminPage() {
         break;
     }
   };
+
+  // ── Formatters ──
 
   const formatBytes = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -740,9 +793,12 @@ export function AdminPage() {
     setLogFilters(prev => ({ ...prev, [filter]: !prev[filter] }));
   };
 
+  // ── Derived state ──
+
   const clusterStatus = getClusterStatus(progress, status?.nodes || []);
   const isOperationRunning = !!(progress?.operation && !progress.complete);
   const operationProgress = isOperationRunning ? (progress?.progress || 0) : 0;
+  const serviceProcesses = processes.filter(p => p.role !== 'cluster');
 
   return (
     <div className="admin-page">
@@ -854,6 +910,7 @@ export function AdminPage() {
               const isTransitioning = ['STOPPING', 'STARTING', 'REJOINING', 'ELECTION'].includes(nodeState);
               const stateClass = nodeState.toLowerCase();
               const logSelected = isLogSelected({ type: 'node', id: node.id });
+              const nodeProc = processes.find(p => p.name === `node${node.id}`);
 
               return (
                 <div key={node.id} className={`node-card ${stateClass}`}>
@@ -917,6 +974,16 @@ export function AdminPage() {
                         </div>
                       </span>
                     </div>
+                    {nodeProc && nodeProc.running && (
+                      <div className="node-data-row">
+                        <span className="data-label">Mem:</span>
+                        <span className="data-value">{formatBytes(nodeProc.memoryBytes)}</span>
+                        <span className="data-label">CPU:</span>
+                        <span className="data-value">{nodeProc.cpuPercent.toFixed(1)}%</span>
+                        <span className="data-label">Up:</span>
+                        <span className="data-value">{formatUptime(nodeProc.uptimeMs)}</span>
+                      </div>
+                    )}
                   </div>
                   <div className="node-actions">
                     {node.running && !isTransitioning ? (
@@ -947,14 +1014,40 @@ export function AdminPage() {
           </div>
         </section>
 
-        {/* Services */}
+        {/* Services — powered by Process Manager */}
         <section className="admin-section">
           <div className="section-header">
             {Icons.server}
             <h2>Services</h2>
           </div>
+          {processSummary && (
+            <div className="process-summary-bar">
+              <div className="summary-stat running">
+                <span className="summary-count">{processSummary.running}</span>
+                <span className="summary-label">Running</span>
+              </div>
+              <div className="summary-stat stopped">
+                <span className="summary-count">{processSummary.stopped}</span>
+                <span className="summary-label">Stopped</span>
+              </div>
+              {processSummary.failed > 0 && (
+                <div className="summary-stat failed">
+                  <span className="summary-count">{processSummary.failed}</span>
+                  <span className="summary-label">Failed</span>
+                </div>
+              )}
+              <div className="summary-stat memory">
+                <span className="summary-count">
+                  {processSummary.totalMemoryMB > 1024
+                    ? `${(processSummary.totalMemoryMB / 1024).toFixed(1)} GB`
+                    : `${Math.round(processSummary.totalMemoryMB)} MB`}
+                </span>
+                <span className="summary-label">Total Memory</span>
+              </div>
+            </div>
+          )}
           <div className="services-grid">
-            {!status ? (
+            {processes.length === 0 ? (
               <>
                 <div className="service-card skeleton skeleton-service" />
                 <div className="service-card skeleton skeleton-service" />
@@ -962,130 +1055,77 @@ export function AdminPage() {
                 <div className="service-card skeleton skeleton-service" />
               </>
             ) : (
-              <>
-            {/* Backup */}
-            <div className={`service-card ${serviceOps.backup || serviceOps.snapshot ? 'operating' : ''}`}>
-              <div className="service-main">
-                <div className="service-icon">{Icons.backup}</div>
-                <div className="service-info">
-                  <span className="service-name">Backup Node</span>
-                  <span className="service-status">
-                    {serviceOps.backup ? 'Processing...' : status?.backup.running ? 'Running' : 'Stopped'}
-                  </span>
-                </div>
-                <span className={`status-dot ${serviceOps.backup ? 'pulsing' : ''} ${status?.backup.running ? 'online' : 'offline'}`} />
-              </div>
-              <div className="service-actions">
-                {!serviceOps.backup && status?.backup.running ? (
-                  <>
-                    <button className="btn-icon stop" onClick={requestStopBackup} disabled={isOperationRunning} title="Stop">{Icons.stop}</button>
-                    <button className="btn-icon restart" onClick={requestRestartBackup} disabled={isOperationRunning} title="Restart">{Icons.restart}</button>
-                    <button
-                      className={`btn-icon snapshot ${serviceOps.snapshot ? 'active' : ''}`}
-                      onClick={takeSnapshot}
-                      disabled={serviceOps.snapshot || isOperationRunning}
-                      title="Take Snapshot"
-                    >
-                      {Icons.snapshot}
-                    </button>
-                  </>
-                ) : !serviceOps.backup ? (
-                  <button className="btn-icon start" onClick={requestStartBackup} disabled={isOperationRunning} title="Start">{Icons.play}</button>
-                ) : null}
-                <button
-                  className={`btn-icon logs ${isLogSelected({ type: 'service', name: 'backup' }) ? 'active' : ''}`}
-                  onClick={() => setLogSource({ type: 'service', name: 'backup' })}
-                  title="View Logs"
-                >
-                  {Icons.logs}
-                </button>
-              </div>
-            </div>
+              serviceProcesses.map((proc) => {
+                const isOperating = operatingServices.has(proc.name);
+                const logName = processToLogName(proc.name);
+                const logSelected = isLogSelected({ type: 'service', name: logName });
 
-            {/* Market Gateway */}
-            <div className={`service-card ${serviceOps.marketGateway ? 'operating' : ''}`}>
-              <div className="service-main">
-                <div className="service-icon">{Icons.market}</div>
-                <div className="service-info">
-                  <span className="service-name">Market Gateway</span>
-                  <span className="service-status">
-                    {serviceOps.marketGateway ? 'Processing...' : status?.gateways?.market?.running ? `WebSocket :${status.gateways.market.port}` : 'Stopped'}
-                  </span>
-                </div>
-                <span className={`status-dot ${serviceOps.marketGateway ? 'pulsing' : ''} ${status?.gateways?.market?.running ? 'online' : 'offline'}`} />
-              </div>
-              <div className="service-actions">
-                {!serviceOps.marketGateway && status?.gateways?.market?.running ? (
-                  <>
-                    <button className="btn-icon stop" onClick={requestStopMarketGateway} disabled={isOperationRunning} title="Stop">{Icons.stop}</button>
-                    <button className="btn-icon restart" onClick={requestRestartMarketGateway} disabled={isOperationRunning} title="Restart">{Icons.restart}</button>
-                  </>
-                ) : !serviceOps.marketGateway ? (
-                  <button className="btn-icon start" onClick={requestStartMarketGateway} disabled={isOperationRunning} title="Start">{Icons.play}</button>
-                ) : null}
-                <button
-                  className={`btn-icon logs ${isLogSelected({ type: 'service', name: 'market-gateway' }) ? 'active' : ''}`}
-                  onClick={() => setLogSource({ type: 'service', name: 'market-gateway' })}
-                  title="View Logs"
-                >
-                  {Icons.logs}
-                </button>
-              </div>
-            </div>
-
-            {/* Order Gateway */}
-            <div className={`service-card ${serviceOps.orderGateway ? 'operating' : ''}`}>
-              <div className="service-main">
-                <div className="service-icon">{Icons.order}</div>
-                <div className="service-info">
-                  <span className="service-name">Order Gateway</span>
-                  <span className="service-status">
-                    {serviceOps.orderGateway ? 'Processing...' : status?.gateways?.order?.running ? `HTTP :${status.gateways.order.port}` : 'Stopped'}
-                  </span>
-                </div>
-                <span className={`status-dot ${serviceOps.orderGateway ? 'pulsing' : ''} ${status?.gateways?.order?.running ? 'online' : 'offline'}`} />
-              </div>
-              <div className="service-actions">
-                {!serviceOps.orderGateway && status?.gateways?.order?.running ? (
-                  <>
-                    <button className="btn-icon stop" onClick={requestStopOrderGateway} disabled={isOperationRunning} title="Stop">{Icons.stop}</button>
-                    <button className="btn-icon restart" onClick={requestRestartOrderGateway} disabled={isOperationRunning} title="Restart">{Icons.restart}</button>
-                  </>
-                ) : !serviceOps.orderGateway ? (
-                  <button className="btn-icon start" onClick={requestStartOrderGateway} disabled={isOperationRunning} title="Start">{Icons.play}</button>
-                ) : null}
-                <button
-                  className={`btn-icon logs ${isLogSelected({ type: 'service', name: 'order-gateway' }) ? 'active' : ''}`}
-                  onClick={() => setLogSource({ type: 'service', name: 'order-gateway' })}
-                  title="View Logs"
-                >
-                  {Icons.logs}
-                </button>
-              </div>
-            </div>
-
-            {/* Admin Gateway */}
-            <div className="service-card admin-self">
-              <div className="service-main">
-                <div className="service-icon">{Icons.admin}</div>
-                <div className="service-info">
-                  <span className="service-name">Admin Gateway</span>
-                  <span className="service-status">HTTP :8082</span>
-                </div>
-                <span className="status-dot online" />
-              </div>
-              <div className="service-actions">
-                <span className="self-label">Current</span>
-                <button
-                  className={`btn-icon logs ${isLogSelected({ type: 'service', name: 'admin-gateway' }) ? 'active' : ''}`}
-                  onClick={() => setLogSource({ type: 'service', name: 'admin-gateway' })}
-                  title="View Logs"
-                >
-                  {Icons.logs}
-                </button>
-              </div>
-            </div>
-              </>
+                return (
+                  <div key={proc.name} className={`service-card ${isOperating ? 'operating' : ''}`}>
+                    <div className="service-main">
+                      <div className="service-icon">{getProcessIcon(proc.name)}</div>
+                      <div className="service-info">
+                        <span className="service-name">
+                          {proc.display}
+                          {' '}
+                          <span className={`role-badge ${proc.role}`}>{proc.role}</span>
+                        </span>
+                        <span className="service-status">
+                          {isOperating
+                            ? 'Processing...'
+                            : `${proc.status}${proc.running && proc.port > 0 ? ` :${proc.port}` : ''}`}
+                        </span>
+                      </div>
+                      <span className={`status-dot ${isOperating ? 'pulsing' : ''} ${proc.status}`} />
+                    </div>
+                    {proc.running && (
+                      <div className="process-metrics">
+                        <span className="metric">PID <span className="metric-value">{proc.pid}</span></span>
+                        <span className="metric">Mem <span className="metric-value">{formatBytes(proc.memoryBytes)}</span></span>
+                        <span className="metric">CPU <span className="metric-value">{proc.cpuPercent.toFixed(1)}%</span></span>
+                        <span className="metric">Up <span className="metric-value">{formatUptime(proc.uptimeMs)}</span></span>
+                      </div>
+                    )}
+                    <div className="service-actions">
+                      {!isOperating && proc.running ? (
+                        <>
+                          <button className="btn-icon stop" onClick={() => requestProcessAction(proc.name, 'stop')} disabled={isOperationRunning} title="Stop">{Icons.stop}</button>
+                          <button className="btn-icon restart" onClick={() => requestProcessAction(proc.name, 'restart')} disabled={isOperationRunning} title="Restart">{Icons.restart}</button>
+                          {proc.name === 'backup' && (
+                            <button
+                              className={`btn-icon snapshot ${snapshotOp ? 'active' : ''}`}
+                              onClick={takeSnapshot}
+                              disabled={snapshotOp || isOperationRunning}
+                              title="Take Snapshot"
+                            >
+                              {Icons.snapshot}
+                            </button>
+                          )}
+                          {proc.name === 'admin' && (
+                            <button
+                              className="btn-icon self-update"
+                              onClick={requestSelfUpdate}
+                              disabled={isOperationRunning}
+                              title="Self-Update"
+                            >
+                              {Icons.update}
+                            </button>
+                          )}
+                        </>
+                      ) : !isOperating ? (
+                        <button className="btn-icon start" onClick={() => requestProcessAction(proc.name, 'start')} disabled={isOperationRunning} title="Start">{Icons.play}</button>
+                      ) : null}
+                      <button
+                        className={`btn-icon logs ${logSelected ? 'active' : ''}`}
+                        onClick={() => setLogSource({ type: 'service', name: logName })}
+                        title="View Logs"
+                      >
+                        {Icons.logs}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
         </section>
