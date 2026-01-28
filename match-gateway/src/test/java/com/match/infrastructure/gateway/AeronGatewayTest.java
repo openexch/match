@@ -26,23 +26,22 @@ public class AeronGatewayTest {
     }
 
     @Test
-    public void testGetBuffer_NotNull() {
+    public void testSubmitOrder_EnqueuesSuccessfully() {
         AeronGateway gateway = new AeronGateway();
-        assertNotNull(gateway.getBuffer());
+        org.agrona.concurrent.UnsafeBuffer buf = new org.agrona.concurrent.UnsafeBuffer(new byte[64]);
+        // submitOrder should enqueue even without cluster connection
+        boolean result = gateway.submitOrder(buf, 0, 50);
+        assertTrue(result);
         gateway.close();
     }
 
     @Test
-    public void testGetHeaderEncoder_NotNull() {
+    public void testSubmitOrder_RejectsTooLargeMessage() {
         AeronGateway gateway = new AeronGateway();
-        assertNotNull(gateway.getHeaderEncoder());
-        gateway.close();
-    }
-
-    @Test
-    public void testGetCreateOrderEncoder_NotNull() {
-        AeronGateway gateway = new AeronGateway();
-        assertNotNull(gateway.getCreateOrderEncoder());
+        org.agrona.concurrent.UnsafeBuffer buf = new org.agrona.concurrent.UnsafeBuffer(new byte[256]);
+        // Messages larger than ORDER_MSG_BUFFER_SIZE (128) should be rejected
+        boolean result = gateway.submitOrder(buf, 0, 200);
+        assertFalse(result);
         gateway.close();
     }
 

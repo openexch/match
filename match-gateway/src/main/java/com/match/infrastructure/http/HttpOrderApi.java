@@ -3,10 +3,12 @@ package com.match.infrastructure.http;
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import com.match.infrastructure.gateway.AeronGateway;
+import com.match.infrastructure.generated.CreateOrderEncoder;
 import com.match.infrastructure.generated.MessageHeaderEncoder;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import org.agrona.concurrent.UnsafeBuffer;
 
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -16,11 +18,27 @@ import java.nio.charset.StandardCharsets;
 /**
  * HTTP handler for order submission.
  * Handles POST /order endpoint for submitting orders to the cluster.
+ *
+ * Thread-safe: each HTTP thread uses thread-local encoders and submits
+ * via the gateway's MPSC queue (no shared mutable state).
  */
 public class HttpOrderApi implements HttpHandler {
 
     private static final Gson gson = new Gson();
     private final AeronGateway gateway;
+
+    /**
+     * Thread-local encoder context for safe concurrent order encoding.
+     * Each HTTP thread gets its own buffer + encoders to avoid shared mutable state.
+     */
+    private static final ThreadLocal<EncoderContext> encoderContext =
+        ThreadLocal.withInitial(EncoderContext::new);
+
+    private static class EncoderContext {
+        final UnsafeBuffer buffer = new UnsafeBuffer(new byte[128]);
+        final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
+        final CreateOrderEncoder createOrderEncoder = new CreateOrderEncoder();
+    }
 
     public HttpOrderApi(AeronGateway gateway) {
         this.gateway = gateway;
@@ -68,7 +86,7 @@ public class HttpOrderApi implements HttpHandler {
                 responseText = "Error: Malformed JSON.";
                 statusCode = 400;
             } catch (IllegalStateException e) {
-                // Transient cluster disconnects (leader transition, reconnecting)
+                // Transient cluster disconnects (leader transition, reconnecting, queue full)
                 responseText = "Error: " + e.getMessage();
                 statusCode = 503;
             } catch (Exception e) {
@@ -97,22 +115,22 @@ public class HttpOrderApi implements HttpHandler {
     }
 
     private void sendOrder(Order order) {
-        var buffer = gateway.getBuffer();
-        var headerEncoder = gateway.getHeaderEncoder();
-        var createOrderEncoder = gateway.getCreateOrderEncoder();
-
-        createOrderEncoder.wrapAndApplyHeader(buffer, 0, headerEncoder);
+        var ctx = encoderContext.get();
+        ctx.createOrderEncoder.wrapAndApplyHeader(ctx.buffer, 0, ctx.headerEncoder);
 
         // Use primitive types for zero-allocation encoding
-        createOrderEncoder.userId(order.getUserIdAsLong());
-        createOrderEncoder.price(order.getPriceAsLong());
-        createOrderEncoder.quantity(order.getQuantityAsLong());
-        createOrderEncoder.totalPrice(order.getTotalPriceAsLong());
-        createOrderEncoder.marketId(order.getMarketId());
-        createOrderEncoder.orderType(order.toOrderType());
-        createOrderEncoder.orderSide(order.toOrderSide());
+        ctx.createOrderEncoder.userId(order.getUserIdAsLong());
+        ctx.createOrderEncoder.price(order.getPriceAsLong());
+        ctx.createOrderEncoder.quantity(order.getQuantityAsLong());
+        ctx.createOrderEncoder.totalPrice(order.getTotalPriceAsLong());
+        ctx.createOrderEncoder.marketId(order.getMarketId());
+        ctx.createOrderEncoder.orderType(order.toOrderType());
+        ctx.createOrderEncoder.orderSide(order.toOrderSide());
 
-        final int length = MessageHeaderEncoder.ENCODED_LENGTH + createOrderEncoder.encodedLength();
-        gateway.offer(buffer, 0, length);
+        final int length = MessageHeaderEncoder.ENCODED_LENGTH + ctx.createOrderEncoder.encodedLength();
+
+        if (!gateway.submitOrder(ctx.buffer, 0, length)) {
+            throw new IllegalStateException("Order queue is full, try again");
+        }
     }
 }
