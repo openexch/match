@@ -76,6 +76,57 @@ public class DirectIndexOrderBookTest {
         assertTrue(bidBook.isEmpty());
     }
 
+    @Test
+    public void testReduceQuantityBeyondAvailable_NoPhantomQuantity() {
+        // Regression test: reducing by MORE than available should not create phantom quantity
+        long price = FixedPoint.fromDouble(100.0);
+        long qty = FixedPoint.fromDouble(10.0);
+        long overReduce = FixedPoint.fromDouble(15.0); // 50% more than available
+
+        bidBook.addOrder(1L, 100L, price, qty);
+        int priceIdx = (int)((price - bidBook.getBasePrice()) / bidBook.getTickSize());
+
+        // Reduce by more than available
+        bidBook.reduceOrderQuantity(1L, overReduce);
+
+        // Book should be empty — no phantom quantity
+        assertTrue(bidBook.isEmpty());
+        assertEquals(0, bidBook.getOrderCount(priceIdx));
+        assertEquals(0, bidBook.getTotalQuantity(priceIdx));
+    }
+
+    @Test
+    public void testReduceQuantityMultipleOrders_LevelTotalConsistent() {
+        // Test that level total stays consistent after multiple partial fills + full fill
+        long price = FixedPoint.fromDouble(100.0);
+        long qty1 = FixedPoint.fromDouble(10.0);
+        long qty2 = FixedPoint.fromDouble(20.0);
+
+        bidBook.addOrder(1L, 100L, price, qty1);
+        bidBook.addOrder(2L, 200L, price, qty2);
+
+        int priceIdx = (int)((price - bidBook.getBasePrice()) / bidBook.getTickSize());
+
+        // Verify initial total
+        assertEquals(FixedPoint.fromDouble(30.0), bidBook.getTotalQuantity(priceIdx));
+        assertEquals(2, bidBook.getOrderCount(priceIdx));
+
+        // Partial fill order 1
+        bidBook.reduceOrderQuantity(1L, FixedPoint.fromDouble(5.0));
+        assertEquals(FixedPoint.fromDouble(25.0), bidBook.getTotalQuantity(priceIdx));
+
+        // Full fill order 1
+        bidBook.reduceOrderQuantity(1L, FixedPoint.fromDouble(5.0));
+        assertEquals(FixedPoint.fromDouble(20.0), bidBook.getTotalQuantity(priceIdx));
+        assertEquals(1, bidBook.getOrderCount(priceIdx));
+
+        // Full fill order 2
+        bidBook.reduceOrderQuantity(2L, FixedPoint.fromDouble(20.0));
+        assertEquals(0, bidBook.getTotalQuantity(priceIdx));
+        assertEquals(0, bidBook.getOrderCount(priceIdx));
+        assertTrue(bidBook.isEmpty());
+    }
+
     // ==================== C2: Bounds Safety ====================
 
     @Test
