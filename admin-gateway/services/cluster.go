@@ -74,6 +74,45 @@ func (c *Cluster) TakeSnapshot(leaderNode int) (string, error) {
 }
 
 // GetLogPosition extracts the highest log position from recording-log output
+// GetLogAndSnapshotPositions returns both log position and snapshot position
+// with a single JVM invocation (recording-log command).
+func (c *Cluster) GetLogAndSnapshotPositions(nodeId int) (logPos int64, snapPos int64) {
+	output, err := c.clusterTool(nodeId, "recording-log")
+	if err != nil {
+		return -1, -1
+	}
+
+	// Parse max log position across all entries
+	logPos = -1
+	reLog := regexp.MustCompile(`logPosition=(\d+)`)
+	matches := reLog.FindAllStringSubmatch(output, -1)
+	for _, match := range matches {
+		if len(match) > 1 {
+			pos, _ := strconv.ParseInt(match[1], 10, 64)
+			if pos > logPos {
+				logPos = pos
+			}
+		}
+	}
+
+	// Parse snapshot position from SNAPSHOT entries
+	snapPos = -1
+	entries := strings.Split(output, "Entry{")
+	for _, entry := range entries {
+		if strings.Contains(entry, "type=SNAPSHOT") {
+			snapMatches := reLog.FindStringSubmatch(entry)
+			if len(snapMatches) > 1 {
+				pos, _ := strconv.ParseInt(snapMatches[1], 10, 64)
+				if pos > snapPos {
+					snapPos = pos
+				}
+			}
+		}
+	}
+
+	return logPos, snapPos
+}
+
 func (c *Cluster) GetLogPosition(nodeId int) int64 {
 	output, err := c.clusterTool(nodeId, "recording-log")
 	if err != nil {

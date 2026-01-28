@@ -175,12 +175,20 @@ func (s *StatusService) fetchStatus() map[string]interface{} {
 			node["role"] = "OFFLINE"
 		}
 
-		// Archive info (also somewhat expensive)
+		// Archive and log info
 		if archiveSize := s.cluster.GetArchiveSize(i); archiveSize >= 0 {
 			node["archiveBytes"] = archiveSize
 		}
 		if diskSize := s.cluster.GetArchiveDiskUsage(i); diskSize >= 0 {
 			node["archiveDiskBytes"] = diskSize
+		}
+		// Get log and snapshot positions in one call (avoids double JVM spawn)
+		logPos, snapPos := s.cluster.GetLogAndSnapshotPositions(i)
+		if logPos >= 0 {
+			node["logPosition"] = logPos
+		}
+		if snapPos >= 0 {
+			node["snapshotPosition"] = snapPos
 		}
 
 		nodes[i] = node
