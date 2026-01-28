@@ -261,13 +261,15 @@ body {
 
 @media (max-width: 768px) {
   .app {
-    padding: 0 12px;
+    padding: 0 10px;
+    height: auto;
+    min-height: 100vh;
   }
 
   .app-header {
     flex-direction: column;
-    gap: 12px;
-    padding: 16px 0;
+    gap: 8px;
+    padding: 12px 0;
   }
 
   .header-left {
@@ -280,25 +282,72 @@ body {
     justify-content: flex-end;
   }
 
+  .logo-icon svg {
+    width: 26px;
+    height: 26px;
+  }
+
+  .logo-text {
+    font-size: 18px;
+  }
+
+  .admin-btn {
+    padding: 10px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
   .stats-bar {
     overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 0;
   }
 
   .app-main {
-    grid-template-columns: 1fr;
-    gap: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 8px 0;
   }
 
-  .left-panel,
-  .center-panel,
+  /* Order form first on mobile - it's the primary action */
+  .left-panel {
+    order: -1;
+  }
+
+  .center-panel {
+    order: 0;
+  }
+
   .right-panel {
-    grid-column: 1;
+    order: 1;
+  }
+
+  .orders-panel {
+    max-height: 200px;
   }
 
   .app-footer {
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     text-align: center;
+    padding: 10px 0;
+    font-size: 11px;
+  }
+}
+
+/* Extra small screens (< 480px) */
+@media (max-width: 480px) {
+  .app {
+    padding: 0 8px;
+  }
+
+  .header-left {
+    gap: 12px;
+  }
+
+  .app-main {
+    gap: 10px;
   }
 }
 

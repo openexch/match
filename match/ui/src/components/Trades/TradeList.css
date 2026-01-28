@@ -148,12 +148,50 @@
 
 /* Responsive */
 @media (max-width: 768px) {
-  .trade-row {
-    padding: 6px 16px;
-    font-size: 12px;
+  .trade-list {
+    border-radius: 10px;
+  }
+
+  .trade-list-header-bar {
+    padding: 12px 14px;
+  }
+
+  .trade-list-header-bar h3 {
+    font-size: 14px;
   }
 
   .trade-list-columns {
-    padding: 8px 16px;
+    grid-template-columns: 1fr 1fr 70px;
+    gap: 6px;
+    padding: 8px 14px;
+    font-size: 10px;
+  }
+
+  .trade-row {
+    grid-template-columns: 1fr 1fr 70px;
+    gap: 6px;
+    padding: 7px 14px;
+    font-size: 12px;
+    min-height: 36px;
+    align-items: center;
+  }
+
+  .trade-time {
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 480px) {
+  .trade-list-columns {
+    padding: 8px 12px;
+  }
+
+  .trade-row {
+    padding: 6px 12px;
+    font-size: 11px;
+  }
+
+  .trade-time {
+    font-size: 9px;
   }
 }

@@ -82,3 +82,38 @@
   border-radius: 4px;
   color: #7eb8f5;
 }
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+  .connection-status {
+    padding: 8px 12px;
+    font-size: 11px;
+    min-height: 38px;
+  }
+
+  .status-text {
+    font-size: 11px;
+  }
+
+  .reconnect-btn {
+    padding: 6px 14px;
+    font-size: 12px;
+    min-height: 32px;
+  }
+
+  .leader-badge {
+    font-size: 9px;
+    padding: 2px 5px;
+  }
+}
+
+@media (max-width: 480px) {
+  .connection-status {
+    padding: 6px 10px;
+    gap: 6px;
+  }
+
+  .leader-badge {
+    display: none;
+  }
+}

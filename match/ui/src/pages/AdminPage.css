@@ -1127,9 +1127,66 @@
   }
 }
 
+@media (max-width: 768px) {
+  .admin-header {
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .admin-header h1 {
+    font-size: 17px;
+  }
+
+  .back-link {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+
+  .node-card {
+    min-height: auto;
+    padding: 12px;
+  }
+
+  .btn-icon {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+  }
+
+  .logs-container {
+    height: 200px;
+    font-size: 11px;
+  }
+
+  .log-filters {
+    flex-wrap: wrap;
+  }
+
+  .bulk-actions {
+    flex-wrap: wrap;
+  }
+
+  .section-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .status-bar-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+}
+
 @media (max-width: 600px) {
   .admin-page {
-    padding: 0 12px 12px;
+    padding: 0 10px 12px;
+  }
+
+  .status-bar {
+    height: auto;
+    min-height: 90px;
+    padding: 12px;
   }
 
   .status-bar-content {
@@ -1141,5 +1198,15 @@
   .update-btn {
     width: 100%;
     justify-content: center;
+  }
+
+  .cleanup-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .confirm-modal {
+    padding: 20px;
+    width: 95%;
   }
 }

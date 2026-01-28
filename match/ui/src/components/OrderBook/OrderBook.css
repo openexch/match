@@ -296,6 +296,41 @@
 
 /* Responsive */
 @media (max-width: 768px) {
+  .order-book {
+    border-radius: 10px;
+  }
+
+  .order-book-header {
+    padding: 12px 14px;
+  }
+
+  .header-title h3 {
+    font-size: 14px;
+  }
+
+  .header-title svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .header-stats .stat {
+    font-size: 11px;
+  }
+
+  .spread-bar {
+    padding: 8px 14px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .mid-price .value {
+    font-size: 14px;
+  }
+
+  .spread-info .value {
+    font-size: 11px;
+  }
+
   .book-sides {
     grid-template-columns: 1fr;
   }
@@ -303,20 +338,46 @@
   .bids-side {
     border-right: none;
     border-bottom: 1px solid var(--border-color);
-    max-height: 200px;
+    max-height: 220px;
   }
 
   .asks-side {
-    max-height: 200px;
+    max-height: 220px;
   }
 
   .book-row {
-    padding: 4px 10px;
+    padding: 6px 10px;
+    font-size: 12px;
+    min-height: 32px;
+  }
+
+  .side-header {
+    padding: 8px 10px;
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 480px) {
+  .order-book-header {
+    padding: 10px 12px;
+  }
+
+  .spread-bar {
+    padding: 6px 12px;
+  }
+
+  .book-row {
+    padding: 5px 8px;
     font-size: 11px;
   }
 
   .side-header {
-    padding: 6px 10px;
+    padding: 6px 8px;
     font-size: 9px;
+  }
+
+  .bids-side,
+  .asks-side {
+    max-height: 180px;
   }
 }

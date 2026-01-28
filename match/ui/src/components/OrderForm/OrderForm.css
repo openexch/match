@@ -264,3 +264,84 @@
 .price-row .value.ask {
   color: #f6465d;
 }
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+  .order-form-container {
+    padding: 16px;
+    gap: 12px;
+    border-radius: 10px;
+  }
+
+  .order-form-header h3 {
+    font-size: 15px;
+  }
+
+  .side-btn {
+    padding: 14px;
+    font-size: 15px;
+    min-height: 48px;
+  }
+
+  .type-tab {
+    padding: 10px 14px;
+    font-size: 14px;
+    min-height: 44px;
+  }
+
+  .form-group input {
+    padding: 14px 12px;
+    font-size: 16px; /* Prevents iOS zoom on focus */
+    min-height: 48px;
+  }
+
+  .quick-btn {
+    padding: 8px 10px;
+    font-size: 12px;
+    min-height: 36px;
+  }
+
+  .pct-btn {
+    padding: 10px 8px;
+    font-size: 13px;
+    min-height: 44px;
+  }
+
+  .submit-btn {
+    padding: 16px;
+    font-size: 17px;
+    min-height: 52px;
+    border-radius: 10px;
+  }
+
+  .total-display {
+    padding: 14px 12px;
+    font-size: 16px;
+  }
+
+  .market-prices {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .price-row {
+    justify-content: space-between;
+    font-size: 13px;
+  }
+
+  .notification {
+    font-size: 14px;
+    padding: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .order-form-container {
+    padding: 14px;
+  }
+
+  .percentage-buttons {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+}
