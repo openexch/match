@@ -151,6 +151,9 @@ public class AppClusteredService implements ClusteredService {
         context.setIdleStrategy(cluster.idleStrategy());
         timerManager.setCluster(cluster);
 
+        System.out.println("SERVICE onStart: role=" + cluster.role() + ", memberId=" + cluster.memberId());
+        System.out.flush();
+
         // Load snapshot if available
         if (snapshotImage != null) {
             loadSnapshot(snapshotImage);
@@ -158,6 +161,24 @@ public class AppClusteredService implements ClusteredService {
 
         // Initialize event publishing for all markets
         initializeEventPublishing();
+
+        System.out.println("SERVICE onStart complete, markets initialized");
+        System.out.flush();
+    }
+
+    private boolean flushTimerScheduled = false;
+
+    private static final long MARKET_DATA_FLUSH_INTERVAL_MS = 10;
+
+    private void scheduleMarketDataFlush() {
+        long deadline = System.currentTimeMillis() + MARKET_DATA_FLUSH_INTERVAL_MS;
+        timerManager.scheduleTimer(deadline, () -> {
+            if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
+                aeronBroadcaster.flush();
+            }
+            // Reschedule
+            scheduleMarketDataFlush();
+        });
     }
 
     /**
@@ -334,8 +355,13 @@ public class AppClusteredService implements ClusteredService {
             throw new RuntimeException(e);
         }
 
-        // Market data flushed via gateway heartbeats (~20/sec) and MarketPublisher's 20ms scheduler.
-        // Removed per-message flush to eliminate O(n²) amplification under load.
+        // Schedule flush timer lazily (can't schedule from onStart — cluster not ready)
+        if (!flushTimerScheduled) {
+            scheduleMarketDataFlush();
+            flushTimerScheduled = true;
+            System.out.println("SERVICE: Market data flush timer scheduled (10ms)");
+            System.out.flush();
+        }
     }
 
     // Heartbeat ACK message format (simple JSON)
@@ -369,6 +395,7 @@ public class AppClusteredService implements ClusteredService {
         long now = System.currentTimeMillis();
         if (now - lastHeartbeatLogMs > 10_000) {
             System.out.println("CLUSTER: heartbeatsReceived=" + heartbeatReceivedCount + ", session=" + gatewaySessionId);
+            System.out.flush();
             lastHeartbeatLogMs = now;
         }
 
