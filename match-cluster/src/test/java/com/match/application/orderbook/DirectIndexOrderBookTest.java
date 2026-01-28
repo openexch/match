@@ -270,4 +270,35 @@ public class DirectIndexOrderBookTest {
         long v2 = bidBook.getVersion();
         assertTrue("Version should increment on cancel", v2 > v1);
     }
+
+    // ==================== Hash Collision Tests (Long2LongHashMap) ====================
+
+    @Test
+    public void testOrderIdsAboveOneMillionNoCancellationLoss() {
+        long price = FixedPoint.fromDouble(100.0);
+        long qty = FixedPoint.fromDouble(1.0);
+
+        // Add order 1 and order 1_000_001 — would collide under old modulo hashing
+        bidBook.addOrder(1L, 100L, price, qty);
+        bidBook.addOrder(1_000_001L, 101L, price, qty);
+
+        // Both should be independently cancellable
+        assertTrue("Order 1 should be cancellable", bidBook.cancelOrder(1L));
+        assertTrue("Order 1000001 should be cancellable", bidBook.cancelOrder(1_000_001L));
+    }
+
+    @Test
+    public void testLargeOrderIds() {
+        long price = FixedPoint.fromDouble(100.0);
+        long qty = FixedPoint.fromDouble(1.0);
+
+        // Test with very large order IDs
+        long largeId1 = 5_000_000L;
+        long largeId2 = 10_000_000L;
+        bidBook.addOrder(largeId1, 100L, price, qty);
+        bidBook.addOrder(largeId2, 101L, price, qty);
+
+        assertTrue("Large order ID should be cancellable", bidBook.cancelOrder(largeId1));
+        assertTrue("Large order ID should be cancellable", bidBook.cancelOrder(largeId2));
+    }
 }
