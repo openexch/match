@@ -20,7 +20,7 @@ func main() {
 	cfg := config.Load()
 
 	// Initialize services
-	systemd := services.NewSystemd()
+	systemd := services.NewSystemd()   // still used by operations (rolling update, snapshot, etc.)
 	cluster := services.NewCluster(cfg)
 	progress := services.NewProgress()
 	clusterStatus := services.NewClusterStatus()
@@ -28,6 +28,7 @@ func main() {
 
 	statusSvc := services.NewStatusService(cfg, systemd, cluster, clusterStatus)
 	opsSvc := services.NewOperationsService(cfg, systemd, cluster, progress, clusterStatus)
+	opsSvc.SetProcessManager(procMgr)
 	autoSnapshot := services.NewAutoSnapshot(opsSvc)
 	logSvc := services.NewLogService(cfg)
 

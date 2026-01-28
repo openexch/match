@@ -10,7 +10,7 @@
 #
 # ==================================================================
 
-.PHONY: install install-deps optimize-os help install-services uninstall-services reinstall-services build build-java build-cluster build-gateway build-admin build-loadtest build-ui sbe setup-port-80 os-check
+.PHONY: install install-deps optimize-os help install-services uninstall-services reinstall-services build build-java build-cluster build-gateway build-admin build-loadtest build-ui sbe setup-port-80 os-check processes processes-summary rebuild-admin
 
 # ==================== CONFIGURATION ====================
 PROJECT_DIR := $(shell pwd)
@@ -151,22 +151,24 @@ install:
 	@mvn clean package -DskipTests -q
 	@echo "  ✓ Java components built"
 	@echo ""
-	@echo "→ Step 3/5: Installing systemd services..."
-	@$(MAKE) -s install-services
+	@echo "→ Step 3/5: Building admin gateway (Go)..."
+	@cd admin-gateway && go build -o admin-gateway .
+	@echo "  ✓ Admin gateway built"
 	@echo ""
-	@echo "→ Step 4/5: Cleaning cluster state..."
+	@echo "→ Step 4/5: Installing admin service + cleaning cluster state..."
+	@$(MAKE) -s install-services
 	@rm -rf /dev/shm/aeron-* 2>/dev/null || true
 	@rm -rf /dev/shm/aeron-cluster/node0/* /dev/shm/aeron-cluster/node1/* /dev/shm/aeron-cluster/node2/* 2>/dev/null || true
 	@rm -rf /dev/shm/aeron-cluster/backup/* 2>/dev/null || true
 	@mkdir -p /dev/shm/aeron-cluster/node0 /dev/shm/aeron-cluster/node1 /dev/shm/aeron-cluster/node2 /dev/shm/aeron-cluster/backup
 	@echo "  ✓ Cluster state cleaned"
 	@echo ""
-	@echo "→ Step 5/5: Starting cluster..."
-	@systemctl --user start node0
-	@sleep 3
-	@systemctl --user start node1 node2
-	@sleep 5
-	@systemctl --user start backup market order admin ui
+	@echo "→ Step 5/5: Starting cluster via Admin Process Manager..."
+	@systemctl --user start admin
+	@sleep 2
+	@curl -sf -X POST http://localhost:8082/api/admin/processes/start-all > /dev/null
+	@echo "  Process manager starting all services in dependency order..."
+	@sleep 15
 	@sleep 3
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
@@ -227,44 +229,26 @@ optimize-os:
 
 install-services:
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
-	@echo "║           Installing User-Level Systemd Services                 ║"
+	@echo "║     Installing Admin Gateway Service (Process Manager)           ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@echo "  Admin gateway is the process manager for all services."
+	@echo "  Only admin.service uses systemd. All other processes are"
+	@echo "  managed directly by the admin gateway process manager."
 	@echo ""
 	@mkdir -p $(USER_SERVICE_DIR)
 	@mkdir -p $(LOG_DIR)
-	@echo "→ Installing node0.service (CPU cores 0-3)..."
-	$(call JAVA_SERVICE,node0,Match Engine Cluster Node 0,\
-		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=0"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/dev/shm/aeron-cluster/node0"',\
-		'ExecStartPre=/bin/mkdir -p /dev/shm/aeron-cluster/node0',\
-		/usr/bin/taskset -c $(CPU_NODE0) /usr/bin/java $(JAVA_OPTS) -jar $(CLUSTER_JAR),10,)
-	@echo "→ Installing node1.service (CPU cores 4-7)..."
-	$(call JAVA_SERVICE,node1,Match Engine Cluster Node 1,\
-		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=1"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/dev/shm/aeron-cluster/node1"',\
-		'ExecStartPre=/bin/mkdir -p /dev/shm/aeron-cluster/node1' 'ExecStartPre=/bin/sleep 2',\
-		/usr/bin/taskset -c $(CPU_NODE1) /usr/bin/java $(JAVA_OPTS) -jar $(CLUSTER_JAR),10,)
-	@echo "→ Installing node2.service (CPU cores 8-11)..."
-	$(call JAVA_SERVICE,node2,Match Engine Cluster Node 2,\
-		'Environment="CLUSTER_ADDRESSES=$(CLUSTER_ADDRS)"' 'Environment="CLUSTER_NODE=2"' 'Environment="CLUSTER_PORT_BASE=9000"' 'Environment="BASE_DIR=/dev/shm/aeron-cluster/node2"',\
-		'ExecStartPre=/bin/mkdir -p /dev/shm/aeron-cluster/node2' 'ExecStartPre=/bin/sleep 2',\
-		/usr/bin/taskset -c $(CPU_NODE2) /usr/bin/java $(JAVA_OPTS) -jar $(CLUSTER_JAR),10,)
-	@echo "→ Installing backup.service..."
-	$(call JAVA_SERVICE,backup,Match Engine Cluster Backup Node,,\
-		'ExecStartPre=/bin/mkdir -p /dev/shm/aeron-cluster/backup' 'ExecStartPre=/bin/sleep 3',\
-		/usr/bin/java $(JAVA_OPTS) -cp $(CLUSTER_JAR) com.match.infrastructure.persistence.ClusterBackupApp,10,)
-	@echo "→ Installing market.service..."
-	$(call JAVA_SERVICE,market,Match Engine Market Gateway,\
-		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' 'Environment="EGRESS_PORT=9091"',\
-		'ExecStartPre=/bin/sleep 5',\
-		/usr/bin/java $(JAVA_OPTS) -cp $(GATEWAY_JAR) com.match.infrastructure.gateway.MarketGatewayMain,5,)
-	@echo "→ Installing order.service..."
-	$(call JAVA_SERVICE,order,Match Engine Order Gateway,\
-		'Environment="MATCH_PROJECT_DIR=$(PROJECT_DIR)"' 'Environment="EGRESS_PORT=9092"',\
-		'ExecStartPre=/bin/sleep 5',\
-		/usr/bin/java $(JAVA_OPTS) -cp $(GATEWAY_JAR) com.match.infrastructure.gateway.OrderGatewayMain,5,)
-	@echo "→ Installing admin.service (Go)..."
+	@mkdir -p $(HOME)/.local/run/match
+	@echo "→ Removing old per-service systemd units (if any)..."
+	@systemctl --user stop node0 node1 node2 backup order market ui 2>/dev/null || true
+	@systemctl --user disable node0 node1 node2 backup order market ui 2>/dev/null || true
+	@rm -f $(USER_SERVICE_DIR)/node0.service $(USER_SERVICE_DIR)/node1.service $(USER_SERVICE_DIR)/node2.service
+	@rm -f $(USER_SERVICE_DIR)/backup.service $(USER_SERVICE_DIR)/market.service
+	@rm -f $(USER_SERVICE_DIR)/order.service $(USER_SERVICE_DIR)/ui.service
+	@echo "→ Installing admin.service (Go process manager)..."
 	@printf '%s\n' \
 		'[Unit]' \
-		'Description=Match Engine Admin Gateway (Go)' \
+		'Description=Match Engine Admin Gateway + Process Manager' \
 		'After=default.target' \
 		'' \
 		'[Service]' \
@@ -276,35 +260,41 @@ install-services:
 		'Restart=on-failure' \
 		'RestartSec=5' \
 		'TimeoutStopSec=5' \
-		'KillMode=mixed' \
+		'KillMode=process' \
 		'StandardOutput=append:$(LOG_DIR)/admin.log' \
 		'StandardError=append:$(LOG_DIR)/admin.log' \
 		'' \
 		'[Install]' \
 		'WantedBy=default.target' > $(USER_SERVICE_DIR)/admin.service
-	@echo "→ Installing ui.service (port 3000)..."
-	$(call UI_SERVICE)
 	@echo ""
 	@echo "→ Reloading user systemd..."
 	@systemctl --user daemon-reload
-	@echo "→ Enabling services..."
-	@systemctl --user enable node0 node1 node2 backup market order admin ui
+	@echo "→ Enabling admin service..."
+	@systemctl --user enable admin
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
-	@echo "║  ✓ Services installed! Use 'make install' to start cluster.     ║"
+	@echo "║  ✓ Admin gateway installed!                                      ║"
+	@echo "║    All services managed via: http://localhost:8082/api/admin/    ║"
+	@echo "║    Process control:  make processes                              ║"
+	@echo "║    Start everything: curl -X POST .../processes/start-all       ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 
 uninstall-services:
-	@echo "→ Stopping services..."
-	@systemctl --user stop ui admin order market backup node2 node1 node0 2>/dev/null || true
-	@echo "→ Disabling services..."
-	@systemctl --user disable node0 node1 node2 backup market order admin ui 2>/dev/null || true
-	@echo "→ Removing service files..."
+	@echo "→ Stopping all processes via admin..."
+	@curl -sf -X POST http://localhost:8082/api/admin/processes/stop-all 2>/dev/null || true
+	@sleep 5
+	@echo "→ Stopping admin gateway..."
+	@systemctl --user stop admin 2>/dev/null || true
+	@systemctl --user disable admin 2>/dev/null || true
+	@rm -f $(USER_SERVICE_DIR)/admin.service
+	@echo "→ Cleaning up old service files..."
 	@rm -f $(USER_SERVICE_DIR)/node0.service $(USER_SERVICE_DIR)/node1.service $(USER_SERVICE_DIR)/node2.service
 	@rm -f $(USER_SERVICE_DIR)/backup.service $(USER_SERVICE_DIR)/market.service
-	@rm -f $(USER_SERVICE_DIR)/order.service $(USER_SERVICE_DIR)/admin.service $(USER_SERVICE_DIR)/ui.service
+	@rm -f $(USER_SERVICE_DIR)/order.service $(USER_SERVICE_DIR)/ui.service
 	@systemctl --user daemon-reload
-	@echo "✓ Services uninstalled"
+	@echo "→ Cleaning PID files..."
+	@rm -f $(HOME)/.local/run/match/*.pid
+	@echo "✓ All services uninstalled"
 
 reinstall-services: uninstall-services install-services
 	@echo ""
@@ -326,6 +316,17 @@ build-gateway:
 
 build-admin:
 	cd admin-gateway && go build -o admin-gateway .
+
+rebuild-admin:
+	@echo "→ Triggering admin gateway self-update..."
+	@curl -sf -X POST http://localhost:8082/api/admin/rebuild-admin | python3 -m json.tool 2>/dev/null || echo '{"error": "admin gateway not running"}'
+	@echo "Admin gateway will rebuild and restart automatically"
+
+processes:
+	@curl -sf http://localhost:8082/api/admin/processes 2>/dev/null | python3 -c "import sys,json;data=json.load(sys.stdin);[print(f\"  {'●' if p['running'] else '○'} {p['name']:10s} {p['status']:10s} PID {str(p.get('pid') or '-'):>8s}  {p.get('memoryBytes',0)//1048576:>5d} MB  {p.get('cpuPercent',0):>6.1f}%%\") for p in data]" 2>/dev/null || echo "  Admin gateway not running"
+
+processes-summary:
+	@curl -sf http://localhost:8082/api/admin/processes/summary 2>/dev/null | python3 -m json.tool 2>/dev/null || echo '{"error": "admin gateway not running"}'
 
 build-loadtest:
 	mvn package -pl match-loadtest -am -DskipTests -q
@@ -371,9 +372,12 @@ help:
 	@echo "  make build-ui           Build UI only"
 	@echo "  make sbe                Generate SBE codec classes"
 	@echo ""
-	@echo "Services:"
-	@echo "  make install-services   Install systemd services"
-	@echo "  make uninstall-services Remove systemd services"
+	@echo "Process Manager:"
+	@echo "  make processes          Show live status of all processes"
+	@echo "  make processes-summary  Process summary (running/stopped/memory)"
+	@echo "  make rebuild-admin      Self-update admin gateway via API"
+	@echo "  make install-services   Install admin service (process manager)"
+	@echo "  make uninstall-services Remove all services"
 	@echo "  make reinstall-services Reinstall services"
 	@echo ""
 	@echo "System:"
@@ -382,8 +386,11 @@ help:
 	@echo "  make setup-port-80      Allow node to bind port 80 (sudo)"
 	@echo ""
 	@echo "Runtime: http://localhost:8082/api/admin/"
-	@echo "  curl .../status             Cluster status"
-	@echo "  curl -X POST .../snapshot   Take snapshot"
-	@echo "  curl -X POST .../rolling-update   Deploy code"
-	@echo "  curl -X POST .../restart-gateway  Restart gateways"
-	@echo "  curl -X POST .../rebuild-gateway  Build gateway JAR"
+	@echo "  GET  .../processes                  Live process status"
+	@echo "  POST .../processes/{name}/start     Start a service"
+	@echo "  POST .../processes/{name}/stop      Stop a service"
+	@echo "  POST .../processes/start-all        Start all (dependency order)"
+	@echo "  POST .../processes/stop-all         Stop all (reverse order)"
+	@echo "  POST .../rolling-update             Deploy code (zero-downtime)"
+	@echo "  POST .../snapshot                   Take cluster snapshot"
+	@echo "  POST .../rebuild-admin              Self-update admin gateway"

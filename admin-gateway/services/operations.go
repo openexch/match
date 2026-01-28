@@ -19,6 +19,7 @@ type OperationsService struct {
 	cluster       *Cluster
 	progress      *Progress
 	clusterStatus *ClusterStatus
+	procMgr       *ProcessManager
 }
 
 func NewOperationsService(cfg *config.Config, systemd *Systemd, cluster *Cluster, progress *Progress, status *ClusterStatus) *OperationsService {
@@ -29,6 +30,47 @@ func NewOperationsService(cfg *config.Config, systemd *Systemd, cluster *Cluster
 		progress:      progress,
 		clusterStatus: status,
 	}
+}
+
+// SetProcessManager injects the process manager (avoids circular init)
+func (o *OperationsService) SetProcessManager(pm *ProcessManager) {
+	o.procMgr = pm
+}
+
+// startService starts a service via process manager (preferred) or systemd (fallback)
+func (o *OperationsService) startService(name string) {
+	if o.procMgr != nil {
+		if err := o.procMgr.startByName(name); err != nil {
+			fmt.Printf("[ops] PM start %s failed, falling back to systemd: %v\n", name, err)
+			o.systemd.Start(name)
+		}
+		return
+	}
+	o.systemd.Start(name)
+}
+
+// stopService stops a service via process manager (preferred) or systemd (fallback)
+func (o *OperationsService) stopService(name string) {
+	if o.procMgr != nil {
+		if err := o.procMgr.stopProcess(name, true); err != nil {
+			fmt.Printf("[ops] PM stop %s failed, falling back to systemd: %v\n", name, err)
+			o.systemd.Stop(name)
+		}
+		return
+	}
+	o.systemd.Stop(name)
+}
+
+// restartService restarts a service via process manager (preferred) or systemd (fallback)
+func (o *OperationsService) restartService(name string) {
+	if o.procMgr != nil {
+		if err := o.procMgr.Restart(name); err != nil {
+			fmt.Printf("[ops] PM restart %s failed, falling back to systemd: %v\n", name, err)
+			o.systemd.Restart(name)
+		}
+		return
+	}
+	o.systemd.Restart(name)
 }
 
 // RollingUpdate performs a rolling update of all cluster nodes
@@ -110,7 +152,7 @@ func (o *OperationsService) doRollingUpdate() {
 		// Stop follower
 		o.progress.Update(step, "Stopping "+nodeLabel+"...")
 		o.clusterStatus.SetNodeStatus(nodeId, "STOPPING", false)
-		o.systemd.Stop(fmt.Sprintf("node%d", nodeId))
+		o.stopService(fmt.Sprintf("node%d", nodeId))
 		o.waitForNodeStopped(nodeId, 15*time.Second)
 		o.clusterStatus.SetNodeStatus(nodeId, "OFFLINE", false)
 		step++
@@ -129,7 +171,7 @@ func (o *OperationsService) doRollingUpdate() {
 		// Start follower with new code
 		o.progress.Update(step, "Starting "+nodeLabel+" with new code...")
 		o.clusterStatus.SetNodeStatus(nodeId, "STARTING", false)
-		o.systemd.Start(fmt.Sprintf("node%d", nodeId))
+		o.startService(fmt.Sprintf("node%d", nodeId))
 		step++
 
 		// Wait for the node to actually rejoin — verify via ingress port
@@ -153,7 +195,7 @@ func (o *OperationsService) doRollingUpdate() {
 	for _, nodeId := range followers {
 		o.clusterStatus.SetNodeStatus(nodeId, "ELECTION", true)
 	}
-	o.systemd.Stop(fmt.Sprintf("node%d", leader))
+	o.stopService(fmt.Sprintf("node%d", leader))
 	o.waitForNodeStopped(leader, 15*time.Second)
 	o.clusterStatus.SetNodeStatus(leader, "OFFLINE", false)
 
@@ -201,7 +243,7 @@ func (o *OperationsService) doRollingUpdate() {
 	// Step 11: Start old leader as follower
 	o.progress.Update(11, fmt.Sprintf("Starting Node %d as follower...", leader))
 	o.clusterStatus.SetNodeStatus(leader, "STARTING", false)
-	o.systemd.Start(fmt.Sprintf("node%d", leader))
+	o.startService(fmt.Sprintf("node%d", leader))
 
 	// Wait for old leader to rejoin
 	o.clusterStatus.SetNodeStatus(leader, "REJOINING", true)
@@ -368,7 +410,7 @@ func (o *OperationsService) doRebuildGateway(restart bool) {
 	// Step 3: Restart gateways (order + market, not admin since we'd kill ourselves)
 	o.progress.Update(3, "Restarting order & market gateways...")
 	for _, svc := range []string{"order", "market"} {
-		o.systemd.Restart(svc)
+		o.restartService(svc)
 	}
 	time.Sleep(3 * time.Second)
 
@@ -499,7 +541,7 @@ func (o *OperationsService) doCompactArchive() {
 	for i := 0; i < 3; i++ {
 		o.progress.Update(2+i, fmt.Sprintf("Stopping node %d...", i))
 		o.clusterStatus.SetNodeStatus(i, "STOPPING", false)
-		o.systemd.Stop(fmt.Sprintf("node%d", i))
+		o.stopService(fmt.Sprintf("node%d", i))
 		time.Sleep(500 * time.Millisecond)
 		o.clusterStatus.SetNodeStatus(i, "OFFLINE", false)
 	}
@@ -525,7 +567,7 @@ func (o *OperationsService) doCompactArchive() {
 	for i := 0; i < 3; i++ {
 		o.progress.Update(7+i, fmt.Sprintf("Starting node %d...", i))
 		o.clusterStatus.SetNodeStatus(i, "STARTING", false)
-		o.systemd.Start(fmt.Sprintf("node%d", i))
+		o.startService(fmt.Sprintf("node%d", i))
 		time.Sleep(2 * time.Second)
 		o.clusterStatus.SetNodeStatus(i, "REJOINING", true)
 	}
@@ -681,7 +723,7 @@ func (o *OperationsService) cleanSingleNodeArchive(nodeId int) bool {
 	nodeDir := fmt.Sprintf("%s/node%d", o.cfg.ClusterDir, nodeId)
 
 	o.clusterStatus.SetNodeStatus(nodeId, "STOPPING", false)
-	o.systemd.Stop(fmt.Sprintf("node%d", nodeId))
+	o.stopService(fmt.Sprintf("node%d", nodeId))
 	time.Sleep(2 * time.Second)
 	o.clusterStatus.SetNodeStatus(nodeId, "OFFLINE", false)
 
@@ -692,7 +734,7 @@ func (o *OperationsService) cleanSingleNodeArchive(nodeId int) bool {
 
 	// Restart — node syncs from leader via catchup
 	o.clusterStatus.SetNodeStatus(nodeId, "STARTING", false)
-	o.systemd.Start(fmt.Sprintf("node%d", nodeId))
+	o.startService(fmt.Sprintf("node%d", nodeId))
 	time.Sleep(3 * time.Second)
 	o.clusterStatus.SetNodeStatus(nodeId, "REJOINING", true)
 
