@@ -1,0 +1,145 @@
+Load generator: 1000/s for 600s with 50 workers
+Target: http://127.0.0.1:8080/order
+
+[21:58:14] Starting load... (batch=20 every 20ms)
+[21:58:19] rate=  988/s total=4942     ok=4942     err=0      | p50=0.3ms p99=1.1ms avg=0.3ms
+[21:58:24] rate= 1000/s total=9940     ok=9940     err=0      | p50=0.3ms p99=2.2ms avg=0.4ms
+[21:58:29] rate= 1000/s total=14940    ok=14940    err=0      | p50=0.3ms p99=0.6ms avg=0.3ms
+[21:58:34] rate= 1000/s total=19940    ok=19940    err=0      | p50=0.3ms p99=0.7ms avg=0.3ms
+[21:58:39] rate= 1001/s total=24944    ok=24944    err=0      | p50=0.3ms p99=1.3ms avg=0.3ms
+[21:58:44] rate=  999/s total=29940    ok=29940    err=0      | p50=0.3ms p99=0.7ms avg=0.3ms
+[21:58:49] rate= 1000/s total=34940    ok=34940    err=0      | p50=0.3ms p99=0.7ms avg=0.3ms
+[21:58:54] rate= 1000/s total=39940    ok=39940    err=0      | p50=0.3ms p99=1.0ms avg=0.3ms
+[21:58:59] rate= 1000/s total=44940    ok=44940    err=0      | p50=0.2ms p99=0.6ms avg=0.3ms
+[HTTP-ERR] 503
+[HTTP-ERR] 503
+[HTTP-ERR] 503
+[HTTP-ERR] 503
+[HTTP-ERR] 503
+[21:59:04] rate= 1000/s total=49940    ok=49700    err=240    | p50=0.2ms p99=0.7ms avg=0.3ms
+[21:59:09] rate= 1000/s total=54940    ok=54700    err=240    | p50=0.3ms p99=1.9ms avg=0.3ms
+[21:59:14] rate= 1000/s total=59940    ok=59700    err=240    | p50=0.3ms p99=0.7ms avg=0.3ms
+[21:59:19] rate= 1000/s total=64940    ok=64700    err=240    | p50=0.3ms p99=0.7ms avg=0.3ms
+[21:59:24] rate= 1000/s total=69940    ok=69700    err=240    | p50=0.3ms p99=0.8ms avg=0.3ms
+[21:59:29] rate= 1000/s total=74940    ok=74700    err=240    | p50=0.3ms p99=0.6ms avg=0.3ms
+[21:59:34] rate= 1000/s total=79940    ok=79700    err=240    | p50=0.3ms p99=0.6ms avg=0.3ms
+[21:59:39] rate= 1000/s total=84940    ok=84700    err=240    | p50=0.3ms p99=1.5ms avg=0.3ms
+[21:59:44] rate= 1000/s total=89940    ok=89700    err=240    | p50=0.2ms p99=0.7ms avg=0.3ms
+[21:59:49] rate= 1000/s total=94940    ok=94700    err=240    | p50=0.3ms p99=0.7ms avg=0.3ms
+[21:59:54] rate= 1000/s total=99942    ok=99702    err=240    | p50=0.3ms p99=1.5ms avg=0.3ms
+[21:59:59] rate= 1000/s total=104940   ok=104700   err=240    | p50=0.2ms p99=0.7ms avg=0.3ms
+[22:00:04] rate= 1000/s total=109940   ok=109420   err=520    | p50=0.2ms p99=0.6ms avg=0.3ms
+[22:00:09] rate= 1000/s total=114940   ok=114420   err=520    | p50=0.3ms p99=1.5ms avg=0.3ms
+[22:00:14] rate= 1000/s total=119940   ok=119420   err=520    | p50=0.3ms p99=0.7ms avg=0.3ms
+[22:00:19] rate= 1000/s total=124940   ok=124420   err=520    | p50=0.3ms p99=0.6ms avg=0.3ms
+[22:00:24] rate= 1000/s total=129940   ok=129420   err=520    | p50=0.3ms p99=1.4ms avg=0.3ms
+[22:00:29] rate= 1000/s total=134940   ok=134420   err=520    | p50=0.3ms p99=0.6ms avg=0.3ms
+[22:00:34] rate= 1000/s total=139940   ok=139420   err=520    | p50=0.3ms p99=0.6ms avg=0.3ms
+[22:00:39] rate= 1000/s total=144940   ok=144420   err=520    | p50=0.3ms p99=1.2ms avg=0.3ms
+[22:00:44] rate= 1000/s total=149940   ok=149420   err=520    | p50=0.2ms p99=0.6ms avg=0.3ms
+[22:00:49] rate= 1000/s total=154941   ok=154421   err=520    | p50=0.2ms p99=0.6ms avg=0.3ms
+[22:00:54] rate= 1000/s total=159940   ok=159420   err=520    | p50=0.3ms p99=0.8ms avg=0.3ms
+[22:00:59] rate= 1000/s total=164940   ok=164420   err=520    | p50=0.3ms p99=0.6ms avg=0.3ms
+[22:01:04] rate= 1000/s total=169940   ok=169420   err=520    | p50=0.4ms p99=3.5ms avg=0.5ms
+[22:01:09] rate= 1000/s total=174940   ok=174420   err=520    | p50=0.3ms p99=1.4ms avg=0.3ms
+[22:01:14] rate= 1000/s total=179940   ok=179420   err=520    | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:01:19] rate= 1000/s total=184940   ok=180273   err=4667   | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:01:24] rate= 1000/s total=189940   ok=180273   err=9667   | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:01:29] rate= 1000/s total=194940   ok=180273   err=14667  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:01:34] rate= 1000/s total=199940   ok=180273   err=19667  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:01:39] rate= 1000/s total=204940   ok=180273   err=24667  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:01:44] rate= 1000/s total=209940   ok=180273   err=29667  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:01:49] rate= 1000/s total=214940   ok=180273   err=34667  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:01:54] rate= 1008/s total=219980   ok=180273   err=39707  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:01:59] rate=  970/s total=224830   ok=180273   err=44557  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:02:04] rate= 1000/s total=229830   ok=180273   err=49557  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:02:09] rate= 1000/s total=234830   ok=180273   err=54557  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:02:14] rate= 1000/s total=239830   ok=180273   err=59557  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:02:19] rate= 1000/s total=244830   ok=180273   err=64557  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:02:24] rate= 1000/s total=249830   ok=180273   err=69557  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:02:29] rate= 1000/s total=254830   ok=180273   err=74557  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:02:34] rate= 1000/s total=259830   ok=180273   err=79557  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:02:39] rate= 1000/s total=264830   ok=180273   err=84557  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:02:44] rate= 1000/s total=269830   ok=180273   err=89557  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:02:49] rate= 1000/s total=274830   ok=180273   err=94557  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:02:54] rate= 1000/s total=279830   ok=180273   err=99557  | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:02:59] rate= 1000/s total=284830   ok=180273   err=104557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:03:04] rate= 1000/s total=289830   ok=180273   err=109557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:03:09] rate= 1000/s total=294830   ok=180273   err=114557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:03:14] rate= 1000/s total=299830   ok=180273   err=119557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:03:19] rate= 1000/s total=304830   ok=180273   err=124557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:03:24] rate= 1000/s total=309830   ok=180273   err=129557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:03:29] rate= 1000/s total=314830   ok=180273   err=134557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:03:34] rate= 1000/s total=319830   ok=180273   err=139557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:03:39] rate= 1000/s total=324830   ok=180273   err=144557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:03:44] rate= 1000/s total=329830   ok=180273   err=149557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:03:49] rate= 1000/s total=334830   ok=180273   err=154557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:03:54] rate= 1000/s total=339830   ok=180273   err=159557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:03:59] rate= 1000/s total=344830   ok=180273   err=164557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:04:04] rate= 1000/s total=349830   ok=180273   err=169557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:04:09] rate= 1000/s total=354830   ok=180273   err=174557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:04:14] rate= 1000/s total=359830   ok=180273   err=179557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:04:19] rate= 1000/s total=364830   ok=180273   err=184557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:04:24] rate= 1000/s total=369830   ok=180273   err=189557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:04:29] rate= 1000/s total=374830   ok=180273   err=194557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:04:34] rate= 1000/s total=379830   ok=180273   err=199557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:04:39] rate= 1000/s total=384830   ok=180273   err=204557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:04:44] rate= 1000/s total=389830   ok=180273   err=209557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:04:49] rate= 1000/s total=394830   ok=180273   err=214557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:04:54] rate= 1000/s total=399830   ok=180273   err=219557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:04:59] rate= 1000/s total=404830   ok=180273   err=224557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:05:04] rate= 1000/s total=409830   ok=180273   err=229557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:05:09] rate= 1000/s total=414830   ok=180273   err=234557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:05:14] rate= 1000/s total=419830   ok=180273   err=239557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:05:19] rate= 1000/s total=424830   ok=180273   err=244557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:05:24] rate= 1000/s total=429830   ok=180273   err=249557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:05:29] rate= 1030/s total=434980   ok=180273   err=254707 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:05:34] rate= 1000/s total=439980   ok=180273   err=259707 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:05:39] rate=  970/s total=444830   ok=180273   err=264557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:05:44] rate= 1000/s total=449830   ok=180273   err=269557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:05:49] rate= 1000/s total=454830   ok=180273   err=274557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:05:54] rate= 1000/s total=459830   ok=180273   err=279557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:05:59] rate= 1000/s total=464830   ok=180273   err=284557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:06:04] rate= 1000/s total=469830   ok=180273   err=289557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:06:09] rate= 1000/s total=474830   ok=180273   err=294557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:06:14] rate= 1000/s total=479830   ok=180273   err=299557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:06:19] rate= 1000/s total=484830   ok=180273   err=304557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:06:24] rate= 1000/s total=489830   ok=180273   err=309557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:06:29] rate= 1000/s total=494830   ok=180273   err=314557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:06:34] rate= 1000/s total=499830   ok=180273   err=319557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:06:39] rate= 1000/s total=504830   ok=180273   err=324557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:06:44] rate= 1000/s total=509830   ok=180273   err=329557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:06:49] rate= 1000/s total=514830   ok=180273   err=334557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:06:54] rate= 1000/s total=519830   ok=180273   err=339557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:06:59] rate= 1000/s total=524830   ok=180273   err=344557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:07:04] rate= 1000/s total=529830   ok=180273   err=349557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:07:09] rate= 1030/s total=534980   ok=180273   err=354707 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:07:14] rate=  970/s total=539830   ok=180273   err=359557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:07:19] rate= 1000/s total=544830   ok=180273   err=364557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:07:24] rate= 1000/s total=549830   ok=180273   err=369557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:07:29] rate= 1000/s total=554830   ok=180273   err=374557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:07:34] rate= 1000/s total=559830   ok=180273   err=379557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:07:39] rate= 1000/s total=564830   ok=180273   err=384557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:07:44] rate= 1000/s total=569830   ok=180273   err=389557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:07:49] rate= 1000/s total=574830   ok=180273   err=394557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:07:54] rate= 1000/s total=579830   ok=180273   err=399557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:07:59] rate= 1000/s total=584830   ok=180273   err=404557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:08:04] rate= 1000/s total=589830   ok=180273   err=409557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:08:09] rate= 1000/s total=594830   ok=180273   err=414557 | p50=0.2ms p99=0.6ms avg=0.2ms
+[22:08:14] rate= 1000/s total=599830   ok=180273   err=419557 | p50=0.2ms p99=0.6ms avg=0.2ms
+
+======================================================================
+FINAL RESULTS
+======================================================================
+Duration:     611.3s
+Total sent:   599980
+Success:      180273 (30.0%)
+Errors:       419707
+Avg rate:     981/s
+Latency p50:  0.3ms
+Latency p95:  0.5ms
+Latency p99:  0.8ms
+Latency max:  22.0ms
+Latency avg:  0.3ms
+======================================================================
+{"avg_rate":"981","duration_s":"611.3","errors":419707,"latency_max_ms":"22.04","latency_p50_ms":"0.26","latency_p95_ms":"0.52","latency_p99_ms":"0.85","success":180273,"success_pct":"30.05","total_sent":599980}

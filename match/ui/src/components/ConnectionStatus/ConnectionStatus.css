@@ -1,104 +1,130 @@
+/* ================================================================
+   CONNECTION STATUS — Real-time connection badge
+   ================================================================ */
+
 .connection-status {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
-  border-radius: 20px;
-  background: #2a2a40;
-  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  font-size: 11px;
+  font-weight: 500;
+  transition: all var(--transition-base);
 }
 
 .status-indicator {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
+  flex-shrink: 0;
+  transition: all var(--transition-base);
+}
+
+/* ── Connected ── */
+.connection-status.connected {
+  border-color: rgba(14, 203, 129, 0.2);
 }
 
 .connection-status.connected .status-indicator {
-  background: #0ecb81;
-  box-shadow: 0 0 8px #0ecb81;
+  background: var(--accent-green);
+  box-shadow: 0 0 6px var(--accent-green), 0 0 12px rgba(14, 203, 129, 0.3);
 }
 
+/* ── Connecting ── */
 .connection-status.connecting .status-indicator {
-  background: #f0b90b;
+  background: var(--accent-yellow);
   animation: pulse 1s infinite;
+  box-shadow: 0 0 6px rgba(240, 185, 11, 0.4);
 }
 
+/* ── Disconnected / Error ── */
 .connection-status.disconnected .status-indicator,
 .connection-status.error .status-indicator {
-  background: #f6465d;
+  background: var(--accent-red);
+  box-shadow: 0 0 4px rgba(246, 70, 93, 0.3);
+}
+
+.connection-status.disconnected,
+.connection-status.error {
+  border-color: rgba(246, 70, 93, 0.2);
 }
 
 @keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
-.status-text {
-  color: #e0e0e0;
+.connection-status .status-text {
+  color: var(--text-secondary);
+  font-size: 11px;
 }
 
 .reconnect-btn {
-  margin-left: 8px;
-  padding: 4px 12px;
-  background: #0ecb81;
+  margin-left: 4px;
+  padding: 3px 10px;
+  background: var(--accent-green);
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-full);
   color: #fff;
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all var(--transition-base);
 }
 
 .reconnect-btn:hover {
-  background: #0da870;
+  background: var(--accent-green-hover);
+  box-shadow: 0 2px 8px rgba(14, 203, 129, 0.3);
 }
 
-/* Cluster transition states (updating, electing, reconnecting) */
+/* ── Cluster Transition States ── */
 .connection-status.cluster-transition {
-  background: rgba(245, 158, 11, 0.15);
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
 }
 
 .connection-status.cluster-transition .status-indicator {
   background: #f59e0b;
   animation: pulse 1.5s infinite;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
 }
 
 .connection-status.cluster-transition .status-text {
   color: #f59e0b;
 }
 
-/* Leader badge */
+/* ── Leader Badge ── */
 .leader-badge {
-  font-size: 10px;
-  font-family: monospace;
+  font-size: 9px;
+  font-family: var(--font-mono);
   padding: 2px 6px;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
   border-radius: 4px;
   color: #7eb8f5;
+  font-weight: 600;
 }
 
-/* Mobile Responsive */
+/* ================================================================
+   RESPONSIVE
+   ================================================================ */
 @media (max-width: 768px) {
   .connection-status {
-    padding: 8px 12px;
-    font-size: 11px;
-    min-height: 38px;
+    padding: 6px 10px;
+    font-size: 10px;
+    min-height: 36px;
   }
 
-  .status-text {
-    font-size: 11px;
+  .connection-status .status-text {
+    font-size: 10px;
   }
 
   .reconnect-btn {
-    padding: 6px 14px;
-    font-size: 12px;
-    min-height: 32px;
+    padding: 4px 12px;
+    font-size: 11px;
+    min-height: 30px;
   }
 
   .leader-badge {
@@ -109,7 +135,7 @@
 
 @media (max-width: 480px) {
   .connection-status {
-    padding: 6px 10px;
+    padding: 5px 8px;
     gap: 6px;
   }
 

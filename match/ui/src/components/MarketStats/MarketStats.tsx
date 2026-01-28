@@ -30,7 +30,7 @@ export function MarketStats({ market, stats, orderBook }: MarketStatsProps) {
       <div className="stat-item">
         <span className="stat-label">24h Change</span>
         <span className={`stat-value ${isPositive ? 'positive' : 'negative'}`}>
-          {isPositive ? '+' : ''}{formatPrice(stats.priceChange)} ({isPositive ? '+' : ''}{stats.priceChangePercent.toFixed(2)}%)
+          {isPositive ? '▲ +' : '▼ '}{formatPrice(stats.priceChange)} ({isPositive ? '+' : ''}{stats.priceChangePercent.toFixed(2)}%)
         </span>
       </div>
 

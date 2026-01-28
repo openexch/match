@@ -1,0 +1,24 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║           Stability Test: Load + Snapshots + Updates        ║
+╠══════════════════════════════════════════════════════════════╣
+║  Rate:     5,000 orders/sec                                ║
+║  Duration: 10 minutes                                      ║
+║  Actions:  2 snapshots + 2 rolling updates                 ║
+╚══════════════════════════════════════════════════════════════╝
+
+[0;36m[21:28:41][0m Running pre-flight checks...
+[0;32m[21:28:41] ✓[0m Cluster running, leader: node 0
+[0;32m[21:28:41] ✓[0m All 3 nodes running
+[0;32m[21:28:41] ✓[0m Order gateway healthy
+[0;32m[21:28:41] ✓[0m Market gateway healthy
+[0;32m[21:28:41] ✓[0m Loadtest JAR ready
+
+[0;32m[21:28:41] ✓[0m [pre-test] Cluster healthy — leader: node 0, nodes: 3/3
+[0;36m[21:28:41][0m Sending test order...
+[0;32m[21:28:41] ✓[0m Test order accepted
+
+[0;36m[21:28:41][0m Starting load generator: 5000 orders/sec for 600s...
+[0;32m[21:28:41] ✓[0m Load generator started (PID: 894358)
+
+[0;36m[21:28:41][0m Waiting 30s for load to stabilize...

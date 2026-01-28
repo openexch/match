@@ -1,0 +1,22 @@
+
+╔════════════════════════════════════════════════════════════════╗
+║       Stability Test: Load + Snapshots + Rolling Updates     ║
+╠════════════════════════════════════════════════════════════════╣
+║  Rate:     1000/s via HTTP → Order Gateway                    ║
+║  Duration: 10 minutes                                        ║
+║  Actions:  2 snapshots + 2 rolling updates                   ║
+╚════════════════════════════════════════════════════════════════╝
+
+[0;36m[21:55:07][0m Running pre-flight checks...
+[0;32m[21:55:07] ✓[0m Cluster running, leader: node 2
+[0;32m[21:55:07] ✓[0m All 3 nodes running
+[0;32m[21:55:07] ✓[0m Order gateway healthy
+[0;32m[21:55:07] ✓[0m Load generator ready
+
+[0;32m[21:55:07] ✓[0m [pre-test] Healthy — leader: node 2, nodes: 3/3
+[0;32m[21:55:07] ✓[0m [pre-test] Order accepted
+
+[0;36m[21:55:07][0m Starting load: 1000/s for 600s...
+[0;32m[21:55:07] ✓[0m Load generator started (PID: 924450)
+
+[0;36m[21:55:07][0m Waiting 30s for stabilization...

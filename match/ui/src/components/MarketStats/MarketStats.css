@@ -1,63 +1,100 @@
+/* ================================================================
+   MARKET STATS BAR — Ticker display
+   ================================================================ */
+
 .market-stats {
   display: flex;
-  align-items: center;
-  gap: 32px;
-  padding: 16px 24px;
-  background: #1a1a2e;
-  border-radius: 12px;
-  border: 1px solid #2d2d44;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
 }
 
 .stat-item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
+  padding: 12px 20px;
+  position: relative;
+}
+
+/* Vertical dividers between stats */
+.stat-item + .stat-item {
+  border-left: 1px solid var(--border-color);
 }
 
 .stat-item.primary {
-  padding-right: 24px;
-  border-right: 1px solid #2d2d44;
+  padding: 12px 24px;
+  background: linear-gradient(135deg, rgba(0, 184, 217, 0.04) 0%, transparent 100%);
+  min-width: 180px;
 }
 
 .stat-label {
-  font-size: 11px;
-  color: #888;
+  font-size: 10px;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .stat-value {
-  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
-  font-size: 14px;
-  color: #e0e0e0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-primary);
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .stat-value.large {
-  font-size: 24px;
+  font-size: 26px;
   font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  transition: color 0.3s ease;
 }
 
 .stat-value.positive {
-  color: #0ecb81;
+  color: var(--accent-green);
 }
 
 .stat-value.negative {
-  color: #f6465d;
+  color: var(--accent-red);
 }
 
+/* ── Change Badge (24h Change styling) ── */
+.stat-item:nth-child(2) .stat-value.positive,
+.stat-item:nth-child(2) .stat-value.negative {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* ================================================================
+   RESPONSIVE
+   ================================================================ */
 @media (max-width: 1200px) {
   .market-stats {
     flex-wrap: wrap;
-    gap: 16px;
   }
 
   .stat-item.primary {
     width: 100%;
-    padding-right: 0;
-    padding-bottom: 12px;
-    border-right: none;
-    border-bottom: 1px solid #2d2d44;
+    border-bottom: 1px solid var(--border-color);
+    padding: 12px 18px;
+  }
+
+  .stat-item.primary + .stat-item {
+    border-left: none;
+  }
+
+  .stat-item {
+    padding: 10px 16px;
+    flex: 1;
+    min-width: 100px;
   }
 }
 
@@ -65,45 +102,57 @@
   .market-stats {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    padding: 12px 16px;
+    gap: 0;
     border-radius: 10px;
   }
 
   .stat-item.primary {
     grid-column: 1 / -1;
     padding-bottom: 10px;
-    border-bottom: 1px solid #2d2d44;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .stat-item + .stat-item {
+    border-left: none;
+  }
+
+  /* Alternate borders */
+  .stat-item:nth-child(odd):not(.primary) {
+    border-right: 1px solid var(--border-color);
+  }
+
+  .stat-item:not(.primary) {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
   }
 
   .stat-label {
-    font-size: 10px;
-  }
-
-  .stat-value {
-    font-size: 13px;
-  }
-
-  .stat-value.large {
-    font-size: 20px;
-  }
-}
-
-@media (max-width: 480px) {
-  .market-stats {
-    padding: 10px 12px;
-    gap: 10px;
-  }
-
-  .stat-value.large {
-    font-size: 18px;
+    font-size: 9px;
   }
 
   .stat-value {
     font-size: 12px;
   }
 
+  .stat-value.large {
+    font-size: 22px;
+  }
+}
+
+@media (max-width: 480px) {
+  .stat-item:not(.primary) {
+    padding: 8px 12px;
+  }
+
+  .stat-value.large {
+    font-size: 20px;
+  }
+
+  .stat-value {
+    font-size: 11px;
+  }
+
   .stat-label {
-    font-size: 9px;
+    font-size: 8.5px;
   }
 }

@@ -1,0 +1,21 @@
+Load generator: 1000/s for 600s with 50 workers
+Target: http://127.0.0.1:8080/order
+
+[21:56:13] Starting load... (batch=20 every 20ms)
+[21:56:18] rate=  996/s total=4980     ok=4980     err=0      | p50=0.9ms p99=1.7ms avg=0.9ms
+[21:56:23] rate= 1000/s total=9980     ok=9980     err=0      | p50=1.0ms p99=3.9ms avg=1.1ms
+[21:56:28] rate= 1000/s total=14980    ok=14980    err=0      | p50=0.9ms p99=1.9ms avg=1.0ms
+[21:56:33] rate= 1000/s total=19980    ok=19980    err=0      | p50=1.2ms p99=4.5ms avg=1.8ms
+[21:56:38] rate= 1000/s total=24980    ok=24980    err=0      | p50=3.2ms p99=14.8ms avg=3.6ms
+[21:56:43] rate= 1000/s total=29980    ok=29980    err=0      | p50=3.1ms p99=5.6ms avg=3.2ms
+[21:56:48] rate= 1000/s total=34980    ok=34980    err=0      | p50=3.2ms p99=5.5ms avg=3.2ms
+[CONN-ERR] Post "http://127.0.0.1:8080/order": dial tcp 127.0.0.1:8080: connect: cannot assign requested address
+[CONN-ERR] Post "http://127.0.0.1:8080/order": dial tcp 127.0.0.1:8080: connect: cannot assign requested address
+[CONN-ERR] Post "http://127.0.0.1:8080/order": dial tcp 127.0.0.1:8080: connect: cannot assign requested address
+[21:56:53] rate= 1000/s total=39980    ok=38806    err=1174   | p50=3.3ms p99=10.9ms avg=3.6ms
+[21:56:58] rate= 1000/s total=44980    ok=38806    err=6174   | p50=3.3ms p99=10.9ms avg=3.6ms
+[21:57:03] rate= 1000/s total=49980    ok=38806    err=11174  | p50=3.3ms p99=10.9ms avg=3.6ms
+[21:57:08] rate= 1000/s total=54979    ok=38806    err=16173  | p50=3.3ms p99=10.9ms avg=3.6ms
+[21:57:13] rate= 1000/s total=59980    ok=38806    err=21174  | p50=3.3ms p99=10.9ms avg=3.6ms
+[21:57:18] rate= 1000/s total=64980    ok=40553    err=24427  | p50=2.8ms p99=10.9ms avg=2.9ms
+[21:57:23] rate= 1000/s total=69980    ok=44797    err=25183  | p50=1.0ms p99=4.4ms avg=1.2ms

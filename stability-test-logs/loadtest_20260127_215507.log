@@ -1,0 +1,6 @@
+Load generator: 1000/s for 600s with 50 workers
+Target: http://127.0.0.1:8080/order
+
+[21:55:07] Starting load... (batch=20 every 20ms)
+[21:55:12] rate=  996/s total=4980     ok=4980     err=0      | p50=0.9ms p99=2.0ms avg=1.0ms
+[21:55:17] rate= 1000/s total=9980     ok=9980     err=0      | p50=0.9ms p99=1.8ms avg=0.9ms

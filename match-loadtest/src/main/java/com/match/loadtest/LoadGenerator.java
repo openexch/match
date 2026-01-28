@@ -84,10 +84,7 @@ public class LoadGenerator {
         this.mediaDriver = MediaDriver.launchEmbedded(
             new MediaDriver.Context()
                 .aeronDirectoryName(loadTestAeronDir)  // Unique dir to avoid conflicts
-                .threadingMode(ThreadingMode.DEDICATED)  // Separate threads for sender/receiver/conductor
-                .conductorIdleStrategy(new BusySpinIdleStrategy())
-                .senderIdleStrategy(new BusySpinIdleStrategy())
-                .receiverIdleStrategy(new BusySpinIdleStrategy())
+                .threadingMode(ThreadingMode.SHARED)    // Single-threaded like gateway for reliable connectivity
                 .dirDeleteOnStart(true)
                 .dirDeleteOnShutdown(true)
                 .socketSndbufLength(SOCKET_BUFFER_LENGTH)  // 4MB to match cluster

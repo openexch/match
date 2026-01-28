@@ -1,0 +1,104 @@
+
+╔════════════════════════════════════════════════════════════════╗
+║       Stability Test: Load + Snapshots + Rolling Updates     ║
+╠════════════════════════════════════════════════════════════════╣
+║  Rate:     1000/s via HTTP → Order Gateway                    ║
+║  Duration: 10 minutes                                        ║
+║  Actions:  2 snapshots + 2 rolling updates                   ║
+╚════════════════════════════════════════════════════════════════╝
+
+[0;36m[21:58:14][0m Running pre-flight checks...
+[0;32m[21:58:14] ✓[0m Cluster running, leader: node 2
+[0;32m[21:58:14] ✓[0m All 3 nodes running
+[0;32m[21:58:14] ✓[0m Order gateway healthy
+[0;32m[21:58:14] ✓[0m Load generator ready
+
+[0;32m[21:58:14] ✓[0m [pre-test] Healthy — leader: node 2, nodes: 3/3
+[0;32m[21:58:14] ✓[0m [pre-test] Order accepted
+
+[0;36m[21:58:14][0m Starting load: 1000/s for 600s...
+[0;32m[21:58:14] ✓[0m Load generator started (PID: 928871)
+
+[0;36m[21:58:14][0m Waiting 30s for stabilization...
+[0;36m[21:58:44][0m Load stats:
+[21:58:44] rate=  999/s total=29940    ok=29940    err=0      | p50=0.3ms p99=0.7ms avg=0.3ms
+[0;32m[21:58:44] ✓[0m [after-ramp-up] Healthy — leader: node 2, nodes: 3/3
+
+[1m═══ ACTION 1: Cluster Snapshot (t≈90s) ═══[0m
+[0;36m[21:59:44][0m [snapshot-1] Triggering snapshot...
+[0;32m[21:59:44] ✓[0m [snapshot-1] Snapshot initiated: {"message":"Snapshot initiated"}
+[0;36m[21:59:44][0m [snapshot-1] Waiting 15s for completion...
+[0;32m[21:59:59] ✓[0m [post-snapshot-1] Healthy — leader: node 2, nodes: 3/3
+[0;36m[21:59:59][0m Load stats:
+[21:59:59] rate= 1000/s total=104940   ok=104700   err=240    | p50=0.2ms p99=0.7ms avg=0.3ms
+
+[1m═══ ACTION 2: Rolling Update (t≈210s) ═══[0m
+[0;36m[22:00:59][0m [rolling-1] Triggering rolling update...
+[0;32m[22:00:59] ✓[0m [rolling-1] Rolling update started: {"message":"Rolling update initiated"}
+[0;36m[22:01:09][0m [rolling-1] Progress (10/180s) — nodes: 3/3, leader: 0
+[0;36m[22:01:19][0m [rolling-1] Progress (20/180s) — nodes: 3/3, leader: 0
+[0;36m[22:01:29][0m [rolling-1] Progress (30/180s) — nodes: 2/3, leader: 0
+[0;36m[22:01:39][0m [rolling-1] Progress (40/180s) — nodes: 3/3, leader: 0
+[0;32m[22:01:39] ✓[0m [rolling-1] All nodes back
+[0;36m[22:01:44][0m [rolling-1] Restarting gateways for reconnection...
+[0;31m[22:02:14] ✗[0m [post-rolling-1] Order FAILED
+[0;36m[22:02:14][0m [rolling-1] Waiting for gateway reconnection (1/6)...
+[0;31m[22:02:29] ✗[0m [post-rolling-1] Order FAILED
+[0;36m[22:02:29][0m [rolling-1] Waiting for gateway reconnection (2/6)...
+[0;31m[22:02:44] ✗[0m [post-rolling-1] Order FAILED
+[0;36m[22:02:44][0m [rolling-1] Waiting for gateway reconnection (3/6)...
+[0;31m[22:02:59] ✗[0m [post-rolling-1] Order FAILED
+[0;36m[22:02:59][0m [rolling-1] Waiting for gateway reconnection (4/6)...
+[0;31m[22:03:14] ✗[0m [post-rolling-1] Order FAILED
+[0;36m[22:03:14][0m [rolling-1] Waiting for gateway reconnection (5/6)...
+[0;31m[22:03:29] ✗[0m [post-rolling-1] Order FAILED
+[0;36m[22:03:29][0m [rolling-1] Waiting for gateway reconnection (6/6)...
+[0;32m[22:03:39] ✓[0m [post-rolling-1] Healthy — leader: node 0, nodes: 3/3
+[0;36m[22:03:39][0m Load stats:
+[22:03:39] rate= 1000/s total=324830   ok=180273   err=144557 | p50=0.2ms p99=0.6ms avg=0.2ms
+
+[0;32m[22:03:39] ✓[0m [mid-test] Healthy — leader: node 0, nodes: 3/3
+
+[1m═══ ACTION 3: Cluster Snapshot (t≈360s) ═══[0m
+[0;36m[22:04:39][0m [snapshot-2] Triggering snapshot...
+[0;32m[22:04:39] ✓[0m [snapshot-2] Snapshot initiated: {"message":"Snapshot initiated"}
+[0;36m[22:04:39][0m [snapshot-2] Waiting 15s for completion...
+[0;32m[22:04:54] ✓[0m [post-snapshot-2] Healthy — leader: node 0, nodes: 3/3
+[0;36m[22:04:54][0m Load stats:
+[22:04:54] rate= 1000/s total=399830   ok=180273   err=219557 | p50=0.2ms p99=0.6ms avg=0.2ms
+
+[1m═══ ACTION 4: Rolling Update (t≈480s) ═══[0m
+[0;36m[22:05:54][0m [rolling-2] Triggering rolling update...
+[0;32m[22:05:54] ✓[0m [rolling-2] Rolling update started: {"message":"Rolling update initiated"}
+[0;36m[22:06:04][0m [rolling-2] Progress (10/180s) — nodes: 2/3, leader: 0
+[0;36m[22:06:14][0m [rolling-2] Progress (20/180s) — nodes: 3/3, leader: 0
+[0;36m[22:06:24][0m [rolling-2] Progress (30/180s) — nodes: 2/3, leader: 0
+[0;36m[22:06:34][0m [rolling-2] Progress (40/180s) — nodes: 2/3, leader: 0
+[0;36m[22:06:44][0m [rolling-2] Progress (50/180s) — nodes: 2/3, leader: 0
+[0;36m[22:06:54][0m [rolling-2] Progress (60/180s) — nodes: 3/3, leader: 0
+[0;32m[22:06:54] ✓[0m [rolling-2] All nodes back
+[0;36m[22:06:59][0m [rolling-2] Restarting gateways for reconnection...
+[0;31m[22:07:29] ✗[0m [post-rolling-2] Order FAILED
+[0;36m[22:07:29][0m [rolling-2] Waiting for gateway reconnection (1/6)...
+[0;31m[22:07:44] ✗[0m [post-rolling-2] Order FAILED
+[0;36m[22:07:44][0m [rolling-2] Waiting for gateway reconnection (2/6)...
+[0;31m[22:07:59] ✗[0m [post-rolling-2] Order FAILED
+[0;36m[22:07:59][0m [rolling-2] Waiting for gateway reconnection (3/6)...
+[0;31m[22:08:14] ✗[0m [post-rolling-2] Order FAILED
+[0;36m[22:08:14][0m [rolling-2] Waiting for gateway reconnection (4/6)...
+[0;31m[22:08:29] ✗[0m [post-rolling-2] Order FAILED
+[0;36m[22:08:29][0m [rolling-2] Waiting for gateway reconnection (5/6)...
+[0;31m[22:08:44] ✗[0m [post-rolling-2] Order FAILED
+[0;36m[22:08:44][0m [rolling-2] Waiting for gateway reconnection (6/6)...
+[0;32m[22:08:54] ✓[0m [post-rolling-2] Healthy — leader: node 0, nodes: 3/3
+[0;36m[22:08:54][0m Load stats:
+{"avg_rate":"981","duration_s":"611.3","errors":419707,"latency_max_ms":"22.04","latency_p50_ms":"0.26","latency_p95_ms":"0.52","latency_p99_ms":"0.85","success":180273,"success_pct":"30.05","total_sent":599980}
+
+[0;36m[22:08:54][0m Waiting for load test to complete...
+[0;32m[22:08:54] ✓[0m Load test completed
+
+╔════════════════════════════════════════════════════════════════╗
+║                   STABILITY TEST RESULTS                     ║
+╚════════════════════════════════════════════════════════════════╝
+
+[0;32m[22:08:54] ✓[0m [final] Healthy — leader: node 0, nodes: 3/3

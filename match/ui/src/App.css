@@ -1,31 +1,70 @@
-/* CSS Variables for consistent theming */
-:root {
-  --bg-primary: #0d0d1a;
-  --bg-secondary: #1a1a2e;
-  --bg-tertiary: #2d2d44;
-  --border-color: #2d2d44;
-  --text-primary: #e0e0e0;
-  --text-secondary: #888;
-  --text-muted: #666;
+/* ================================================================
+   initEX Design System — Global Styles
+   ================================================================ */
 
-  /* Primary brand accent (cyan/teal from initEX logo) */
+:root {
+  /* ── Backgrounds ── */
+  --bg-primary: #0b0e11;
+  --bg-secondary: #161a1e;
+  --bg-tertiary: #1e2329;
+  --bg-hover: #2b3139;
+  --bg-input: #11141a;
+  --bg-elevated: #1e2329;
+
+  /* ── Borders ── */
+  --border-color: #222730;
+  --border-hover: #363e48;
+  --border-focus: rgba(0, 184, 217, 0.4);
+
+  /* ── Text ── */
+  --text-primary: #eaecef;
+  --text-secondary: #848e9c;
+  --text-muted: #5e6673;
+  --text-bright: #ffffff;
+
+  /* ── Brand Accent (Cyan/Teal) ── */
   --accent-primary: #00b8d9;
   --accent-primary-hover: #00a3c4;
-  --accent-primary-glow: rgba(0, 184, 217, 0.3);
+  --accent-primary-glow: rgba(0, 184, 217, 0.15);
+  --accent-primary-ring: rgba(0, 184, 217, 0.3);
 
-  /* Trading colors - keep green/red semantics */
+  /* ── Trading Colors ── */
   --accent-green: #0ecb81;
-  --accent-green-hover: #0da870;
+  --accent-green-hover: #0bb574;
+  --accent-green-bg: rgba(14, 203, 129, 0.08);
+  --accent-green-glow: rgba(14, 203, 129, 0.15);
   --accent-red: #f6465d;
-  --accent-red-hover: #d93d51;
+  --accent-red-hover: #e03d52;
+  --accent-red-bg: rgba(246, 70, 93, 0.08);
+  --accent-red-glow: rgba(246, 70, 93, 0.15);
   --accent-yellow: #f0b90b;
-
-  /* Info/follower now uses brand cyan */
+  --accent-yellow-bg: rgba(240, 185, 11, 0.08);
   --accent-blue: #00b8d9;
 
-  --font-mono: 'SF Mono', Monaco, 'Courier New', monospace;
+  /* ── Shadows ── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-glow-green: 0 0 20px rgba(14, 203, 129, 0.15);
+  --shadow-glow-red: 0 0 20px rgba(246, 70, 93, 0.15);
+
+  /* ── Radii ── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+
+  /* ── Typography ── */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Monaco, 'Cascadia Code', 'Courier New', monospace;
+
+  /* ── Transitions ── */
+  --transition-fast: 0.12s ease;
+  --transition-base: 0.2s ease;
+  --transition-slow: 0.3s ease;
 }
 
+/* ── Reset ── */
 * {
   box-sizing: border-box;
   margin: 0;
@@ -37,15 +76,17 @@ html, body, #root {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-sans);
   background: var(--bg-primary);
   color: var(--text-primary);
   line-height: 1.5;
+  font-size: 14px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.01em;
 }
 
-/* App Layout */
+/* ── App Layout ── */
 .app {
   display: flex;
   flex-direction: column;
@@ -55,71 +96,90 @@ body {
   padding: 0 16px;
 }
 
-/* Header */
+/* ================================================================
+   HEADER
+   ================================================================ */
 .app-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 0;
+  padding: 10px 0;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+  position: relative;
+}
+
+/* Subtle glow line under header */
+.app-header::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 184, 217, 0.12) 20%,
+    rgba(0, 184, 217, 0.06) 50%,
+    rgba(0, 184, 217, 0.12) 80%,
+    transparent 100%
+  );
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 20px;
 }
 
 .header-right {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
+/* Admin Button */
 .admin-btn {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  padding: 8px;
+  padding: 7px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
+  transition: all var(--transition-base);
   text-decoration: none;
 }
 
 .admin-btn:hover {
-  background: #3a3a50;
+  background: var(--bg-hover);
   color: var(--text-primary);
-  border-color: #4a4a60;
+  border-color: var(--border-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.admin-btn:active {
+  transform: translateY(0);
 }
 
 .admin-btn svg {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
 }
 
-/* Footer Icon */
-.footer-icon {
-  display: flex;
-  align-items: center;
-}
-
-.footer-icon svg {
-  width: 14px;
-  height: 14px;
-  color: var(--accent-primary);
-}
-
-/* Logo - initEX branding */
+/* ================================================================
+   LOGO
+   ================================================================ */
 .logo {
   display: flex;
   align-items: center;
   gap: 10px;
+  user-select: none;
 }
 
 .logo-icon {
@@ -127,17 +187,19 @@ body {
   align-items: center;
   justify-content: center;
   color: var(--accent-primary);
+  filter: drop-shadow(0 0 6px rgba(0, 184, 217, 0.3));
 }
 
 .logo-icon svg {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
 }
 
 .logo-text {
-  font-size: 22px;
+  font-size: 21px;
   font-weight: 700;
   letter-spacing: -0.5px;
+  line-height: 1;
 }
 
 .logo-text .init {
@@ -145,23 +207,27 @@ body {
 }
 
 .logo-text .ex {
-  color: #fff;
+  color: var(--text-bright);
 }
 
-/* Stats Bar */
+/* ================================================================
+   STATS BAR
+   ================================================================ */
 .stats-bar {
-  padding: 16px 0;
+  padding: 10px 0;
   flex-shrink: 0;
 }
 
-/* Main Trading Area */
+/* ================================================================
+   MAIN TRADING AREA
+   ================================================================ */
 .app-main {
   display: grid;
-  grid-template-columns: 320px 1fr 360px;
-  gap: 16px;
+  grid-template-columns: 310px 1fr 350px;
+  gap: 12px;
   flex: 1;
   min-height: 0;
-  padding: 16px 0;
+  padding: 12px 0;
 }
 
 .left-panel,
@@ -176,19 +242,20 @@ body {
   min-width: 0;
 }
 
-/* Orders Panel */
 .orders-panel {
   flex-shrink: 0;
   max-height: 250px;
-  padding-bottom: 16px;
+  padding-bottom: 12px;
 }
 
-/* Footer */
+/* ================================================================
+   FOOTER
+   ================================================================ */
 .app-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 0;
+  padding: 10px 0;
   border-top: 1px solid var(--border-color);
   flex-shrink: 0;
 }
@@ -198,7 +265,8 @@ body {
   align-items: center;
   gap: 8px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .footer-left .separator {
@@ -207,6 +275,19 @@ body {
 
 .footer-left .version {
   color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.footer-icon {
+  display: flex;
+  align-items: center;
+}
+
+.footer-icon svg {
+  width: 13px;
+  height: 13px;
+  color: var(--accent-primary);
 }
 
 .footer-right {
@@ -216,27 +297,54 @@ body {
 }
 
 .update-indicator {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   background: var(--accent-primary);
   border-radius: 50%;
-  animation: pulse 2s ease-in-out infinite;
+  animation: pulse-glow 2s ease-in-out infinite;
+  box-shadow: 0 0 4px rgba(0, 184, 217, 0.4);
 }
 
 .update-rate {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--accent-primary);
+  font-weight: 500;
+}
+
+/* ================================================================
+   ANIMATIONS
+   ================================================================ */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px rgba(0, 184, 217, 0.4); }
+  50% { opacity: 0.5; box-shadow: 0 0 8px rgba(0, 184, 217, 0.2); }
 }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  50% { opacity: 0.4; }
 }
 
-/* Responsive Design */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes priceFlashGreen {
+  0% { color: #0ecb81; text-shadow: 0 0 8px rgba(14, 203, 129, 0.4); }
+  100% { color: inherit; text-shadow: none; }
+}
+
+@keyframes priceFlashRed {
+  0% { color: #f6465d; text-shadow: 0 0 8px rgba(246, 70, 93, 0.4); }
+  100% { color: inherit; text-shadow: none; }
+}
+
+/* ================================================================
+   RESPONSIVE
+   ================================================================ */
 @media (max-width: 1400px) {
   .app-main {
-    grid-template-columns: 280px 1fr 320px;
+    grid-template-columns: 280px 1fr 310px;
   }
 }
 
@@ -306,11 +414,10 @@ body {
   .app-main {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
     padding: 8px 0;
   }
 
-  /* Order form first on mobile - it's the primary action */
   .left-panel {
     order: -1;
   }
@@ -336,7 +443,6 @@ body {
   }
 }
 
-/* Extra small screens (< 480px) */
 @media (max-width: 480px) {
   .app {
     padding: 0 8px;
@@ -347,30 +453,32 @@ body {
   }
 
   .app-main {
-    gap: 10px;
+    gap: 8px;
   }
 }
 
-/* Scrollbar Styling */
+/* ================================================================
+   SCROLLBAR
+   ================================================================ */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-secondary);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--bg-tertiary);
+  background: var(--bg-hover);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3d3d5c;
+  background: #3d4654;
 }
 
-/* Selection */
+/* ── Selection ── */
 ::selection {
   background: var(--accent-primary-glow);
   color: #fff;

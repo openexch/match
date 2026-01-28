@@ -176,8 +176,8 @@ public class LoadConfig {
                 // Fall through to default
             }
 
-            // Default to wildcard binding if we can't determine the IP
-            return "aeron:udp?endpoint=0.0.0.0:0";
+            // Default to loopback for local development
+            return "aeron:udp?endpoint=127.0.0.1:0";
         }
     }
 }
