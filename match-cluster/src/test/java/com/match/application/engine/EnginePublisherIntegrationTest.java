@@ -259,6 +259,30 @@ public class EnginePublisherIntegrationTest {
     }
 
     @Test
+    public void marketBuyOnEmptyBookPublishesRejected() throws Exception {
+        // Market buy on empty book — no asks to match
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, marketBuyCmd(200L, 60000.0), System.nanoTime());
+        waitForEvents();
+
+        List<CapturedEvent> statuses = findByType(PublishEventType.ORDER_STATUS_UPDATE);
+        assertFalse("Should have order status", statuses.isEmpty());
+        assertEquals("Market order on empty book should be REJECTED",
+            OrderStatusType.REJECTED, statuses.get(0).orderStatus);
+    }
+
+    @Test
+    public void marketSellOnEmptyBookPublishesRejected() throws Exception {
+        // Market sell on empty book — no bids to match
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, marketSellCmd(200L, 1.0), System.nanoTime());
+        waitForEvents();
+
+        List<CapturedEvent> statuses = findByType(PublishEventType.ORDER_STATUS_UPDATE);
+        assertFalse("Should have order status", statuses.isEmpty());
+        assertEquals("Market order on empty book should be REJECTED",
+            OrderStatusType.REJECTED, statuses.get(0).orderStatus);
+    }
+
+    @Test
     public void engineWithoutPublisherDoesNotCrash() {
         // Create a fresh engine without publisher
         Engine bareEngine = new Engine();

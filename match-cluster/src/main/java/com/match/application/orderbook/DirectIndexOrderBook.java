@@ -1,6 +1,7 @@
 package com.match.application.orderbook;
 
 import com.match.domain.Order;
+import org.agrona.collections.Long2LongHashMap;
 
 /**
  * Ultra-low latency order book using direct array indexing.
@@ -47,9 +48,8 @@ public class DirectIndexOrderBook {
     private final boolean ascending;
 
     // Order ID to location mapping for O(1) cancel
-    // Maps orderId -> packed(priceIdx, slotIdx)
-    private final long[] orderLocations;
-    private static final int MAX_ACTIVE_ORDERS = 1_000_000;
+    // Maps orderId -> packed(priceIdx, slotIdx) using Agrona's zero-allocation hash map
+    private final Long2LongHashMap orderLocations;
     private static final long EMPTY_LOCATION = -1L;
 
     // Free slot tracking per level (simple stack)
@@ -73,7 +73,7 @@ public class DirectIndexOrderBook {
         // Allocate all memory upfront
         this.orders = new long[maxPriceLevels * MAX_ORDERS_PER_LEVEL * ORDER_FIELDS];
         this.levels = new long[maxPriceLevels * LEVEL_FIELDS];
-        this.orderLocations = new long[MAX_ACTIVE_ORDERS];
+        this.orderLocations = new Long2LongHashMap(EMPTY_LOCATION);
         this.freeSlots = new int[maxPriceLevels * MAX_ORDERS_PER_LEVEL];
         this.freeSlotCounts = new int[maxPriceLevels];
 
@@ -84,11 +84,6 @@ public class DirectIndexOrderBook {
                 freeSlots[baseSlotIdx + slot] = slot;
             }
             freeSlotCounts[priceIdx] = MAX_ORDERS_PER_LEVEL;
-        }
-
-        // Initialize order locations as empty
-        for (int i = 0; i < MAX_ACTIVE_ORDERS; i++) {
-            orderLocations[i] = EMPTY_LOCATION;
         }
 
         // Pre-touch all memory to ensure arrays are fully paged in
@@ -176,8 +171,7 @@ public class DirectIndexOrderBook {
         levels[levelBase + 3] += quantity; // Total quantity
 
         // Store order location for O(1) cancel
-        int locationIdx = (int) (Math.abs(orderId) % MAX_ACTIVE_ORDERS);
-        orderLocations[locationIdx] = packLocation(priceIdx, slot);
+        orderLocations.put(orderId, packLocation(priceIdx, slot));
 
         // Memory barrier - increment version AFTER all writes complete
         version++;
@@ -194,8 +188,7 @@ public class DirectIndexOrderBook {
      * Cancel order by ID. O(1)
      */
     public boolean cancelOrder(long orderId) {
-        int locationIdx = (int) (Math.abs(orderId) % MAX_ACTIVE_ORDERS);
-        long location = orderLocations[locationIdx];
+        long location = orderLocations.get(orderId);
         if (location == EMPTY_LOCATION) return false;
 
         int priceIdx = unpackPriceIdx(location);
@@ -222,7 +215,7 @@ public class DirectIndexOrderBook {
         freeSlots[slotStackBase + freeSlotCounts[priceIdx]++] = slot;
 
         // Clear location
-        orderLocations[locationIdx] = EMPTY_LOCATION;
+        orderLocations.remove(orderId);
 
         if (orderCount == 0) {
             activeLevelCount--;
@@ -243,8 +236,7 @@ public class DirectIndexOrderBook {
      * level total by subtracting a negative value.
      */
     public void reduceOrderQuantity(long orderId, long reduceBy) {
-        int locationIdx = (int) (Math.abs(orderId) % MAX_ACTIVE_ORDERS);
-        long location = orderLocations[locationIdx];
+        long location = orderLocations.get(orderId);
         if (location == EMPTY_LOCATION) return;
 
         int priceIdx = unpackPriceIdx(location);
@@ -280,7 +272,7 @@ public class DirectIndexOrderBook {
             freeSlots[slotStackBase + freeSlotCounts[priceIdx]++] = slot;
 
             // Clear location
-            orderLocations[locationIdx] = EMPTY_LOCATION;
+            orderLocations.remove(orderId);
 
             if (orderCount == 0) {
                 activeLevelCount--;
@@ -585,9 +577,7 @@ public class DirectIndexOrderBook {
         }
 
         // Clear order locations
-        for (int i = 0; i < MAX_ACTIVE_ORDERS; i++) {
-            orderLocations[i] = EMPTY_LOCATION;
-        }
+        orderLocations.clear();
 
         // Reset best/worst tracking
         bestPriceIdx = -1;

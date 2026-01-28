@@ -113,10 +113,16 @@ public class Engine {
             }
             // Publish trades (order book published at 50ms intervals by MarketPublisher)
             publishTradeExecutions(engine, marketId, timestamp, orderId, userId, isBuy, matchCount);
-            // Market orders are always fully executed (no remaining quantity on book)
             long filledQty = calculateFilledQuantity(engine, matchCount);
-            publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.FILLED,
-                0, filledQty, price, isBuy);
+            if (matchCount == 0) {
+                // Market order with no matches — reject (no liquidity)
+                publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
+                    0, 0, price, isBuy);
+            } else {
+                // Market orders are always fully executed (no remaining quantity on book)
+                publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.FILLED,
+                    0, filledQty, price, isBuy);
+            }
         } else if (type == OrderType.LIMIT) {
             matchCount = engine.processLimitOrder(orderId, userId, isBuy, price, quantity);
             publishTradeExecutions(engine, marketId, timestamp, orderId, userId, isBuy, matchCount);
