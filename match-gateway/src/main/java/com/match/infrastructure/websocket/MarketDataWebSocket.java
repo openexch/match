@@ -36,7 +36,9 @@ public class MarketDataWebSocket implements AutoCloseable {
     private static final Map<Integer, String> MARKET_NAMES = Map.of(
         1, "BTC-USD",
         2, "ETH-USD",
-        3, "SOL-USD"
+        3, "SOL-USD",
+        4, "XRP-USD",
+        5, "DOGE-USD"
     );
 
     // Attribute to store subscribed marketId per channel
