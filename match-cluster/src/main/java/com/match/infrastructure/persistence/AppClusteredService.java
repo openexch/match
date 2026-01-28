@@ -19,7 +19,7 @@ import io.aeron.ExclusivePublication;
 import io.aeron.Image;
 import org.agrona.DirectBuffer;
 import org.agrona.ExpandableArrayBuffer;
-import org.agrona.concurrent.UnsafeBuffer;
+// UnsafeBuffer removed — using ExpandableDirectByteBuffer for broadcast to handle large messages
 import org.agrona.collections.Int2ObjectHashMap;
 import com.match.infrastructure.Logger;
 import com.match.infrastructure.generated.MessageHeaderDecoder;
@@ -58,7 +58,8 @@ public class AppClusteredService implements ClusteredService {
     private Cluster cluster;
 
     // Buffer for broadcasting market data via Aeron egress
-    private final UnsafeBuffer broadcastBuffer = new UnsafeBuffer(new byte[32 * 1024]); // 32KB for JSON messages
+    // Uses ExpandableDirectByteBuffer to handle large book snapshots (can exceed 32KB with many orders)
+    private final org.agrona.ExpandableDirectByteBuffer broadcastBuffer = new org.agrona.ExpandableDirectByteBuffer(64 * 1024); // 64KB initial, grows as needed
 
     // Queue for market data messages (SBE binary, thread-safe for producer on Disruptor thread)
     // Bounded to prevent OOM if cluster egress backs up
