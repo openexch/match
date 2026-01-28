@@ -8,6 +8,7 @@ import { useClusterState } from './hooks/useClusterState';
 import { useApi } from './hooks/useApi';
 import { OrderBook } from './components/OrderBook/OrderBook';
 import { TradeList } from './components/Trades/TradeList';
+import { Chart } from './components/Chart/Chart';
 import { ConnectionStatus } from './components/ConnectionStatus/ConnectionStatus';
 import { MarketSelector } from './components/MarketSelector/MarketSelector';
 import { MarketStats } from './components/MarketStats/MarketStats';
@@ -30,15 +31,12 @@ const Icons = {
       <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
     </svg>
   ),
-  // initEX logo - geometric molecular network icon
   initexLogo: (
     <svg viewBox="0 0 40 40" fill="none">
-      {/* Network/molecular structure with 4 nodes */}
       <circle cx="8" cy="12" r="4" fill="currentColor"/>
       <circle cx="8" cy="32" r="4" fill="currentColor"/>
       <circle cx="22" cy="22" r="4" fill="currentColor"/>
       <circle cx="32" cy="8" r="4" fill="currentColor"/>
-      {/* Connecting lines */}
       <line x1="8" y1="16" x2="8" y2="28" stroke="currentColor" strokeWidth="2"/>
       <line x1="11" y1="13" x2="19" y2="20" stroke="currentColor" strokeWidth="2"/>
       <line x1="11" y1="31" x2="19" y2="24" stroke="currentColor" strokeWidth="2"/>
@@ -48,12 +46,12 @@ const Icons = {
 };
 
 function MarketPage() {
-  // Market state
   const [selectedMarket, setSelectedMarket] = useState<Market>(MARKETS[0]);
-  // Ref for immediate access to current market ID (avoids stale closures)
   const selectedMarketIdRef = useRef(selectedMarket.id);
 
-  // Data hooks
+  // Price click-to-fill state
+  const [clickedPrice, setClickedPrice] = useState<number | null>(null);
+
   const { orderBook, levelChanges, handleBookSnapshot, handleBookDelta, resetOrderBook } = useOrderBook();
   const { trades, handleTradesBatch, resetTrades } = useTrades();
   const { stats, setStats, handleTrades, handleBookUpdate, resetStats } = useMarketStats();
@@ -76,29 +74,17 @@ function MarketPage() {
     (message: WebSocketMessage) => {
       switch (message.type) {
         case 'BOOK_SNAPSHOT':
-          // Only process if message is for the selected market (use ref for immediate value)
-          console.log('[App] BOOK_SNAPSHOT received: marketId=' + message.marketId +
-            ' (type=' + typeof message.marketId + ')' +
-            ', selectedRef=' + selectedMarketIdRef.current +
-            ' (type=' + typeof selectedMarketIdRef.current + ')' +
-            ', bids=' + message.bids?.length + ', asks=' + message.asks?.length);
-          // Use == for type coercion in case of string/number mismatch
           if (Number(message.marketId) === selectedMarketIdRef.current) {
-            console.log('[App] Processing BOOK_SNAPSHOT');
             handleBookSnapshot(message);
             handleBookUpdate(message.bids, message.asks);
-          } else {
-            console.log('[App] FILTERED OUT BOOK_SNAPSHOT - marketId mismatch');
           }
           break;
         case 'BOOK_DELTA':
-          // Only process if message is for the selected market (use ref for immediate value)
           if (message.marketId === selectedMarketIdRef.current) {
             handleBookDelta(message as BookDeltaMessage);
           }
           break;
         case 'TRADES_BATCH':
-          // Only process if message is for the selected market (use ref for immediate value)
           if (message.marketId === selectedMarketIdRef.current) {
             handleTradesBatch(message);
             handleTrades(message.trades);
@@ -106,7 +92,6 @@ function MarketPage() {
           break;
         case 'ORDER_STATUS':
         case 'ORDER_STATUS_BATCH':
-          // Order status tracking disabled
           break;
         case 'SUBSCRIPTION_CONFIRMED':
           break;
@@ -116,7 +101,6 @@ function MarketPage() {
           console.error('Server error:', message.message);
           break;
         case 'TICKER_STATS':
-          // Only process if message is for the selected market
           if ((message as TickerStatsMessage).marketId === selectedMarketIdRef.current) {
             const tickerMsg = message as TickerStatsMessage;
             setStats({
@@ -156,7 +140,6 @@ function MarketPage() {
   }, [status, clusterState.isElecting, clusterState.isRollingUpdate]);
 
   const handleMarketChange = useCallback((market: Market) => {
-    // Update ref immediately (before state update) to ensure message filtering works instantly
     selectedMarketIdRef.current = market.id;
     setSelectedMarket(market);
     resetAllState();
@@ -169,6 +152,11 @@ function MarketPage() {
   const handleSubmitOrder = useCallback(async (order: OrderRequest) => {
     return await submitOrder(order);
   }, [submitOrder]);
+
+  // Order book price click → fills order form
+  const handlePriceClick = useCallback((price: number) => {
+    setClickedPrice(price);
+  }, []);
 
   const bestBid = orderBook.bids.length > 0 ? orderBook.bids[0] : null;
   const bestAsk = orderBook.asks.length > 0 ? orderBook.asks[0] : null;
@@ -200,20 +188,33 @@ function MarketPage() {
       </div>
 
       <main className="app-main">
+        {/* Left sidebar — Order Book (vertical) */}
         <aside className="left-panel">
-          <OrderForm
-            market={selectedMarket}
-            bestBid={bestBid}
-            bestAsk={bestAsk}
-            onSubmitOrder={handleSubmitOrder}
-            loading={apiLoading}
+          <OrderBook
+            orderBook={orderBook}
+            levelChanges={levelChanges}
+            onPriceClick={handlePriceClick}
           />
         </aside>
 
+        {/* Center — Chart + Order Form */}
         <section className="center-panel">
-          <OrderBook orderBook={orderBook} levelChanges={levelChanges} />
+          <div className="chart-area">
+            <Chart trades={trades} symbol={selectedMarket.symbol} />
+          </div>
+          <div className="order-area">
+            <OrderForm
+              market={selectedMarket}
+              bestBid={bestBid}
+              bestAsk={bestAsk}
+              onSubmitOrder={handleSubmitOrder}
+              loading={apiLoading}
+              externalPrice={clickedPrice}
+            />
+          </div>
         </section>
 
+        {/* Right sidebar — Recent Trades */}
         <aside className="right-panel">
           <TradeList trades={trades} />
         </aside>

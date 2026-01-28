@@ -1,44 +1,65 @@
-import { useState, useCallback, useMemo } from 'react';
-import type { Market, OrderSide, OrderType, OrderRequest, BookLevel } from '../../types/market';
+import { useState, useCallback, useMemo, useEffect } from 'react';
+import type { Market, OrderSide, OrderType, OrderRequest } from '../../types/market';
 import { formatPrice } from '../../utils/formatters';
 import './OrderForm.css';
 
 interface OrderFormProps {
   market: Market;
-  bestBid: BookLevel | null;
-  bestAsk: BookLevel | null;
+  bestBid?: unknown;
+  bestAsk?: unknown;
   onSubmitOrder: (order: OrderRequest) => Promise<{ success: boolean; message: string }>;
   loading: boolean;
+  externalPrice?: number | null;
 }
 
-const USER_ID = '1'; // In production, this would come from auth
+const USER_ID = '1';
 
-export function OrderForm({ market, bestBid, bestAsk, onSubmitOrder, loading }: OrderFormProps) {
-  const [side, setSide] = useState<OrderSide>('BID');
-  const [orderType, setOrderType] = useState<OrderType>('LIMIT');
+function OrderSideForm({
+  side,
+  market,
+  orderType,
+  onSubmitOrder,
+  loading,
+  externalPrice,
+}: {
+  side: OrderSide;
+  market: Market;
+  orderType: OrderType;
+  onSubmitOrder: (order: OrderRequest) => Promise<{ success: boolean; message: string }>;
+  loading: boolean;
+  externalPrice?: number | null;
+}) {
   const [price, setPrice] = useState('');
   const [quantity, setQuantity] = useState('');
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [sliderValue, setSliderValue] = useState(0);
 
   const isBuy = side === 'BID';
 
-  // Calculate total
+  // Sync external price from order book click
+  useEffect(() => {
+    if (externalPrice !== null && externalPrice !== undefined) {
+      setPrice(externalPrice.toString());
+    }
+  }, [externalPrice]);
+
   const total = useMemo(() => {
     const p = parseFloat(price) || 0;
     const q = parseFloat(quantity) || 0;
     return p * q;
   }, [price, quantity]);
 
-  // Quick fill price from order book
-  const handlePriceClick = useCallback((newPrice: number) => {
-    setPrice(newPrice.toString());
+  const handlePercentage = useCallback((percent: number) => {
+    setSliderValue(percent);
+    const baseQty = 1;
+    setQuantity((baseQty * percent / 100).toFixed(8));
   }, []);
 
-  // Percentage buttons for quantity
-  const handlePercentage = useCallback((percent: number) => {
-    // In production, this would calculate based on user's balance
-    const baseQty = 1; // Example base quantity
-    setQuantity((baseQty * percent / 100).toFixed(8));
+  const handleSlider = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const pct = parseInt(e.target.value);
+    setSliderValue(pct);
+    const baseQty = 1;
+    setQuantity((baseQty * pct / 100).toFixed(8));
   }, []);
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
@@ -47,13 +68,13 @@ export function OrderForm({ market, bestBid, bestAsk, onSubmitOrder, loading }: 
     const priceNum = parseFloat(price);
     const quantityNum = parseFloat(quantity);
 
-    if (orderType === 'LIMIT' && (!priceNum || priceNum <= 0)) {
-      setNotification({ type: 'error', message: 'Please enter a valid price' });
+    if (orderType !== 'MARKET' && (!priceNum || priceNum <= 0)) {
+      setNotification({ type: 'error', message: 'Enter a valid price' });
       return;
     }
 
     if (!quantityNum || quantityNum <= 0) {
-      setNotification({ type: 'error', message: 'Please enter a valid quantity' });
+      setNotification({ type: 'error', message: 'Enter a valid amount' });
       return;
     }
 
@@ -71,40 +92,109 @@ export function OrderForm({ market, bestBid, bestAsk, onSubmitOrder, loading }: 
     const result = await onSubmitOrder(order);
 
     if (result.success) {
-      setNotification({ type: 'success', message: `${isBuy ? 'Buy' : 'Sell'} order submitted` });
+      setNotification({ type: 'success', message: `${isBuy ? 'Buy' : 'Sell'} order placed` });
       setPrice('');
       setQuantity('');
+      setSliderValue(0);
     } else {
       setNotification({ type: 'error', message: result.message });
     }
 
-    // Clear notification after 3 seconds
     setTimeout(() => setNotification(null), 3000);
   }, [price, quantity, orderType, side, market.symbol, isBuy, total, onSubmitOrder]);
 
   return (
+    <form onSubmit={handleSubmit} className={`order-side-form ${isBuy ? 'buy-form' : 'sell-form'}`}>
+      {/* Price Input */}
+      {orderType !== 'MARKET' && (
+        <div className="form-group">
+          <label>Price</label>
+          <div className="input-wrapper">
+            <input
+              type="number"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              placeholder="0.00"
+              step="0.01"
+              min="0"
+            />
+            <span className="input-suffix">{market.quoteAsset}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Amount Input */}
+      <div className="form-group">
+        <label>Amount</label>
+        <div className="input-wrapper">
+          <input
+            type="number"
+            value={quantity}
+            onChange={(e) => setQuantity(e.target.value)}
+            placeholder="0.00"
+            step="0.00000001"
+            min="0"
+          />
+          <span className="input-suffix">{market.baseAsset}</span>
+        </div>
+      </div>
+
+      {/* Slider */}
+      <div className="slider-group">
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={sliderValue}
+          onChange={handleSlider}
+          className={`amount-slider ${isBuy ? 'buy-slider' : 'sell-slider'}`}
+        />
+        <div className="slider-marks">
+          {[0, 25, 50, 75, 100].map(pct => (
+            <button
+              key={pct}
+              type="button"
+              onClick={() => handlePercentage(pct)}
+              className={`slider-mark ${sliderValue >= pct ? 'active' : ''}`}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Total */}
+      <div className="form-group">
+        <label>Total</label>
+        <div className="total-display">
+          <span>{formatPrice(total)}</span>
+          <span className="input-suffix">{market.quoteAsset}</span>
+        </div>
+      </div>
+
+      {/* Notification */}
+      {notification && (
+        <div className={`notification ${notification.type}`}>
+          {notification.message}
+        </div>
+      )}
+
+      {/* Submit Button */}
+      <button
+        type="submit"
+        className={`submit-btn ${isBuy ? 'buy' : 'sell'}`}
+        disabled={loading}
+      >
+        {loading ? '...' : `${isBuy ? 'Buy' : 'Sell'} ${market.baseAsset}`}
+      </button>
+    </form>
+  );
+}
+
+export function OrderForm({ market, onSubmitOrder, loading, externalPrice }: OrderFormProps) {
+  const [orderType, setOrderType] = useState<OrderType>('LIMIT');
+
+  return (
     <div className="order-form-container">
-      <div className="order-form-header">
-        <h3>Place Order</h3>
-      </div>
-
-      {/* Side Toggle */}
-      <div className="side-toggle">
-        <button
-          className={`side-btn buy ${side === 'BID' ? 'active' : ''}`}
-          onClick={() => setSide('BID')}
-        >
-          Buy
-        </button>
-        <button
-          className={`side-btn sell ${side === 'ASK' ? 'active' : ''}`}
-          onClick={() => setSide('ASK')}
-        >
-          Sell
-        </button>
-      </div>
-
-      {/* Order Type */}
+      {/* Shared Order Type Tabs */}
       <div className="order-type-tabs">
         <button
           className={`type-tab ${orderType === 'LIMIT' ? 'active' : ''}`}
@@ -126,91 +216,25 @@ export function OrderForm({ market, bestBid, bestAsk, onSubmitOrder, loading }: 
         </button>
       </div>
 
-      <form onSubmit={handleSubmit} className="order-form">
-        {/* Price Input */}
-        {orderType !== 'MARKET' && (
-          <div className="form-group">
-            <label>Price ({market.quoteAsset})</label>
-            <div className="input-with-buttons">
-              <input
-                type="number"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                placeholder="0.00"
-                step="0.01"
-                min="0"
-              />
-              <div className="quick-buttons">
-                {bestBid && (
-                  <button type="button" onClick={() => handlePriceClick(bestBid.price)} className="quick-btn">
-                    Bid
-                  </button>
-                )}
-                {bestAsk && (
-                  <button type="button" onClick={() => handlePriceClick(bestAsk.price)} className="quick-btn">
-                    Ask
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Quantity Input */}
-        <div className="form-group">
-          <label>Amount ({market.baseAsset})</label>
-          <input
-            type="number"
-            value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            placeholder="0.00000000"
-            step="0.00000001"
-            min="0"
-          />
-          <div className="percentage-buttons">
-            {[25, 50, 75, 100].map(pct => (
-              <button key={pct} type="button" onClick={() => handlePercentage(pct)} className="pct-btn">
-                {pct}%
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Total */}
-        <div className="form-group">
-          <label>Total ({market.quoteAsset})</label>
-          <div className="total-display">
-            ${formatPrice(total)}
-          </div>
-        </div>
-
-        {/* Notification */}
-        {notification && (
-          <div className={`notification ${notification.type}`}>
-            {notification.message}
-          </div>
-        )}
-
-        {/* Submit Button */}
-        <button
-          type="submit"
-          className={`submit-btn ${isBuy ? 'buy' : 'sell'}`}
-          disabled={loading}
-        >
-          {loading ? 'Submitting...' : `${isBuy ? 'Buy' : 'Sell'} ${market.baseAsset}`}
-        </button>
-      </form>
-
-      {/* Market Info */}
-      <div className="market-prices">
-        <div className="price-row">
-          <span className="label">Best Bid:</span>
-          <span className="value bid">{bestBid ? `$${formatPrice(bestBid.price)}` : '-'}</span>
-        </div>
-        <div className="price-row">
-          <span className="label">Best Ask:</span>
-          <span className="value ask">{bestAsk ? `$${formatPrice(bestAsk.price)}` : '-'}</span>
-        </div>
+      {/* Side-by-side Buy/Sell Forms */}
+      <div className="order-forms-row">
+        <OrderSideForm
+          side="BID"
+          market={market}
+          orderType={orderType}
+          onSubmitOrder={onSubmitOrder}
+          loading={loading}
+          externalPrice={externalPrice}
+        />
+        <div className="form-divider" />
+        <OrderSideForm
+          side="ASK"
+          market={market}
+          orderType={orderType}
+          onSubmitOrder={onSubmitOrder}
+          loading={loading}
+          externalPrice={externalPrice}
+        />
       </div>
     </div>
   );

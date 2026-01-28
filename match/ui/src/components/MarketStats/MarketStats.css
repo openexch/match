@@ -1,5 +1,5 @@
 /* ================================================================
-   MARKET STATS BAR — Ticker display
+   MARKET STATS BAR — Ticker display (Compact)
    ================================================================ */
 
 .market-stats {
@@ -17,20 +17,19 @@
 .stat-item {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 12px 20px;
+  gap: 2px;
+  padding: 8px 18px;
   position: relative;
 }
 
-/* Vertical dividers between stats */
 .stat-item + .stat-item {
   border-left: 1px solid var(--border-color);
 }
 
 .stat-item.primary {
-  padding: 12px 24px;
+  padding: 8px 20px;
   background: linear-gradient(135deg, rgba(0, 184, 217, 0.04) 0%, transparent 100%);
-  min-width: 180px;
+  min-width: 160px;
 }
 
 .stat-label {
@@ -45,15 +44,16 @@
 .stat-value {
   font-family: var(--font-mono);
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
   color: var(--text-primary);
   font-weight: 500;
   white-space: nowrap;
 }
 
 .stat-value.large {
-  font-size: 26px;
+  font-size: 28px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
   line-height: 1.1;
   transition: color 0.3s ease;
 }
@@ -66,7 +66,6 @@
   color: var(--accent-red);
 }
 
-/* ── Change Badge (24h Change styling) ── */
 .stat-item:nth-child(2) .stat-value.positive,
 .stat-item:nth-child(2) .stat-value.negative {
   font-weight: 600;
@@ -84,7 +83,7 @@
   .stat-item.primary {
     width: 100%;
     border-bottom: 1px solid var(--border-color);
-    padding: 12px 18px;
+    padding: 10px 16px;
   }
 
   .stat-item.primary + .stat-item {
@@ -92,9 +91,9 @@
   }
 
   .stat-item {
-    padding: 10px 16px;
+    padding: 8px 14px;
     flex: 1;
-    min-width: 100px;
+    min-width: 90px;
   }
 }
 
@@ -103,12 +102,11 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0;
-    border-radius: 10px;
+    border-radius: 8px;
   }
 
   .stat-item.primary {
     grid-column: 1 / -1;
-    padding-bottom: 10px;
     border-bottom: 1px solid var(--border-color);
   }
 
@@ -116,13 +114,12 @@
     border-left: none;
   }
 
-  /* Alternate borders */
   .stat-item:nth-child(odd):not(.primary) {
     border-right: 1px solid var(--border-color);
   }
 
   .stat-item:not(.primary) {
-    padding: 10px 14px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--border-color);
   }
 
@@ -140,19 +137,11 @@
 }
 
 @media (max-width: 480px) {
-  .stat-item:not(.primary) {
-    padding: 8px 12px;
-  }
-
   .stat-value.large {
     font-size: 20px;
   }
 
   .stat-value {
     font-size: 11px;
-  }
-
-  .stat-label {
-    font-size: 8.5px;
   }
 }

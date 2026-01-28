@@ -1,5 +1,5 @@
 /* ================================================================
-   ORDER BOOK — Professional depth visualization
+   ORDER BOOK — Professional depth visualization (Vertical + Horizontal)
    ================================================================ */
 
 .order-book {
@@ -18,7 +18,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
   background: var(--bg-tertiary);
@@ -31,8 +31,8 @@
 }
 
 .header-title svg {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   color: var(--text-muted);
 }
 
@@ -44,32 +44,220 @@
   letter-spacing: -0.01em;
 }
 
-.header-stats {
+/* ── View Toggle Buttons ── */
+.view-toggles {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  gap: 2px;
+  background: var(--bg-input);
+  padding: 2px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
 }
 
-.header-stats .stat {
-  font-size: 11px;
+.view-btn {
+  padding: 3px 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.view-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.view-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.view-btn.active {
+  background: var(--bg-hover);
+  color: var(--text-bright);
+}
+
+.view-btn.bids-btn {
+  color: var(--accent-green);
+  opacity: 0.4;
+}
+.view-btn.bids-btn.active {
+  opacity: 1;
+  background: var(--accent-green-bg);
+}
+
+.view-btn.asks-btn {
+  color: var(--accent-red);
+  opacity: 0.4;
+}
+.view-btn.asks-btn.active {
+  opacity: 1;
+  background: var(--accent-red-bg);
+}
+
+/* ================================================================
+   VERTICAL LAYOUT (Default — Binance-style)
+   ================================================================ */
+.book-vertical {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.vertical-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 4px;
+  padding: 5px 10px;
+  font-size: 10px;
   font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  background: var(--bg-tertiary);
+}
+
+.vertical-header .col.price { text-align: left; }
+.vertical-header .col.amount { text-align: right; }
+.vertical-header .col.total { text-align: right; }
+
+/* ── Sections ── */
+.vertical-section {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Asks section: push content to bottom so lowest ask is near spread */
+.asks-section {
+  justify-content: flex-end;
+}
+
+/* ── Spread Indicator (Middle) ── */
+.spread-indicator {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.spread-price {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  letter-spacing: -0.02em;
+}
+
+.spread-label {
+  font-size: 10px;
+  color: var(--text-muted);
   font-family: var(--font-mono);
 }
 
-.header-stats .bid-stat {
+/* ================================================================
+   BOOK ROWS (Shared — both layouts)
+   ================================================================ */
+.book-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 4px;
+  padding: 2px 10px;
+  position: relative;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  transition: background var(--transition-fast);
+  line-height: 1.7;
+  cursor: pointer;
+}
+
+.book-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* ── Depth Bars (fill from RIGHT for vertical) ── */
+.depth-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  transition: width 0.25s ease-out;
+  pointer-events: none;
+}
+
+.book-row.bid .depth-bar {
+  background: linear-gradient(270deg, rgba(14, 203, 129, 0.15) 0%, rgba(14, 203, 129, 0.03) 100%);
+}
+
+.book-row.ask .depth-bar {
+  background: linear-gradient(270deg, rgba(246, 70, 93, 0.15) 0%, rgba(246, 70, 93, 0.03) 100%);
+}
+
+/* ── Columns ── */
+.book-row .col {
+  z-index: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.book-row .col.price {
+  text-align: left;
+  font-weight: 600;
+}
+
+.book-row.bid .col.price {
   color: var(--accent-green);
 }
 
-.header-stats .ask-stat {
+.book-row.ask .col.price {
   color: var(--accent-red);
 }
 
-/* ── Spread Bar ── */
+.book-row .col.amount {
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.book-row .col.total {
+  color: var(--text-muted);
+  text-align: right;
+}
+
+/* ── Empty State ── */
+.empty-side {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* ================================================================
+   HORIZONTAL LAYOUT (Side-by-side — legacy)
+   ================================================================ */
 .spread-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 14px;
+  padding: 6px 12px;
   background: var(--bg-primary);
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
@@ -79,7 +267,7 @@
 .spread-info {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .spread-bar .label {
@@ -91,20 +279,18 @@
 }
 
 .mid-price .value {
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-bright);
   font-family: var(--font-mono);
-  letter-spacing: -0.02em;
 }
 
 .spread-info .value {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-secondary);
   font-family: var(--font-mono);
 }
 
-/* ── Side-by-side Layout ── */
 .book-sides {
   flex: 1;
   display: grid;
@@ -124,12 +310,11 @@
   border-right: 1px solid var(--border-color);
 }
 
-/* ── Side Headers ── */
 .side-header {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: 4px;
-  padding: 6px 10px;
+  padding: 5px 10px;
   font-size: 10px;
   font-weight: 600;
   color: var(--text-muted);
@@ -140,120 +325,53 @@
   background: var(--bg-tertiary);
 }
 
-.side-header .col {
-  white-space: nowrap;
-}
-
+.side-header .col { white-space: nowrap; }
 .bids-side .side-header .col.price { text-align: right; }
 .asks-side .side-header .col.price { text-align: left; }
 .bids-side .side-header .col.total { text-align: left; }
 .asks-side .side-header .col.total { text-align: right; }
 .side-header .col.amount { text-align: center; }
 
-/* ── Side Content ── */
 .side-content {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
-/* ── Book Rows ── */
-.book-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 4px;
-  padding: 3px 10px;
-  position: relative;
-  font-size: 11.5px;
-  font-family: var(--font-mono);
-  transition: background var(--transition-fast);
-  line-height: 1.6;
-}
-
-.book-row:hover {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.book-row:hover .col.price {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-/* ── Depth Bars ── */
-.depth-bar {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  transition: width 0.25s ease-out;
-  pointer-events: none;
-}
-
-.bids-side .depth-bar {
+/* Horizontal mode depth bars (left/right) */
+.horizontal-mode .bids-side .depth-bar {
   right: 0;
+  left: auto;
   background: linear-gradient(270deg, rgba(14, 203, 129, 0.18) 0%, rgba(14, 203, 129, 0.04) 100%);
   border-right: 2px solid rgba(14, 203, 129, 0.25);
 }
 
-.asks-side .depth-bar {
+.horizontal-mode .asks-side .depth-bar {
   left: 0;
+  right: auto;
   background: linear-gradient(90deg, rgba(246, 70, 93, 0.18) 0%, rgba(246, 70, 93, 0.04) 100%);
   border-left: 2px solid rgba(246, 70, 93, 0.25);
 }
 
-/* ── Columns ── */
-.book-row .col {
-  z-index: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.book-row.bid .col.price {
-  color: var(--accent-green);
-  text-align: right;
-  font-weight: 600;
-}
-
-.book-row.ask .col.price {
-  color: var(--accent-red);
-  text-align: left;
-  font-weight: 600;
-}
-
-.book-row .col.amount {
-  color: var(--text-primary);
-  text-align: center;
-}
-
-.bids-side .book-row .col.total {
-  color: var(--text-muted);
-  text-align: left;
-}
-
-.asks-side .book-row .col.total {
-  color: var(--text-muted);
-  text-align: right;
-}
-
-/* ── Empty State ── */
-.empty-side {
-  padding: 24px;
-  text-align: center;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-style: italic;
-}
+.horizontal-mode .book-row.bid .col.price { text-align: right; }
+.horizontal-mode .book-row.ask .col.price { text-align: left; }
+.horizontal-mode .book-row .col.amount { text-align: center; }
+.horizontal-mode .bids-side .book-row .col.total { text-align: left; }
+.horizontal-mode .asks-side .book-row .col.total { text-align: right; }
 
 /* ── Scrollbar ── */
-.side-content::-webkit-scrollbar {
+.side-content::-webkit-scrollbar,
+.vertical-section::-webkit-scrollbar {
   width: 3px;
 }
 
-.side-content::-webkit-scrollbar-track {
+.side-content::-webkit-scrollbar-track,
+.vertical-section::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.side-content::-webkit-scrollbar-thumb {
+.side-content::-webkit-scrollbar-thumb,
+.vertical-section::-webkit-scrollbar-thumb {
   background: var(--bg-hover);
   border-radius: 2px;
 }
@@ -310,83 +428,19 @@
   }
 
   .order-book-header {
-    padding: 10px 12px;
-  }
-
-  .header-title h3 {
-    font-size: 13px;
-  }
-
-  .header-title svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  .header-stats .stat {
-    font-size: 10px;
-  }
-
-  .spread-bar {
-    padding: 6px 12px;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .mid-price .value {
-    font-size: 15px;
-  }
-
-  .spread-info .value {
-    font-size: 10px;
-  }
-
-  .book-sides {
-    grid-template-columns: 1fr;
-  }
-
-  .bids-side {
-    border-right: none;
-    border-bottom: 1px solid var(--border-color);
-    max-height: 220px;
-  }
-
-  .asks-side {
-    max-height: 220px;
-  }
-
-  .book-row {
-    padding: 4px 10px;
-    font-size: 11.5px;
-    min-height: 30px;
-  }
-
-  .side-header {
-    padding: 6px 10px;
-    font-size: 9px;
-  }
-}
-
-@media (max-width: 480px) {
-  .order-book-header {
     padding: 8px 10px;
-  }
-
-  .spread-bar {
-    padding: 6px 10px;
   }
 
   .book-row {
     padding: 3px 8px;
-    font-size: 11px;
+    font-size: 10.5px;
   }
 
-  .side-header {
+  .spread-indicator {
     padding: 5px 8px;
-    font-size: 9px;
   }
 
-  .bids-side,
-  .asks-side {
-    max-height: 180px;
+  .spread-price {
+    font-size: 14px;
   }
 }

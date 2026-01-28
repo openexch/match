@@ -17,7 +17,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
   background: var(--bg-tertiary);
@@ -34,7 +34,7 @@
 .trade-count {
   background: var(--bg-hover);
   color: var(--text-muted);
-  padding: 2px 8px;
+  padding: 2px 7px;
   border-radius: var(--radius-full);
   font-size: 10px;
   font-weight: 600;
@@ -43,9 +43,9 @@
 
 .trade-list-columns {
   display: grid;
-  grid-template-columns: 1fr 1fr 80px;
-  gap: 8px;
-  padding: 6px 14px;
+  grid-template-columns: 1fr 1fr 70px;
+  gap: 6px;
+  padding: 5px 12px;
   font-size: 10px;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -64,15 +64,17 @@
 /* ── Trade Rows ── */
 .trade-row {
   display: grid;
-  grid-template-columns: 1fr 1fr 80px;
-  gap: 8px;
-  padding: 4px 14px;
+  grid-template-columns: 1fr 1fr 70px;
+  gap: 6px;
+  padding: 2px 12px;
   font-family: var(--font-mono);
-  font-size: 11.5px;
-  border-bottom: 1px solid rgba(34, 39, 48, 0.5);
-  animation: tradeSlideIn 0.25s ease-out;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid rgba(34, 39, 48, 0.3);
+  animation: tradeSlideIn 0.3s ease-out;
   transition: background var(--transition-fast);
   line-height: 1.7;
+  position: relative;
 }
 
 .trade-row:hover {
@@ -80,28 +82,39 @@
 }
 
 @keyframes tradeSlideIn {
-  from {
+  0% {
     opacity: 0;
-    transform: translateY(-6px);
+    transform: translateY(-8px);
   }
-  50% {
+  30% {
     opacity: 1;
   }
-  to {
+  100% {
     opacity: 1;
     transform: translateY(0);
   }
 }
 
-/* ── Buy/Sell Side Indicator ── */
+/* Flash effect on entry */
 .trade-row.buy {
-  border-left: 2px solid rgba(14, 203, 129, 0.5);
+  animation: tradeSlideIn 0.3s ease-out, tradeFlashGreen 0.6s ease-out;
 }
 
 .trade-row.sell {
-  border-left: 2px solid rgba(246, 70, 93, 0.5);
+  animation: tradeSlideIn 0.3s ease-out, tradeFlashRed 0.6s ease-out;
 }
 
+@keyframes tradeFlashGreen {
+  0% { background: rgba(14, 203, 129, 0.15); }
+  100% { background: transparent; }
+}
+
+@keyframes tradeFlashRed {
+  0% { background: rgba(246, 70, 93, 0.15); }
+  100% { background: transparent; }
+}
+
+/* ── Buy/Sell Side Indicator ── */
 .trade-row.buy .trade-price {
   color: var(--accent-green);
 }
@@ -120,7 +133,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 5px;
+  gap: 4px;
 }
 
 .trade-count-badge {
@@ -153,7 +166,7 @@
 .no-trades-icon {
   width: 36px;
   height: 36px;
-  opacity: 0.3;
+  opacity: 0.25;
   color: var(--text-muted);
 }
 
@@ -185,45 +198,18 @@
   }
 
   .trade-list-header-bar {
-    padding: 10px 12px;
-  }
-
-  .trade-list-header-bar h3 {
-    font-size: 13px;
+    padding: 8px 10px;
   }
 
   .trade-list-columns {
-    grid-template-columns: 1fr 1fr 68px;
-    gap: 6px;
-    padding: 6px 12px;
+    padding: 5px 10px;
     font-size: 9px;
   }
 
   .trade-row {
-    grid-template-columns: 1fr 1fr 68px;
-    gap: 6px;
-    padding: 5px 12px;
-    font-size: 11px;
-    min-height: 34px;
-    align-items: center;
-  }
-
-  .trade-time {
-    font-size: 9px;
-  }
-}
-
-@media (max-width: 480px) {
-  .trade-list-columns {
-    padding: 6px 10px;
-  }
-
-  .trade-row {
-    padding: 4px 10px;
+    padding: 3px 10px;
     font-size: 10.5px;
-  }
-
-  .trade-time {
-    font-size: 9px;
+    min-height: 28px;
+    align-items: center;
   }
 }

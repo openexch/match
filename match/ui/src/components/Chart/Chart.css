@@ -1,0 +1,134 @@
+/* ================================================================
+   CHART — TradingView Lightweight Charts wrapper
+   ================================================================ */
+
+.chart-component {
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── Toolbar ── */
+.chart-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  background: var(--bg-tertiary);
+}
+
+.chart-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chart-title svg {
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+}
+
+/* ── Interval Tabs ── */
+.interval-tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-input);
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+}
+
+.interval-btn {
+  padding: 4px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all var(--transition-fast);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.interval-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.interval-btn.active {
+  background: var(--accent-primary);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(0, 184, 217, 0.3);
+}
+
+/* ── Chart Container ── */
+.chart-container {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+/* Override lightweight-charts internal styles for dark theme consistency */
+.chart-container .tv-lightweight-charts {
+  border: none !important;
+}
+
+/* ── Empty State ── */
+.chart-empty {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-muted);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.chart-empty svg {
+  width: 48px;
+  height: 48px;
+  opacity: 0.25;
+}
+
+.chart-empty span {
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* ================================================================
+   RESPONSIVE
+   ================================================================ */
+@media (max-width: 768px) {
+  .chart-toolbar {
+    padding: 6px 10px;
+  }
+
+  .chart-title {
+    font-size: 12px;
+  }
+
+  .interval-btn {
+    padding: 4px 8px;
+    font-size: 10px;
+  }
+}
