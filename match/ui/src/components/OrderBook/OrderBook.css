@@ -4,13 +4,12 @@
 
 .order-book {
   background: var(--bg-secondary);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   border: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   height: 100%;
-  box-shadow: var(--shadow-sm);
 }
 
 /* ── Header ── */

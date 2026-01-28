@@ -8,9 +8,9 @@
   gap: 0;
   padding: 0;
   background: var(--bg-secondary);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-sm);
+  
   overflow: hidden;
 }
 

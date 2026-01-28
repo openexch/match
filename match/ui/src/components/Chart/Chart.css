@@ -4,7 +4,7 @@
 
 .chart-component {
   background: var(--bg-secondary);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   border: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
@@ -12,7 +12,6 @@
   flex: 1;
   min-height: 0;
   position: relative;
-  box-shadow: var(--shadow-sm);
 }
 
 /* ── Toolbar ── */

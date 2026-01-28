@@ -94,6 +94,10 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     private volatile long lastStatsLogMs = 0;
     private static final long STATS_LOG_INTERVAL_MS = 10_000;
 
+    // Stale egress detection — force reconnect if connected but no egress for too long
+    private volatile long lastEgressMessageMs = System.currentTimeMillis();
+    private static final long STALE_EGRESS_TIMEOUT_MS = 30_000; // 30s with no egress = stale
+
     public AeronGateway() {
         // Use environment variable or default to 127.0.0.1 for development (avoids IPv6 issues)
         final String clusterAddresses = System.getenv().getOrDefault("CLUSTER_ADDRESSES", "127.0.0.1,127.0.0.1,127.0.0.1");
@@ -248,9 +252,10 @@ public class AeronGateway implements EgressListener, AutoCloseable {
             clusterStatus.setGatewayConnected(true);
         }
 
-        // Reset backoff and failure counter on successful connection
+        // Reset backoff, failure counter, and egress timer on successful connection
         reconnectBackoffMs = RECONNECT_COOLDOWN_MS;
         consecutiveReconnectFailures = 0;
+        lastEgressMessageMs = System.currentTimeMillis();
     }
 
     /**
@@ -386,14 +391,33 @@ public class AeronGateway implements EgressListener, AutoCloseable {
                 // Periodic stats logging
                 long nowMs = System.currentTimeMillis();
                 if (nowMs - lastStatsLogMs > STATS_LOG_INTERVAL_MS) {
+                    long egressAgeMs = nowMs - lastEgressMessageMs;
                     var sub = currentCluster.egressSubscription();
                     System.out.println("GATEWAY STATS: egress=" + egressMessageCount +
                                       ", heartbeats=" + heartbeatCount +
                                       ", connected=" + isConnected() +
                                       ", subConnected=" + sub.isConnected() +
                                       ", images=" + sub.imageCount() +
-                                      ", sessionId=" + currentCluster.clusterSessionId());
+                                      ", sessionId=" + currentCluster.clusterSessionId() +
+                                      ", egressAge=" + egressAgeMs + "ms");
                     lastStatsLogMs = nowMs;
+
+                    // STALE EGRESS DETECTION: connected but no data flowing
+                    // This catches the case where the cluster client reports connected
+                    // but the egress subscription image is stale (e.g., after leader change)
+                    if (egressAgeMs > STALE_EGRESS_TIMEOUT_MS && egressMessageCount > 0) {
+                        System.err.println("STALE EGRESS DETECTED: no egress messages for " +
+                            egressAgeMs + "ms while connected. Forcing reconnect.");
+                        // Force cluster close to trigger reconnection
+                        CloseHelper.quietClose(currentCluster);
+                        cluster = null;
+                        if (clusterStatus != null) {
+                            clusterStatus.setGatewayConnected(false);
+                        }
+                        // Reset backoff for fast recovery
+                        lastReconnectAttempt = 0;
+                        reconnectBackoffMs = RECONNECT_COOLDOWN_MS;
+                    }
                 }
 
                 idleStrategy.idle(work);
@@ -509,6 +533,7 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     @Override
     public void onMessage(long clusterSessionId, long timestamp, DirectBuffer buffer, int offset, int length, Header header) {
         egressMessageCount++;
+        lastEgressMessageMs = System.currentTimeMillis();
 
         // Decode SBE header to determine message type
         if (length < MessageHeaderDecoder.ENCODED_LENGTH) {

@@ -66,6 +66,7 @@ var (
 
 func randomOrder() []byte {
 	side := sides[rand.Intn(2)]
+	// Overlapping prices so orders actually match and generate trades
 	price := basePrice + rand.NormFloat64()*500
 	qty := 0.001 + rand.Float64()*0.099
 

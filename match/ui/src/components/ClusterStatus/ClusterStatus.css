@@ -5,10 +5,10 @@
 .cluster-status {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   padding: 16px;
   margin-bottom: 16px;
-  box-shadow: var(--shadow-sm);
+  
 }
 
 .cluster-header {
