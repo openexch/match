@@ -58,6 +58,10 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     private volatile int consecutiveReconnectFailures = 0;
     private static final int MAX_FAILURES_BEFORE_DRIVER_RESET = 3;
 
+    // Leader transition tracking — during this window, offers return 503 instead of 500
+    private volatile long leaderTransitionDeadlineMs = 0;
+    private static final long LEADER_TRANSITION_TIMEOUT_MS = 30_000; // 30s max transition
+
     // Cluster connection config
     private final String ingressEndpoints;
     private final String egressChannel;
@@ -163,27 +167,36 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     /**
      * Clean up stale /dev/shm/aeron-gateway-* directories that were left behind
      * by previous sessions that didn't shut down cleanly.
+     * Only removes directories whose PID suffix corresponds to a dead process.
      */
     private void cleanStaleGatewayDirs() {
+        long myPid = ProcessHandle.current().pid();
         java.io.File shmDir = new java.io.File("/dev/shm");
         java.io.File[] staleDirs = shmDir.listFiles((dir, name) ->
             name.startsWith("aeron-gateway-") || name.startsWith("aeron-order-") || name.startsWith("aeron-market-"));
         if (staleDirs == null) return;
 
         for (java.io.File staleDir : staleDirs) {
-            // Check if the PID in the directory name is still running
-            java.io.File cncFile = new java.io.File(staleDir, "cnc.dat");
-            if (cncFile.exists()) {
+            String name = staleDir.getName();
+            // Extract PID from directory name (last segment after -)
+            int lastDash = name.lastIndexOf('-');
+            if (lastDash >= 0) {
                 try {
-                    // Try to check if the cnc.dat is still held by a live process
-                    // If we can delete it, the process is gone
-                    if (staleDir.canWrite()) {
-                        deleteDirectory(staleDir);
-                        System.out.println("Cleaned stale MediaDriver dir: " + staleDir.getName());
-                    }
-                } catch (Exception e) {
-                    // Owned by another process or root — skip
+                    long dirPid = Long.parseLong(name.substring(lastDash + 1));
+                    // Skip our own PID — dirDeleteOnStart will handle it
+                    if (dirPid == myPid) continue;
+                    // Skip if PID is still alive
+                    if (ProcessHandle.of(dirPid).map(ProcessHandle::isAlive).orElse(false)) continue;
+                } catch (NumberFormatException e) {
+                    // Old-style nanoTime directory — always clean up
                 }
+            }
+
+            try {
+                deleteDirectory(staleDir);
+                System.out.println("Cleaned stale MediaDriver dir: " + name);
+            } catch (Exception e) {
+                System.err.println("Failed to clean " + name + ": " + e.getMessage());
             }
         }
     }
@@ -408,18 +421,38 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     // ==================== Public API ====================
 
     /**
-     * Check if connected to cluster.
-     * Uses AeronCluster's internal state as the source of truth.
+     * Check if connected to cluster and ready to accept orders.
+     * Returns false during leader transitions to prevent stale publication offers.
      */
     public boolean isConnected() {
         AeronCluster c = cluster;
-        return c != null && !c.isClosed();
+        if (c == null || c.isClosed()) {
+            return false;
+        }
+        // During leader transition, publication may be stale
+        if (isTransitioning()) {
+            // Check if ingress publication is actually connected to new leader
+            return c.ingressPublication() != null && c.ingressPublication().isConnected();
+        }
+        return true;
+    }
+
+    /**
+     * Check if we're in a leader transition window.
+     * During this period, offer failures are transient (503) not permanent (500).
+     */
+    public boolean isTransitioning() {
+        long deadline = leaderTransitionDeadlineMs;
+        return deadline > 0 && System.currentTimeMillis() < deadline;
     }
 
     /**
      * Offer raw buffer to cluster.
      * Should be called from the same thread as polling for best results,
      * but supports cross-thread calls with proper error handling.
+     *
+     * Throws IllegalStateException for transient disconnects (503-worthy)
+     * and RuntimeException for permanent failures (500-worthy).
      */
     public void offer(DirectBuffer buffer, int offset, int length) {
         AeronCluster c = cluster;
@@ -433,6 +466,10 @@ public class AeronGateway implements EgressListener, AutoCloseable {
 
         while ((result = c.offer(buffer, offset, length)) < 0) {
             if (result == Publication.CLOSED || result == Publication.NOT_CONNECTED) {
+                // If we're in a leader transition, this is expected — signal transient error
+                if (isTransitioning()) {
+                    throw new IllegalStateException("Leader transition in progress, retry shortly");
+                }
                 throw new IllegalStateException("Cluster connection lost: " + getOfferResultName(result));
             }
 
@@ -446,6 +483,12 @@ public class AeronGateway implements EgressListener, AutoCloseable {
             } else {
                 throw new RuntimeException("Failed to send message to cluster: " + getOfferResultName(result));
             }
+        }
+
+        // Successful offer means leader transition is complete
+        if (leaderTransitionDeadlineMs > 0) {
+            System.out.println("Leader transition complete — ingress publication connected to new leader");
+            leaderTransitionDeadlineMs = 0;
         }
     }
 
@@ -538,16 +581,31 @@ public class AeronGateway implements EgressListener, AutoCloseable {
         if (clusterStatus != null && (code == EventCode.ERROR || code == EventCode.CLOSED)) {
             clusterStatus.setGatewayConnected(false);
         }
+
+        // On ERROR or CLOSED, force immediate reconnection attempt (bypass backoff)
+        if (code == EventCode.ERROR || code == EventCode.CLOSED) {
+            System.out.println("Session lost, forcing immediate reconnection...");
+            lastReconnectAttempt = 0; // Reset backoff timer
+            reconnectBackoffMs = RECONNECT_COOLDOWN_MS; // Reset backoff delay
+        }
     }
 
     /**
      * Handle leader change events.
-     * Per Aeron docs: AeronCluster handles reconnection to new leader automatically.
-     * We just need to update our local state.
+     * Per Aeron docs: AeronCluster handles reconnection to new leader automatically
+     * via the egress subscription. However, the ingress publication may need time
+     * to reconnect to the new leader's ingress endpoint.
+     *
+     * We mark the gateway as temporarily unavailable during the transition to
+     * prevent HTTP handlers from attempting offers on a stale publication.
      */
     @Override
     public void onNewLeader(long clusterSessionId, long leadershipTermId, int leaderMemberId, String ingressEndpoints) {
-        System.out.println("New leader elected: member=" + leaderMemberId + ", term=" + leadershipTermId);
+        System.out.println("New leader elected: member=" + leaderMemberId + ", term=" + leadershipTermId +
+                          ", ingress=" + ingressEndpoints);
+
+        // Mark as transitioning — HTTP handlers should return 503 during this window
+        leaderTransitionDeadlineMs = System.currentTimeMillis() + LEADER_TRANSITION_TIMEOUT_MS;
 
         if (clusterStatus != null) {
             clusterStatus.updateLeader(leaderMemberId, leadershipTermId);

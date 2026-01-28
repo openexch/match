@@ -18,11 +18,14 @@ import (
 )
 
 type Stats struct {
-	sent    atomic.Int64
-	success atomic.Int64
-	errors  atomic.Int64
+	sent      atomic.Int64
+	success   atomic.Int64
+	errors    atomic.Int64
+	errors503 atomic.Int64 // Service unavailable (transient)
+	errors500 atomic.Int64 // Server error (permanent)
+	errorsNet atomic.Int64 // Network/connection errors
 
-	mu       sync.Mutex
+	mu        sync.Mutex
 	latencies []float64
 }
 
@@ -141,7 +144,8 @@ func main() {
 
 				if err != nil {
 					stats.recordError()
-					if stats.errors.Load() <= 3 {
+					stats.errorsNet.Add(1)
+					if stats.errorsNet.Load() <= 3 {
 						fmt.Printf("[CONN-ERR] %v\n", err)
 					}
 					continue
@@ -155,6 +159,11 @@ func main() {
 					stats.recordSuccess(latMs)
 				} else {
 					stats.recordError()
+					if resp.StatusCode == 503 {
+						stats.errors503.Add(1)
+					} else if resp.StatusCode >= 500 {
+						stats.errors500.Add(1)
+					}
 					if stats.errors.Load() <= 5 {
 						fmt.Printf("[HTTP-ERR] %d\n", resp.StatusCode)
 					}
@@ -227,8 +236,11 @@ loop:
 				avg = sum / float64(len(recent))
 			}
 
-			fmt.Printf("[%s] rate=%5.0f/s total=%-8d ok=%-8d err=%-6d | p50=%.1fms p99=%.1fms avg=%.1fms\n",
-				now.Format("15:04:05"), currentRate, sent, success, errors, p50, p99, avg)
+			e503 := stats.errors503.Load()
+			e500 := stats.errors500.Load()
+			eNet := stats.errorsNet.Load()
+			fmt.Printf("[%s] rate=%5.0f/s total=%-8d ok=%-8d err=%-6d (503=%d,500=%d,net=%d) | p50=%.1fms p99=%.1fms avg=%.1fms\n",
+				now.Format("15:04:05"), currentRate, sent, success, errors, e503, e500, eNet, p50, p99, avg)
 
 			lastReportSent = sent
 			lastReportTime = now
@@ -260,7 +272,8 @@ loop:
 	fmt.Printf("Duration:     %.1fs\n", totalTime)
 	fmt.Printf("Total sent:   %d\n", totalSent)
 	fmt.Printf("Success:      %d (%.1f%%)\n", totalSuccess, successPct)
-	fmt.Printf("Errors:       %d\n", totalErrors)
+	fmt.Printf("Errors:       %d (503=%d, 500=%d, net=%d)\n",
+		totalErrors, stats.errors503.Load(), stats.errors500.Load(), stats.errorsNet.Load())
 	fmt.Printf("Avg rate:     %.0f/s\n", avgRate)
 
 	if len(lats) > 0 {

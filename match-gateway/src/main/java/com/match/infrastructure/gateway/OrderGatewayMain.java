@@ -28,11 +28,16 @@ public class OrderGatewayMain implements AutoCloseable {
         HttpOrderApi orderApi = new HttpOrderApi(aeronGateway);
         httpServer.createContext("/order", orderApi);
 
-        // Health check endpoint
+        // Health check endpoint — reflects cluster connectivity
         httpServer.createContext("/health", exchange -> {
-            String response = "{\"status\":\"ok\",\"service\":\"order-gateway\"}";
+            boolean connected = aeronGateway.isConnected();
+            boolean transitioning = aeronGateway.isTransitioning();
+            String status = connected ? "ok" : (transitioning ? "transitioning" : "disconnected");
+            int code = connected ? 200 : 503;
+            String response = "{\"status\":\"" + status + "\",\"service\":\"order-gateway\"" +
+                ",\"connected\":" + connected + ",\"transitioning\":" + transitioning + "}";
             exchange.getResponseHeaders().set("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, response.length());
+            exchange.sendResponseHeaders(code, response.length());
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(response.getBytes());
             }

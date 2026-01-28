@@ -54,7 +54,11 @@ public class HttpOrderApi implements HttpHandler {
                         responseText = "Error: " + validationError;
                         statusCode = 400;
                     } else if (!gateway.isConnected()) {
-                        responseText = "Error: Cluster is not connected.";
+                        if (gateway.isTransitioning()) {
+                            responseText = "Error: Leader transition in progress, retry shortly.";
+                        } else {
+                            responseText = "Error: Cluster is not connected.";
+                        }
                         statusCode = 503;
                     } else {
                         sendOrder(order);
@@ -63,6 +67,10 @@ public class HttpOrderApi implements HttpHandler {
             } catch (JsonSyntaxException e) {
                 responseText = "Error: Malformed JSON.";
                 statusCode = 400;
+            } catch (IllegalStateException e) {
+                // Transient cluster disconnects (leader transition, reconnecting)
+                responseText = "Error: " + e.getMessage();
+                statusCode = 503;
             } catch (Exception e) {
                 responseText = "Error processing request: " + e.getMessage();
                 statusCode = 500;
