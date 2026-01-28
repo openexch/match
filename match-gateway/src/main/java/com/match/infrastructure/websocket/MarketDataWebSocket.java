@@ -312,6 +312,10 @@ public class MarketDataWebSocket implements AutoCloseable {
                     ctx.write(new TextWebSocketFrame(tradesJson));
                 }
 
+                // Send candle history for this market (last 200 1m candles)
+                String candleJson = stateManager.buildCandleHistoryJson(requestedMarketId, "1m", 200);
+                ctx.write(new TextWebSocketFrame(candleJson));
+
                 ctx.flush();
             } else {
                 Map<String, Object> response = new HashMap<>();

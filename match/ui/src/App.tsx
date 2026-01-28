@@ -14,7 +14,7 @@ import { MarketSelector } from './components/MarketSelector/MarketSelector';
 import { MarketStats } from './components/MarketStats/MarketStats';
 import { OrderForm } from './components/OrderForm/OrderForm';
 import { AdminPage } from './pages/AdminPage';
-import type { WebSocketMessage, Market, OrderRequest, ClusterStatusMessage, ClusterEventMessage, ExtendedConnectionStatus, BookDeltaMessage, TickerStatsMessage } from './types/market';
+import type { WebSocketMessage, Market, OrderRequest, ClusterStatusMessage, ClusterEventMessage, ExtendedConnectionStatus, BookDeltaMessage, TickerStatsMessage, CandleData, CandleHistoryMessage, CandleUpdateMessage } from './types/market';
 import { MARKETS } from './types/market';
 import './App.css';
 
@@ -52,6 +52,12 @@ function MarketPage() {
   // Price click-to-fill state
   const [clickedPrice, setClickedPrice] = useState<number | null>(null);
 
+  // Server-aggregated candle state
+  const [candles, setCandles] = useState<CandleData[]>([]);
+  const [currentCandle, setCurrentCandle] = useState<CandleData | null>(null);
+  const [chartInterval, setChartInterval] = useState<string>('1m');
+  const chartIntervalRef = useRef<string>('1m');
+
   const { orderBook, levelChanges, handleBookSnapshot, handleBookDelta, resetOrderBook } = useOrderBook();
   const { trades, handleTradesBatch, resetTrades } = useTrades();
   const { stats, setStats, handleTrades, handleBookUpdate, resetStats } = useMarketStats();
@@ -62,6 +68,8 @@ function MarketPage() {
     resetOrderBook();
     resetTrades();
     resetStats();
+    setCandles([]);
+    setCurrentCandle(null);
   }, [resetOrderBook, resetTrades, resetStats]);
 
   const handleReconnecting = useCallback(() => {
@@ -113,6 +121,38 @@ function MarketPage() {
             });
           }
           break;
+        case 'CANDLE_HISTORY': {
+          const candleHist = message as CandleHistoryMessage;
+          if (candleHist.marketId === selectedMarketIdRef.current) {
+            // Only use 1m history from WS; for other intervals we fetch via REST
+            if (chartIntervalRef.current === '1m' || candleHist.interval === chartIntervalRef.current) {
+              setCandles(candleHist.candles);
+              setCurrentCandle(null);
+            }
+          }
+          break;
+        }
+        case 'CANDLE_UPDATE': {
+          const candleUpd = message as CandleUpdateMessage;
+          if (candleUpd.marketId === selectedMarketIdRef.current && candleUpd.interval === '1m') {
+            if (chartIntervalRef.current === '1m') {
+              // Update current candle for real-time chart updates
+              setCurrentCandle(candleUpd.candle);
+              // If this is a new candle (different time from last in history), append to history
+              setCandles(prev => {
+                if (prev.length === 0) return [candleUpd.candle];
+                const last = prev[prev.length - 1];
+                if (candleUpd.candle.time > last.time) {
+                  // New candle bucket — append and shift
+                  return [...prev, candleUpd.candle];
+                }
+                // Same bucket — history will be updated via currentCandle overlay
+                return prev;
+              });
+            }
+          }
+          break;
+        }
         case 'CLUSTER_STATUS':
           handleClusterStatus(message as ClusterStatusMessage);
           break;
@@ -132,6 +172,40 @@ function MarketPage() {
     onReconnected: handleReconnected,
   });
 
+  // Fetch candles from REST API for non-1m intervals
+  const fetchCandles = useCallback(async (marketId: number, interval: string, limit: number = 200) => {
+    try {
+      const apiBase = import.meta.env.VITE_MARKET_WS_URL
+        ? import.meta.env.VITE_MARKET_WS_URL.replace(/^wss?:/, window.location.protocol === 'https:' ? 'https:' : 'http:')
+        : `http://${window.location.hostname}:8081`;
+      const res = await fetch(`${apiBase}/api/candles?marketId=${marketId}&interval=${interval}&limit=${limit}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.candles && data.marketId === selectedMarketIdRef.current) {
+          setCandles(data.candles);
+          setCurrentCandle(null);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch candles:', e);
+    }
+  }, []);
+
+  const handleIntervalChange = useCallback((interval: string) => {
+    chartIntervalRef.current = interval;
+    setChartInterval(interval);
+    setCandles([]);
+    setCurrentCandle(null);
+
+    if (interval === '1m') {
+      // Re-fetch 1m from REST (WS will keep updating via CANDLE_UPDATE)
+      fetchCandles(selectedMarketIdRef.current, '1m');
+    } else {
+      // Fetch from REST for non-1m intervals
+      fetchCandles(selectedMarketIdRef.current, interval);
+    }
+  }, [fetchCandles]);
+
   const effectiveStatus: ExtendedConnectionStatus = useMemo(() => {
     if (status !== 'connected') return status;
     if (clusterState.isElecting) return 'cluster-electing';
@@ -142,6 +216,8 @@ function MarketPage() {
   const handleMarketChange = useCallback((market: Market) => {
     selectedMarketIdRef.current = market.id;
     setSelectedMarket(market);
+    chartIntervalRef.current = '1m';
+    setChartInterval('1m');
     resetAllState();
   }, [resetAllState]);
 
@@ -200,7 +276,13 @@ function MarketPage() {
         {/* Center — Chart + Order Form */}
         <section className="center-panel">
           <div className="chart-area">
-            <Chart trades={trades} symbol={selectedMarket.symbol} />
+            <Chart
+              candles={candles}
+              currentCandle={currentCandle}
+              symbol={selectedMarket.symbol}
+              onIntervalChange={handleIntervalChange}
+              activeInterval={chartInterval}
+            />
           </div>
           <div className="order-area">
             <OrderForm

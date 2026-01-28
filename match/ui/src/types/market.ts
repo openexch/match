@@ -179,6 +179,33 @@ export type ExtendedConnectionStatus =
   | 'cluster-electing'
   | 'cluster-reconnecting';
 
+// Candle types (server-aggregated)
+export interface CandleData {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  tradeCount: number;
+}
+
+export interface CandleHistoryMessage {
+  type: 'CANDLE_HISTORY';
+  marketId: number;
+  market: string;
+  interval: string;
+  candles: CandleData[];
+}
+
+export interface CandleUpdateMessage {
+  type: 'CANDLE_UPDATE';
+  marketId: number;
+  market: string;
+  interval: string;
+  candle: CandleData;
+}
+
 export type WebSocketMessage =
   | TradesBatchMessage
   | BookSnapshotMessage
@@ -190,7 +217,9 @@ export type WebSocketMessage =
   | ErrorMessage
   | TickerStatsMessage
   | ClusterStatusMessage
-  | ClusterEventMessage;
+  | ClusterEventMessage
+  | CandleHistoryMessage
+  | CandleUpdateMessage;
 
 export interface OrderBook {
   bids: BookLevel[];

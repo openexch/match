@@ -40,3 +40,6 @@ match/src/main/resources/static/ui/assets/
 */target/
 dependency-reduced-pom.xml
 node*/
+
+# Stale local cluster data
+node[0-9]/

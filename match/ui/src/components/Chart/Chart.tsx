@@ -1,46 +1,28 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { createChart, CandlestickSeries, HistogramSeries, ColorType } from 'lightweight-charts';
 import type { IChartApi, ISeriesApi, CandlestickData, HistogramData, Time } from 'lightweight-charts';
-import type { AggregatedTrade } from '../../types/market';
+import type { CandleData } from '../../types/market';
 import './Chart.css';
 
 interface ChartProps {
-  trades: AggregatedTrade[];
+  candles: CandleData[];
+  currentCandle: CandleData | null;
   symbol: string;
+  onIntervalChange: (interval: string) => void;
+  activeInterval: string;
 }
 
 type Interval = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
 
-const INTERVAL_MS: Record<Interval, number> = {
-  '1m': 60_000,
-  '5m': 300_000,
-  '15m': 900_000,
-  '1h': 3_600_000,
-  '4h': 14_400_000,
-  '1d': 86_400_000,
-};
+const INTERVALS: Interval[] = ['1m', '5m', '15m', '1h', '4h', '1d'];
 
-interface Candle {
-  time: number; // unix seconds
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
-
-export function Chart({ trades, symbol }: ChartProps) {
+export function Chart({ candles, currentCandle, symbol, onIntervalChange, activeInterval }: ChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
-  const [interval, setIntervalState] = useState<Interval>('1m');
-  const intervalRef = useRef<Interval>('1m');
-
-  // Persistent candle state — survives across renders, never loses history
-  const candleMapRef = useRef<Map<number, Candle>>(new Map());
-  const lastProcessedIdxRef = useRef(0);
   const hasInitialFitRef = useRef(false);
+  const lastCandleCountRef = useRef(0);
 
   // Initialize chart (once)
   useEffect(() => {
@@ -121,79 +103,73 @@ export function Chart({ trades, symbol }: ChartProps) {
     };
   }, []);
 
-  // Process NEW trades incrementally — never rebuilds, only appends/updates
+  // Push candle history to chart when candles array changes
   useEffect(() => {
-    if (!candleSeriesRef.current || !volumeSeriesRef.current || trades.length === 0) return;
-
-    const intervalMs = INTERVAL_MS[intervalRef.current];
-    const candleMap = candleMapRef.current;
-    let updated = false;
-
-    // trades array is newest-first (prepended in useTrades)
-    // On first load or after reset, process ALL trades oldest-first
-    // On subsequent updates, only process new trades at the front
-    const newCount = trades.length - lastProcessedIdxRef.current;
-
-    if (lastProcessedIdxRef.current === 0 || newCount >= trades.length) {
-      // Initial load or reset — process all trades oldest-first
-      for (let i = trades.length - 1; i >= 0; i--) {
-        const trade = trades[i];
-        if (trade.timestamp > 0) {
-          updateCandle(candleMap, trade, intervalMs);
-          updated = true;
-        }
-      }
-    } else if (newCount > 0) {
-      // Incremental — only new trades (at the front of the array)
-      for (let i = newCount - 1; i >= 0; i--) {
-        const trade = trades[i];
-        if (trade.timestamp > 0) {
-          updateCandle(candleMap, trade, intervalMs);
-          updated = true;
-        }
-      }
+    if (!candleSeriesRef.current || !volumeSeriesRef.current) return;
+    if (candles.length === 0) {
+      // Clear the chart
+      candleSeriesRef.current.setData([]);
+      volumeSeriesRef.current.setData([]);
+      lastCandleCountRef.current = 0;
+      hasInitialFitRef.current = false;
+      return;
     }
 
-    lastProcessedIdxRef.current = trades.length;
+    // Build chart data from server candles (already in ascending time order)
+    const candleData: CandlestickData[] = candles.map(c => ({
+      time: c.time as Time,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    }));
 
-    if (updated) {
-      // Convert map to sorted arrays and push to chart
-      const sortedCandles = Array.from(candleMap.values()).sort((a, b) => a.time - b.time);
+    const volumeData: HistogramData[] = candles.map(c => ({
+      time: c.time as Time,
+      value: c.volume,
+      color: c.close >= c.open ? 'rgba(14, 203, 129, 0.3)' : 'rgba(246, 70, 93, 0.3)',
+    }));
 
-      const candleData: CandlestickData[] = sortedCandles.map(c => ({
-        time: c.time as Time,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-      }));
+    candleSeriesRef.current.setData(candleData);
+    volumeSeriesRef.current.setData(volumeData);
+    lastCandleCountRef.current = candles.length;
 
-      const volumeData: HistogramData[] = sortedCandles.map(c => ({
-        time: c.time as Time,
-        value: c.volume,
-        color: c.close >= c.open ? 'rgba(14, 203, 129, 0.3)' : 'rgba(246, 70, 93, 0.3)',
-      }));
-
-      candleSeriesRef.current.setData(candleData);
-      volumeSeriesRef.current.setData(volumeData);
-
-      if (!hasInitialFitRef.current && sortedCandles.length > 0) {
-        chartRef.current?.timeScale().fitContent();
-        hasInitialFitRef.current = true;
-      }
+    if (!hasInitialFitRef.current) {
+      chartRef.current?.timeScale().fitContent();
+      hasInitialFitRef.current = true;
     }
-  }, [trades]);
+  }, [candles]);
+
+  // Update the current (in-progress) candle in real-time
+  useEffect(() => {
+    if (!candleSeriesRef.current || !volumeSeriesRef.current || !currentCandle) return;
+
+    candleSeriesRef.current.update({
+      time: currentCandle.time as Time,
+      open: currentCandle.open,
+      high: currentCandle.high,
+      low: currentCandle.low,
+      close: currentCandle.close,
+    });
+
+    volumeSeriesRef.current.update({
+      time: currentCandle.time as Time,
+      value: currentCandle.volume,
+      color: currentCandle.close >= currentCandle.open
+        ? 'rgba(14, 203, 129, 0.3)'
+        : 'rgba(246, 70, 93, 0.3)',
+    });
+  }, [currentCandle]);
+
+  // Reset fit on interval change
+  useEffect(() => {
+    hasInitialFitRef.current = false;
+    lastCandleCountRef.current = 0;
+  }, [activeInterval]);
 
   const handleIntervalChange = useCallback((newInterval: Interval) => {
-    // Reset candle state for new interval
-    candleMapRef.current = new Map();
-    lastProcessedIdxRef.current = 0;
-    hasInitialFitRef.current = false;
-    intervalRef.current = newInterval;
-    setIntervalState(newInterval);
-  }, []);
-
-  const intervals: Interval[] = ['1m', '5m', '15m', '1h', '4h', '1d'];
+    onIntervalChange(newInterval);
+  }, [onIntervalChange]);
 
   return (
     <div className="chart-component">
@@ -206,10 +182,10 @@ export function Chart({ trades, symbol }: ChartProps) {
           <span>{symbol}</span>
         </div>
         <div className="interval-tabs">
-          {intervals.map(iv => (
+          {INTERVALS.map(iv => (
             <button
               key={iv}
-              className={`interval-btn ${interval === iv ? 'active' : ''}`}
+              className={`interval-btn ${activeInterval === iv ? 'active' : ''}`}
               onClick={() => handleIntervalChange(iv)}
             >
               {iv}
@@ -218,7 +194,7 @@ export function Chart({ trades, symbol }: ChartProps) {
         </div>
       </div>
       <div className="chart-container" ref={chartContainerRef} />
-      {candleMapRef.current.size === 0 && (
+      {candles.length === 0 && !currentCandle && (
         <div className="chart-empty">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
             <path d="M3 3v18h18" strokeLinecap="round" strokeLinejoin="round"/>
@@ -231,27 +207,4 @@ export function Chart({ trades, symbol }: ChartProps) {
       )}
     </div>
   );
-}
-
-// Update or create a candle from a trade
-function updateCandle(candleMap: Map<number, Candle>, trade: AggregatedTrade, intervalMs: number) {
-  const bucket = Math.floor(trade.timestamp / intervalMs) * intervalMs;
-  const timeSec = Math.floor(bucket / 1000);
-
-  const existing = candleMap.get(timeSec);
-  if (existing) {
-    existing.high = Math.max(existing.high, trade.price);
-    existing.low = Math.min(existing.low, trade.price);
-    existing.close = trade.price;
-    existing.volume += trade.quantity;
-  } else {
-    candleMap.set(timeSec, {
-      time: timeSec,
-      open: trade.price,
-      high: trade.price,
-      low: trade.price,
-      close: trade.price,
-      volume: trade.quantity,
-    });
-  }
 }

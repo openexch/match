@@ -54,6 +54,8 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
 
         if (uri.startsWith("/api/orderbook")) {
             handleOrderBook(ctx, uri);
+        } else if (uri.startsWith("/api/candles")) {
+            handleCandles(ctx, uri);
         } else if (uri.startsWith("/api/trades")) {
             handleTrades(ctx, uri);
         } else {
@@ -73,6 +75,16 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
             return;
         }
         String json = book.toJson();
+        sendJson(ctx, json);
+    }
+
+    private void handleCandles(ChannelHandlerContext ctx, String uri) {
+        int marketId = parseQueryParam(uri, "marketId", 1);
+        String interval = parseQueryString(uri, "interval", "1m");
+        int limit = parseQueryParam(uri, "limit", 200);
+        limit = Math.min(limit, 500); // Cap at ring buffer size
+
+        String json = stateManager.buildCandleHistoryJson(marketId, interval, limit);
         sendJson(ctx, json);
     }
 
@@ -97,6 +109,19 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
         String json = "{\"status\":\"ok\",\"orderBook\":" + hasAnyOrderBook +
                       ",\"trades\":" + stateManager.getTrades().hasData() + "}";
         sendJson(ctx, json);
+    }
+
+    private String parseQueryString(String uri, String param, String defaultValue) {
+        int idx = uri.indexOf(param + "=");
+        if (idx < 0) {
+            return defaultValue;
+        }
+        int start = idx + param.length() + 1;
+        int end = uri.indexOf('&', start);
+        if (end < 0) {
+            end = uri.length();
+        }
+        return uri.substring(start, end);
     }
 
     private int parseQueryParam(String uri, String param, int defaultValue) {

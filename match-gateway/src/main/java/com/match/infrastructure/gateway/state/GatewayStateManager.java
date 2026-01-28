@@ -31,6 +31,9 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
     // Per-market ticker stats (accumulated from trades)
     private final ConcurrentHashMap<Integer, TickerStats> tickerStatsByMarket = new ConcurrentHashMap<>();
 
+    // Candle aggregation
+    private final CandleProvider candleProvider = new InMemoryCandleProvider();
+
     // Reference to WebSocket for broadcasting to clients
     private volatile MarketDataWebSocket webSocket;
 
@@ -158,6 +161,17 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             // Update local state
             trades.addBatch(marketId, marketName, tradesArray);
 
+            // Update candles from each trade
+            for (int i = 0; i < tradesArray.size(); i++) {
+                JsonObject t = tradesArray.get(i).getAsJsonObject();
+                candleProvider.onTrade(
+                    marketId,
+                    t.get("price").getAsDouble(),
+                    t.get("quantity").getAsDouble(),
+                    t.get("timestamp").getAsLong()
+                );
+            }
+
             // Build JSON and broadcast to WebSocket
             if (webSocket != null && tradesArray.size() > 0) {
                 String json = buildTradesBatchJson(marketId, marketName, timestamp, tradesArray);
@@ -166,6 +180,13 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
                 // Also broadcast updated ticker stats
                 String tickerJson = tickerStats.toJson();
                 webSocket.broadcastMarketData(tickerJson);
+
+                // Broadcast current 1m candle update
+                Candle currentCandle = candleProvider.getCurrentCandle(marketId, "1m");
+                if (currentCandle != null) {
+                    String candleJson = buildCandleUpdateJson(marketId, marketName, "1m", currentCandle);
+                    webSocket.broadcastMarketData(candleJson);
+                }
             }
         } catch (Exception e) {
             logger.error("Error processing TRADES_BATCH: " + e.getMessage());
@@ -251,6 +272,50 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
         return obj.toString();
     }
 
+    // Build JSON for WebSocket broadcast - candle update
+    private String buildCandleUpdateJson(int marketId, String market, String interval, Candle candle) {
+        JsonObject obj = new JsonObject();
+        obj.addProperty("type", "CANDLE_UPDATE");
+        obj.addProperty("marketId", marketId);
+        obj.addProperty("market", market);
+        obj.addProperty("interval", interval);
+        obj.add("candle", candleToJson(candle));
+        return obj.toString();
+    }
+
+    /**
+     * Build candle history JSON for initial WebSocket state or REST API.
+     */
+    public String buildCandleHistoryJson(int marketId, String interval, int limit) {
+        String marketName = getMarketName(marketId);
+        java.util.List<Candle> candles = candleProvider.getCandles(marketId, interval, limit);
+
+        JsonObject obj = new JsonObject();
+        obj.addProperty("type", "CANDLE_HISTORY");
+        obj.addProperty("marketId", marketId);
+        obj.addProperty("market", marketName);
+        obj.addProperty("interval", interval);
+
+        JsonArray arr = new JsonArray();
+        for (Candle c : candles) {
+            arr.add(candleToJson(c));
+        }
+        obj.add("candles", arr);
+        return obj.toString();
+    }
+
+    private JsonObject candleToJson(Candle c) {
+        JsonObject obj = new JsonObject();
+        obj.addProperty("time", c.time);
+        obj.addProperty("open", c.open);
+        obj.addProperty("high", c.high);
+        obj.addProperty("low", c.low);
+        obj.addProperty("close", c.close);
+        obj.addProperty("volume", c.volume);
+        obj.addProperty("tradeCount", c.tradeCount);
+        return obj;
+    }
+
     // State accessors for HTTP and WebSocket handlers
 
     /**
@@ -288,5 +353,12 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
     public String getTickerStats(int marketId) {
         TickerStats stats = tickerStatsByMarket.get(marketId);
         return stats != null ? stats.toJson() : null;
+    }
+
+    /**
+     * Get the candle provider for REST/WebSocket queries.
+     */
+    public CandleProvider getCandleProvider() {
+        return candleProvider;
     }
 }
