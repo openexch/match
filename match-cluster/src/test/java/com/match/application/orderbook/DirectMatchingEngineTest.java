@@ -192,4 +192,47 @@ public class DirectMatchingEngineTest {
         assertFalse(engine.isBidEmpty());
         assertFalse(engine.isAskEmpty());
     }
+
+    // ==================== Match Limit Overflow ====================
+
+    @Test
+    public void testShouldMatchMoreThan100Orders() {
+        long unitQty = FixedPoint.fromDouble(1.0);
+
+        // DirectIndexOrderBook has MAX_ORDERS_PER_LEVEL=64, so spread 200 orders
+        // across 4 price levels (50 per level) to stay within per-level limits
+        long[] prices = {
+            FixedPoint.fromDouble(100.0),
+            FixedPoint.fromDouble(100.01),
+            FixedPoint.fromDouble(100.02),
+            FixedPoint.fromDouble(100.03)
+        };
+        int ordersPerLevel = 50;
+        int totalOrders = prices.length * ordersPerLevel; // 200
+
+        int orderId = 1;
+        for (long price : prices) {
+            for (int j = 0; j < ordersPerLevel; j++) {
+                engine.addOrderNoMatch(orderId, orderId, false, price, unitQty);
+                orderId++;
+            }
+        }
+
+        // Submit one big buy that sweeps all 200 asks (price high enough to match all)
+        long sweepPrice = FixedPoint.fromDouble(100.03);
+        long totalQty = FixedPoint.fromDouble(200.0);
+        int matches = engine.processLimitOrder(999L, 999L, true, sweepPrice, totalQty);
+
+        assertEquals("Should match all 200 orders", totalOrders, matches);
+        assertEquals("Taker should be fully filled", 0L, engine.getTakerRemainingQuantity());
+        assertTrue("All asks should be consumed", engine.isAskEmpty());
+
+        // Verify all match results are recorded
+        for (int i = 0; i < totalOrders; i++) {
+            assertTrue("Match " + i + " should have valid maker order ID",
+                engine.getMatchMakerOrderId(i) > 0);
+            assertEquals("Match " + i + " should be qty 1",
+                unitQty, engine.getMatchQuantity(i));
+        }
+    }
 }

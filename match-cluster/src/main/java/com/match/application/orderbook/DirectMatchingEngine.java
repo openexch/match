@@ -11,7 +11,7 @@ import com.match.domain.FixedPoint;
 public class DirectMatchingEngine {
 
     // Match result storage - pre-allocated
-    private static final int MAX_MATCHES_PER_ORDER = 100;
+    private static final int MAX_MATCHES_PER_ORDER = 10_000;
     private static final int MATCH_FIELDS = 4; // makerOrderId, makerUserId, price, quantity
 
     // Match data: [makerOrderId, makerUserId, price, quantity] per match
@@ -138,6 +138,13 @@ public class DirectMatchingEngine {
      */
     private void matchAtLevel(DirectIndexOrderBook book, int priceIdx, long price) {
         while (takerRemainingQty > 0 && book.getOrderCount(priceIdx) > 0) {
+            // Stop matching if limit reached to prevent unbounded execution
+            if (matchCount >= MAX_MATCHES_PER_ORDER) {
+                System.err.println("WARNING: Match limit reached (" + MAX_MATCHES_PER_ORDER
+                    + ") for order. Remaining qty: " + takerRemainingQty);
+                return;
+            }
+
             long makerOrderId = book.getHeadOrderId(priceIdx);
             if (makerOrderId < 0) break;
 
@@ -147,15 +154,13 @@ public class DirectMatchingEngine {
 
             if (matchQty <= 0) break;
 
-            // Record match with maker userId for publishing
-            if (matchCount < MAX_MATCHES_PER_ORDER) {
-                int idx = matchCount * MATCH_FIELDS;
-                matchResults[idx] = makerOrderId;
-                matchResults[idx + 1] = makerUserId;
-                matchResults[idx + 2] = price;
-                matchResults[idx + 3] = matchQty;
-                matchCount++;
-            }
+            // Record match
+            int idx = matchCount * MATCH_FIELDS;
+            matchResults[idx] = makerOrderId;
+            matchResults[idx + 1] = makerUserId;
+            matchResults[idx + 2] = price;
+            matchResults[idx + 3] = matchQty;
+            matchCount++;
 
             // Update quantities
             takerRemainingQty -= matchQty;
@@ -168,6 +173,13 @@ public class DirectMatchingEngine {
      */
     private void matchMarketBuyAtLevel(DirectIndexOrderBook book, int priceIdx, long price) {
         while (takerRemainingBudget > 0 && book.getOrderCount(priceIdx) > 0) {
+            // Stop matching if limit reached to prevent unbounded execution
+            if (matchCount >= MAX_MATCHES_PER_ORDER) {
+                System.err.println("WARNING: Match limit reached (" + MAX_MATCHES_PER_ORDER
+                    + ") for market buy order. Remaining budget: " + takerRemainingBudget);
+                return;
+            }
+
             long makerOrderId = book.getHeadOrderId(priceIdx);
             if (makerOrderId < 0) break;
 
@@ -183,15 +195,13 @@ public class DirectMatchingEngine {
             // Calculate cost
             long cost = FixedPoint.multiply(matchQty, price);
 
-            // Record match with maker userId for publishing
-            if (matchCount < MAX_MATCHES_PER_ORDER) {
-                int idx = matchCount * MATCH_FIELDS;
-                matchResults[idx] = makerOrderId;
-                matchResults[idx + 1] = makerUserId;
-                matchResults[idx + 2] = price;
-                matchResults[idx + 3] = matchQty;
-                matchCount++;
-            }
+            // Record match
+            int idx = matchCount * MATCH_FIELDS;
+            matchResults[idx] = makerOrderId;
+            matchResults[idx + 1] = makerUserId;
+            matchResults[idx + 2] = price;
+            matchResults[idx + 3] = matchQty;
+            matchCount++;
 
             // Update
             takerRemainingBudget -= cost;
