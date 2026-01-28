@@ -236,6 +236,11 @@ public class DirectIndexOrderBook {
 
     /**
      * Reduce order quantity (after match). O(1)
+     *
+     * When an order is fully filled (newQty <= 0), we remove it directly
+     * instead of calling cancelOrder(), because cancelOrder() would read
+     * the already-updated (possibly negative) quantity and corrupt the
+     * level total by subtracting a negative value.
      */
     public void reduceOrderQuantity(long orderId, long reduceBy) {
         int locationIdx = (int) (Math.abs(orderId) % MAX_ACTIVE_ORDERS);
@@ -248,20 +253,41 @@ public class DirectIndexOrderBook {
         int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + slot) * ORDER_FIELDS;
         if (orders[orderBase] != orderId) return;
 
-        long newQty = orders[orderBase + 2] - reduceBy;
+        long oldQty = orders[orderBase + 2];
+        long actualReduce = Math.min(reduceBy, oldQty); // Never reduce more than available
+        long newQty = oldQty - actualReduce;
         orders[orderBase + 2] = newQty;
 
-        // Update level total
+        // Update level total — only subtract what we actually reduced
         int levelBase = priceIdx * LEVEL_FIELDS;
-        levels[levelBase + 3] -= reduceBy;
+        levels[levelBase + 3] -= actualReduce;
 
         // Memory barrier - increment version AFTER all writes complete
-        // This is critical for partial fills to be visible to readers
         version++;
 
-        // If fully filled, treat as cancelled
+        // If fully filled, remove the order from the book
         if (newQty <= 0) {
-            cancelOrder(orderId);
+            // Remove directly instead of calling cancelOrder() to avoid
+            // double-decrementing the level total quantity
+            orders[orderBase + 2] = 0;
+
+            // Update level order count
+            long orderCount = levels[levelBase + 2] - 1;
+            levels[levelBase + 2] = orderCount;
+
+            // Return slot to free list
+            int slotStackBase = priceIdx * MAX_ORDERS_PER_LEVEL;
+            freeSlots[slotStackBase + freeSlotCounts[priceIdx]++] = slot;
+
+            // Clear location
+            orderLocations[locationIdx] = EMPTY_LOCATION;
+
+            if (orderCount == 0) {
+                activeLevelCount--;
+                updateBestWorstPrice(priceIdx, false);
+            }
+
+            version++;
         }
     }
 
