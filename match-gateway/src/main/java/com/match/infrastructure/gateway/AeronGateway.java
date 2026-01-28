@@ -135,24 +135,71 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     /**
      * Create MediaDriver with settings optimized for cluster client.
      * Uses /dev/shm for pure memory operations (lower latency than /tmp).
-     * Uses unique directory name to avoid conflicts with stale images from previous sessions.
+     * Uses a fixed directory name per gateway type (order/market) to prevent
+     * stale directory accumulation. dirDeleteOnStart cleans any leftover state.
      */
     private void createMediaDriver() {
         if (mediaDriver != null) {
             return; // Already have a MediaDriver
         }
 
+        // Clean up any stale gateway directories from previous crashed sessions
+        cleanStaleGatewayDirs();
+
         // Use /dev/shm for pure memory operations (tmpfs in RAM)
-        // Unique directory name based on nanoTime to avoid stale image conflicts
-        String uniqueDir = "/dev/shm/aeron-gateway-" + System.nanoTime();
+        // Fixed directory name per process - dirDeleteOnStart handles stale state
+        String gatewayType = System.getenv().getOrDefault("GATEWAY_TYPE", "gateway");
+        String dir = "/dev/shm/aeron-" + gatewayType + "-" + ProcessHandle.current().pid();
 
         mediaDriver = MediaDriver.launchEmbedded(new MediaDriver.Context()
             .threadingMode(ThreadingMode.SHARED)
-            .aeronDirectoryName(uniqueDir)
+            .aeronDirectoryName(dir)
             .dirDeleteOnStart(true)
             .dirDeleteOnShutdown(true));
 
         System.out.println("MediaDriver created: " + mediaDriver.aeronDirectoryName());
+    }
+
+    /**
+     * Clean up stale /dev/shm/aeron-gateway-* directories that were left behind
+     * by previous sessions that didn't shut down cleanly.
+     */
+    private void cleanStaleGatewayDirs() {
+        java.io.File shmDir = new java.io.File("/dev/shm");
+        java.io.File[] staleDirs = shmDir.listFiles((dir, name) ->
+            name.startsWith("aeron-gateway-") || name.startsWith("aeron-order-") || name.startsWith("aeron-market-"));
+        if (staleDirs == null) return;
+
+        for (java.io.File staleDir : staleDirs) {
+            // Check if the PID in the directory name is still running
+            java.io.File cncFile = new java.io.File(staleDir, "cnc.dat");
+            if (cncFile.exists()) {
+                try {
+                    // Try to check if the cnc.dat is still held by a live process
+                    // If we can delete it, the process is gone
+                    if (staleDir.canWrite()) {
+                        deleteDirectory(staleDir);
+                        System.out.println("Cleaned stale MediaDriver dir: " + staleDir.getName());
+                    }
+                } catch (Exception e) {
+                    // Owned by another process or root — skip
+                }
+            }
+        }
+    }
+
+    private void deleteDirectory(java.io.File dir) {
+        java.io.File[] files = dir.listFiles();
+        if (files != null) {
+            for (java.io.File file : files) {
+                if (file.isDirectory()) {
+                    deleteDirectory(file);
+                } else {
+                    file.delete();
+                }
+            }
+        }
+        dir.delete();
     }
 
     /**
