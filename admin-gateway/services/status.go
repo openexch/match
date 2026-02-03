@@ -59,12 +59,15 @@ type StatusService struct {
 	systemd       *Systemd
 	cluster       *Cluster
 	clusterStatus *ClusterStatus
+	pm            *ProcessManager
+	counters      *AeronCounters
+	autoSnapshot  *AutoSnapshot
 
 	// Cached status
 	cacheMu     sync.RWMutex
 	cachedStatus map[string]interface{}
 	lastUpdate   time.Time
-	
+
 	// Background poller
 	pollInterval time.Duration
 	stopChan     chan struct{}
@@ -76,21 +79,51 @@ func NewStatusService(cfg *config.Config, systemd *Systemd, cluster *Cluster, st
 		systemd:       systemd,
 		cluster:       cluster,
 		clusterStatus: status,
+		counters:      NewAeronCounters(),
 		pollInterval:  2 * time.Second, // Poll every 2 seconds
 		stopChan:      make(chan struct{}),
 	}
-	
+
 	// Initial fetch
 	s.refreshStatus()
-	
+
 	// Start background poller
 	go s.backgroundPoller()
-	
+
 	return s
+}
+
+func (s *StatusService) SetProcessManager(pm *ProcessManager) {
+	s.pm = pm
+}
+
+func (s *StatusService) SetAutoSnapshot(as *AutoSnapshot) {
+	s.autoSnapshot = as
 }
 
 func (s *StatusService) Stop() {
 	close(s.stopChan)
+}
+
+// isServiceRunning checks PM first, falls back to systemd
+func (s *StatusService) isServiceRunning(name string) bool {
+	if s.pm != nil {
+		info := s.pm.Get(name)
+		return info != nil && info.Running
+	}
+	return s.systemd.IsActive(name)
+}
+
+// getServicePID gets PID from PM first, falls back to systemd
+func (s *StatusService) getServicePID(name string) int {
+	if s.pm != nil {
+		info := s.pm.Get(name)
+		if info != nil {
+			return info.PID
+		}
+		return 0
+	}
+	return s.systemd.GetPID(name)
 }
 
 func (s *StatusService) backgroundPoller() {
@@ -154,11 +187,11 @@ func (s *StatusService) fetchStatus() map[string]interface{} {
 		}
 
 		serviceName := "node" + string(rune('0'+i))
-		isActive := s.systemd.IsActive(serviceName)
+		isActive := s.isServiceRunning(serviceName)
 
 		if isActive {
 			node["running"] = true
-			node["pid"] = s.systemd.GetPID(serviceName)
+			node["pid"] = s.getServicePID(serviceName)
 			
 			// Check tracked status for transitional states
 			tracked := s.clusterStatus.GetNodeStatus(i)
@@ -191,13 +224,29 @@ func (s *StatusService) fetchStatus() map[string]interface{} {
 			node["snapshotPosition"] = snapPos
 		}
 
+		// Real-time counters from Aeron shared memory (no JVM spawn)
+		if counterData, err := s.counters.GetNodeCounters(i); err == nil {
+			if counterData.CommitPosition >= 0 {
+				node["commitPosition"] = counterData.CommitPosition
+				// Calculate delta from last snapshot
+				if snapPos >= 0 {
+					node["logDelta"] = counterData.CommitPosition - snapPos
+				} else {
+					node["logDelta"] = counterData.CommitPosition
+				}
+			}
+			if counterData.SnapshotCount >= 0 {
+				node["snapshotCount"] = counterData.SnapshotCount
+			}
+		}
+
 		nodes[i] = node
 	}
 
-	// Build gateways status (cheap - just systemctl)
+	// Build gateways status
 	gateways := map[string]interface{}{
 		"market": map[string]interface{}{
-			"running": s.systemd.IsActive("market"),
+			"running": s.isServiceRunning("market"),
 			"port":    8081,
 		},
 		"admin": map[string]interface{}{
@@ -205,14 +254,14 @@ func (s *StatusService) fetchStatus() map[string]interface{} {
 			"port":    8082,
 		},
 		"order": map[string]interface{}{
-			"running": s.systemd.IsActive("order"),
+			"running": s.isServiceRunning("order"),
 			"port":    8080,
 		},
 	}
 
 	// Check backup
 	backup := map[string]interface{}{
-		"running": s.systemd.IsActive("backup"),
+		"running": s.isServiceRunning("backup"),
 	}
 
 	return map[string]interface{}{
@@ -221,12 +270,20 @@ func (s *StatusService) fetchStatus() map[string]interface{} {
 		"gateways": gateways,
 		"backup":   backup,
 		"gateway": map[string]interface{}{ // Legacy field
-			"running": s.systemd.IsActive("order"),
+			"running": s.isServiceRunning("order"),
 			"port":    8080,
 		},
-		"autoSnapshot": map[string]interface{}{
-			"enabled":         false,
-			"intervalMinutes": 0,
-		},
+		"autoSnapshot": s.getAutoSnapshotStatus(),
+	}
+}
+
+// getAutoSnapshotStatus returns auto-snapshot status from the AutoSnapshot service
+func (s *StatusService) getAutoSnapshotStatus() map[string]interface{} {
+	if s.autoSnapshot != nil {
+		return s.autoSnapshot.ToMap()
+	}
+	return map[string]interface{}{
+		"enabled":         false,
+		"intervalMinutes": int64(0),
 	}
 }

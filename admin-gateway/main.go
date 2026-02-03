@@ -27,9 +27,12 @@ func main() {
 	procMgr := services.NewProcessManager(cfg, systemd)
 
 	statusSvc := services.NewStatusService(cfg, systemd, cluster, clusterStatus)
+	statusSvc.SetProcessManager(procMgr)
 	opsSvc := services.NewOperationsService(cfg, systemd, cluster, progress, clusterStatus)
 	opsSvc.SetProcessManager(procMgr)
 	autoSnapshot := services.NewAutoSnapshot(opsSvc)
+	statusSvc.SetAutoSnapshot(autoSnapshot)
+	autoSnapshot.Start(5) // Auto-snapshot every 5 minutes to prevent unbounded log growth
 	logSvc := services.NewLogService(cfg)
 
 	// Initialize handlers
@@ -60,6 +63,7 @@ func main() {
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 		<-sigChan
 		log.Println("Shutting down...")
+		autoSnapshot.Stop()
 		procMgr.Shutdown()
 		statusSvc.Stop()
 		server.Close()
