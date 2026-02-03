@@ -35,4 +35,23 @@ public interface MarketDataBroadcaster {
      * Used to skip serialization when no one is listening.
      */
     boolean hasSubscribers();
+
+    /**
+     * Signal that publishers should re-send a full book snapshot.
+     * Called from the service thread when a new gateway connects or reconnects.
+     * Thread-safe: increments a generation counter that publishers poll.
+     */
+    default void requestResnapshot() {
+        // Default no-op
+    }
+
+    /**
+     * Get the current resnapshot generation counter.
+     * Each call to requestResnapshot() increments this.
+     * Publishers compare against their local counter to detect changes.
+     * @return current generation (0 = no resnapshot ever requested)
+     */
+    default long resnapshotGeneration() {
+        return 0;
+    }
 }

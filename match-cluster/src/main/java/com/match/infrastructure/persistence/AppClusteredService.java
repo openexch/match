@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class AppClusteredService implements ClusteredService {
     private static final Logger logger = Logger.getLogger(AppClusteredService.class);
@@ -42,10 +43,11 @@ public class AppClusteredService implements ClusteredService {
     private final TimerManager timerManager = new TimerManager(context);
     private final SbeDemuxer sbeDemuxer = new SbeDemuxer(engine);
 
-    // Gateway heartbeat tracking - only broadcast to active gateway
+    // Gateway heartbeat tracking - only broadcast to active gateways
     // Both fields updated atomically via gatewayLock to prevent stale reads
-    private long gatewaySessionId = -1;  // -1 = no gateway connected
+    private long gatewaySessionId = -1;  // most-recent heartbeat session (for flush target)
     private long gatewayLastHeartbeatMs = 0;
+    private final java.util.Set<Long> knownGatewaySessions = new java.util.HashSet<>();
     private final Object gatewayLock = new Object();
     private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
     private final GatewayHeartbeatDecoder heartbeatDecoder = new GatewayHeartbeatDecoder();
@@ -84,6 +86,18 @@ public class AppClusteredService implements ClusteredService {
      * This is required because Aeron Cluster only allows sending from the main service thread.
      */
     private final MarketDataBroadcaster aeronBroadcaster = new MarketDataBroadcaster() {
+        private final AtomicLong resnapshotGeneration = new AtomicLong(0);
+
+        @Override
+        public void requestResnapshot() {
+            resnapshotGeneration.incrementAndGet();
+        }
+
+        @Override
+        public long resnapshotGeneration() {
+            return resnapshotGeneration.get();
+        }
+
         @Override
         public void broadcast(org.agrona.DirectBuffer buffer, int offset, int length) {
             // Copy the buffer content (since the source buffer is reused)
@@ -105,7 +119,10 @@ public class AppClusteredService implements ClusteredService {
             // Broadcast to ALL sessions - each client filters what it needs
             List<ClientSession> sessions = clientSessions.getAllSessions();
             if (sessions.isEmpty()) {
-                marketDataQueue.clear();
+                // Don't clear the queue — initial book snapshots may be waiting for
+                // a gateway to connect. The queue is bounded (10K entries) so this
+                // won't grow unbounded. Stale data is fine since the gateway always
+                // uses the latest snapshot.
                 return;
             }
 
@@ -172,13 +189,15 @@ public class AppClusteredService implements ClusteredService {
 
     private void scheduleMarketDataFlush() {
         long deadline = System.currentTimeMillis() + MARKET_DATA_FLUSH_INTERVAL_MS;
-        timerManager.scheduleTimer(deadline, () -> {
-            if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
-                aeronBroadcaster.flush();
-            }
-            // Reschedule
-            scheduleMarketDataFlush();
-        });
+        timerManager.scheduleTimer(deadline, this::onFlushTimer);
+    }
+
+    private void onFlushTimer() {
+        if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
+            aeronBroadcaster.flush();
+        }
+        // Reschedule
+        scheduleMarketDataFlush();
     }
 
     /**
@@ -312,6 +331,23 @@ public class AppClusteredService implements ClusteredService {
             System.out.println("[SNAPSHOT] Market " + marketId + ": restored " + numBidOrders + " bids, " + numAskOrders + " asks");
         }
 
+        // Restore timer correlation ID if present (backward-compatible: old snapshots won't have this)
+        if (pos + 8 <= length) {
+            long timerCorrelationId = buffer.getLong(pos);
+            pos += 8;
+            timerManager.setCorrelationId(timerCorrelationId);
+            System.out.println("[SNAPSHOT] Restored TimerCorrelationId: " + timerCorrelationId);
+
+            // Re-register the flush timer runnable for the pending timer so that
+            // replayed timer events find a matching runnable (avoids "unknown timer" spam).
+            // The pending timer at snapshot time has ID = timerCorrelationId.
+            if (timerCorrelationId > 0) {
+                timerManager.restoreTimer(timerCorrelationId, this::onFlushTimer);
+                flushTimerScheduled = true;
+                System.out.println("[SNAPSHOT] Restored flush timer chain at correlationId=" + timerCorrelationId);
+            }
+        }
+
         System.out.println("[SNAPSHOT] Snapshot load complete. Processed " + pos + " bytes of " + length);
     }
 
@@ -325,6 +361,9 @@ public class AppClusteredService implements ClusteredService {
     public void onSessionClose(final ClientSession session, final long timestamp, final CloseReason closeReason) {
         context.setClusterTime(timestamp);
         clientSessions.removeSession(session);
+        synchronized (gatewayLock) {
+            knownGatewaySessions.remove(session.id());
+        }
     }
 
     @Override
@@ -378,17 +417,18 @@ public class AppClusteredService implements ClusteredService {
      */
     private void handleGatewayHeartbeat(ClientSession session, DirectBuffer buffer, int offset, long timestamp) {
         heartbeatDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
-        long prevSessionId;
+        boolean isNewSession;
         synchronized (gatewayLock) {
-            prevSessionId = gatewaySessionId;
+            isNewSession = knownGatewaySessions.add(session.id());
             gatewaySessionId = session.id();
             gatewayLastHeartbeatMs = System.currentTimeMillis();
         }
         heartbeatReceivedCount++;
 
-        // Log gateway session changes for debugging
-        if (prevSessionId != gatewaySessionId) {
-            System.out.println("Gateway session updated: " + prevSessionId + " -> " + gatewaySessionId);
+        // Trigger resnapshot only for genuinely new gateway connections
+        if (isNewSession) {
+            System.out.println("New gateway session connected: " + session.id());
+            aeronBroadcaster.requestResnapshot();
         }
 
         // Periodic heartbeat stats (every 10 seconds)
@@ -521,6 +561,12 @@ public class AppClusteredService implements ClusteredService {
             System.out.println("[SNAPSHOT] Market " + marketId + ": " + numBidOrders + " bids, " + numAskOrders + " asks");
         }
 
+        // Write timer correlation ID (for replay timer chain continuity)
+        long timerCorrelationId = timerManager.getCorrelationId();
+        buffer.putLong(pos, timerCorrelationId);
+        pos += 8;
+        System.out.println("[SNAPSHOT] TimerCorrelationId: " + timerCorrelationId);
+
         System.out.println("[SNAPSHOT] Total buffer size: " + pos + " bytes");
 
         long result;
@@ -532,6 +578,14 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onRoleChange(final Role newRole) {
+        System.out.println("SERVICE onRoleChange: " + newRole);
+        System.out.flush();
+        // Reset flush timer flag so the timer chain is re-established on the
+        // first live onSessionMessage. During log replay, timers scheduled via
+        // cluster.scheduleTimer() are no-ops, so the self-rescheduling chain
+        // breaks at the replay→live transition. This reset ensures a fresh
+        // timer is created once we're processing live messages.
+        flushTimerScheduled = false;
     }
 
     @Override

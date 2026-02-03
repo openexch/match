@@ -102,6 +102,7 @@ public class MarketPublisher implements MarketEventHandler {
     private int lastBidCount = 0;
     private int lastAskCount = 0;
     private boolean sentInitialSnapshot = false;
+    private long lastResnapshotGen = 0;
 
     // Diagnostic counters
     private long flushCount = 0;
@@ -338,6 +339,20 @@ public class MarketPublisher implements MarketEventHandler {
             if (localBroadcaster == null) {
                 clearBuffersWithoutSending();
                 return;
+            }
+
+            // When a new gateway connects (or reconnects), the service thread
+            // increments the resnapshot generation via requestResnapshot().
+            // Each publisher independently detects the change and re-sends
+            // a fresh full book snapshot.
+            long gen = localBroadcaster.resnapshotGeneration();
+            if (gen != lastResnapshotGen) {
+                lastResnapshotGen = gen;
+                sentInitialSnapshot = false;
+                lastBidVersion = -1;
+                lastAskVersion = -1;
+                lastBidCount = 0;
+                lastAskCount = 0;
             }
 
             // Flush aggregated trades (SBE encoded)

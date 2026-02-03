@@ -32,6 +32,7 @@ public class TimerManager
     private final Long2ObjectHashMap<Runnable> correlationIdToRunnable = new Long2ObjectHashMap<>();
 
     private long correlationId = 0;
+    private long unknownTimerCount = 0;
 
     /**
      * Constructor, accepting the context to update the cluster timestamp
@@ -88,8 +89,31 @@ public class TimerManager
         }
         else
         {
-            System.out.printf("Timer fired for unknown correlation id %s", correlationId);
+            unknownTimerCount++;
+            if (unknownTimerCount == 1 || unknownTimerCount % 100000 == 0)
+            {
+                System.out.printf("Timer fired for unknown correlation id %d (total unknown: %d)%n",
+                    correlationId, unknownTimerCount);
+            }
         }
+    }
+
+    /**
+     * Gets the current correlation id counter (for snapshot persistence)
+     * @return the current correlation id
+     */
+    public long getCorrelationId()
+    {
+        return correlationId;
+    }
+
+    /**
+     * Sets the correlation id counter (restored from snapshot)
+     * @param correlationId the correlation id to restore
+     */
+    public void setCorrelationId(final long correlationId)
+    {
+        this.correlationId = correlationId;
     }
 
     /***
@@ -100,6 +124,4 @@ public class TimerManager
     {
         this.cluster = cluster;
     }
-
-
 }
