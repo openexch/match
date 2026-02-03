@@ -693,7 +693,11 @@ export function AdminPage() {
 
   const executeCleanup = async () => {
     try {
-      const response = await fetch('/api/admin/cleanup', { method: 'POST' });
+      const response = await fetch('/api/admin/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      });
       const data = await response.json();
       if (!data.success) {
         setError(data.error || 'Cleanup failed');
