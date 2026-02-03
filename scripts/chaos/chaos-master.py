@@ -54,10 +54,26 @@ def curl_text(url, method="GET", data=None, timeout=10):
     except: return ""
 
 def systemctl(action, *units):
-    subprocess.run(["systemctl", "--user", action] + list(units), capture_output=True, timeout=30)
+    """Start/stop services via process manager API (or direct kill for SIGKILL)"""
+    for unit in units:
+        name = unit.replace(".service", "")
+        if action == "start":
+            curl_json(f"{ADMIN_GW}/api/admin/processes/{name}/start", method="POST", timeout=5)
+        elif action == "stop":
+            curl_json(f"{ADMIN_GW}/api/admin/processes/{name}/force-stop", method="POST", timeout=5)
+        elif action == "restart":
+            curl_json(f"{ADMIN_GW}/api/admin/processes/{name}/restart", method="POST", timeout=5)
 
 def systemctl_kill(sig, *units):
-    subprocess.run(["systemctl", "--user", "kill", "-s", sig] + list(units), capture_output=True, timeout=30)
+    """Kill processes by PID (for chaos testing — bypasses graceful shutdown)"""
+    for unit in units:
+        name = unit.replace(".service", "")
+        proc = curl_json(f"{ADMIN_GW}/api/admin/processes/{name}", timeout=5)
+        if proc and proc.get("pid"):
+            try:
+                os.kill(proc["pid"], signal.SIGKILL if sig == "SIGKILL" else signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
 def get_status():
     return curl_json(f"{ADMIN_GW}/api/admin/status")
