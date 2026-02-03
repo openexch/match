@@ -99,6 +99,11 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     private final TradesBatchDecoder tradesBatchDecoder = new TradesBatchDecoder();
     private final OrderStatusBatchDecoder orderStatusBatchDecoder = new OrderStatusBatchDecoder();
 
+    // Heartbeat encoder — SBE-encoded heartbeat sent to cluster to trigger market data flush
+    private final UnsafeBuffer heartbeatBuffer = new UnsafeBuffer(new byte[MessageHeaderEncoder.ENCODED_LENGTH + GatewayHeartbeatEncoder.BLOCK_LENGTH]);
+    private final MessageHeaderEncoder heartbeatHeaderEncoder = new MessageHeaderEncoder();
+    private final GatewayHeartbeatEncoder heartbeatEncoder = new GatewayHeartbeatEncoder();
+
     // External dependencies
     private volatile EgressMessageListener egressListener;
     private volatile ClusterStatus clusterStatus;
@@ -402,13 +407,24 @@ public class AeronGateway implements EgressListener, AutoCloseable {
                     System.out.println("POLL work=" + work + ", egressSub=" + currentCluster.egressSubscription().isConnected());
                 }
 
-                // Send keepalive in SAME thread (single-threaded model)
-                // Using Aeron's built-in sendKeepAlive() - has 3-attempt retry
-                // No custom heartbeat needed - cluster broadcasts to ALL sessions
+                // Send SBE heartbeat to cluster in SAME thread (single-threaded model)
+                // This triggers handleGatewayHeartbeat on the cluster service, which:
+                //   1. Flushes queued market data (book snapshots, trades) via session.offer()
+                //   2. Sends heartbeat ACK back to keep egress alive
+                // Using cluster.offer() instead of sendKeepAlive() because sendKeepAlive()
+                // does NOT trigger onSessionMessage — it only keeps the session alive internally.
                 long nowNs = System.nanoTime();
                 if (nowNs - lastHeartbeatNs >= HEARTBEAT_INTERVAL_NS) {
                     if (!currentCluster.isClosed()) {
-                        currentCluster.sendKeepAlive();
+                        heartbeatEncoder.wrapAndApplyHeader(heartbeatBuffer, 0, heartbeatHeaderEncoder);
+                        heartbeatEncoder
+                            .gatewayId(currentCluster.clusterSessionId())
+                            .timestamp(System.currentTimeMillis());
+                        int heartbeatLength = MessageHeaderEncoder.ENCODED_LENGTH + heartbeatEncoder.encodedLength();
+                        long result = currentCluster.offer(heartbeatBuffer, 0, heartbeatLength);
+                        if (result < 0 && heartbeatCount % 100 == 0) {
+                            System.err.println("Heartbeat offer failed: " + getOfferResultName(result));
+                        }
                     }
                     lastHeartbeatNs = nowNs;
                     heartbeatCount++;

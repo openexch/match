@@ -5,6 +5,7 @@ import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.BindException;
 import java.net.InetSocketAddress;
 
 import static com.match.infrastructure.InfrastructureConstants.*;
@@ -15,14 +16,17 @@ import static com.match.infrastructure.InfrastructureConstants.*;
  */
 public class OrderGatewayMain implements AutoCloseable {
 
+    private static final int BIND_RETRY_ATTEMPTS = 5;
+    private static final long BIND_RETRY_DELAY_MS = 2000;
+
     private final AeronGateway aeronGateway;
     private final HttpServer httpServer;
 
     public OrderGatewayMain() throws IOException {
         this.aeronGateway = new AeronGateway();
 
-        // Create HTTP server
-        this.httpServer = HttpServer.create(new InetSocketAddress(ORDER_GATEWAY_PORT), 0);
+        // Create HTTP server with bind retry for port availability races
+        this.httpServer = createHttpServerWithRetry(ORDER_GATEWAY_PORT);
 
         // Register order endpoint
         HttpOrderApi orderApi = new HttpOrderApi(aeronGateway);
@@ -82,6 +86,32 @@ public class OrderGatewayMain implements AutoCloseable {
         if (aeronGateway != null) {
             aeronGateway.close();
         }
+    }
+
+    private static HttpServer createHttpServerWithRetry(int port) throws IOException {
+        IOException lastException = null;
+        for (int attempt = 1; attempt <= BIND_RETRY_ATTEMPTS; attempt++) {
+            try {
+                HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+                if (attempt > 1) {
+                    System.out.println("[OrderGateway] Bound to port " + port + " on attempt " + attempt);
+                }
+                return server;
+            } catch (BindException e) {
+                lastException = e;
+                System.err.println("[OrderGateway] Port " + port + " in use (attempt " + attempt +
+                    "/" + BIND_RETRY_ATTEMPTS + "), retrying in " + BIND_RETRY_DELAY_MS + "ms...");
+                if (attempt < BIND_RETRY_ATTEMPTS) {
+                    try {
+                        Thread.sleep(BIND_RETRY_DELAY_MS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw e;
+                    }
+                }
+            }
+        }
+        throw lastException;
     }
 
     public static void main(String[] args) {
