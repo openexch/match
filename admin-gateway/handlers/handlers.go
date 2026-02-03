@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -141,11 +142,14 @@ func (h *Handlers) handleRestartNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	name := "node" + strconv.Itoa(nodeId)
 	go func() {
 		h.status.SetNodeStatus(nodeId, "STOPPING", false)
-		h.systemd.Stop("node" + strconv.Itoa(nodeId))
-		h.status.SetNodeStatus(nodeId, "STARTING", false)
-		h.systemd.Start("node" + strconv.Itoa(nodeId))
+		if err := h.procMgr.Restart(name); err != nil {
+			fmt.Printf("[handler] restart-node %d failed: %v\n", nodeId, err)
+			h.status.SetNodeStatus(nodeId, "OFFLINE", false)
+			return
+		}
 		h.status.SetNodeStatus(nodeId, "FOLLOWER", true)
 	}()
 
@@ -161,9 +165,12 @@ func (h *Handlers) handleStopNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	name := "node" + strconv.Itoa(nodeId)
 	go func() {
 		h.status.SetNodeStatus(nodeId, "STOPPING", false)
-		h.systemd.Stop("node" + strconv.Itoa(nodeId))
+		if err := h.procMgr.ForceStop(name); err != nil {
+			fmt.Printf("[handler] stop-node %d failed: %v\n", nodeId, err)
+		}
 		h.status.SetNodeStatus(nodeId, "OFFLINE", false)
 	}()
 
@@ -179,9 +186,14 @@ func (h *Handlers) handleStartNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	name := "node" + strconv.Itoa(nodeId)
 	go func() {
 		h.status.SetNodeStatus(nodeId, "STARTING", false)
-		h.systemd.Start("node" + strconv.Itoa(nodeId))
+		if err := h.procMgr.Start(name); err != nil {
+			fmt.Printf("[handler] start-node %d failed: %v\n", nodeId, err)
+			h.status.SetNodeStatus(nodeId, "OFFLINE", false)
+			return
+		}
 		h.status.SetNodeStatus(nodeId, "FOLLOWER", true)
 	}()
 
@@ -193,8 +205,11 @@ func (h *Handlers) handleStartNode(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) handleStopAllNodes(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		for i := 0; i < 3; i++ {
+			name := "node" + strconv.Itoa(i)
 			h.status.SetNodeStatus(i, "STOPPING", false)
-			h.systemd.Stop("node" + strconv.Itoa(i))
+			if err := h.procMgr.ForceStop(name); err != nil {
+				fmt.Printf("[handler] stop-all-nodes: node %d failed: %v\n", i, err)
+			}
 			h.status.SetNodeStatus(i, "OFFLINE", false)
 		}
 	}()
@@ -207,8 +222,11 @@ func (h *Handlers) handleStopAllNodes(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) handleStartAllNodes(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		for i := 0; i < 3; i++ {
+			name := "node" + strconv.Itoa(i)
 			h.status.SetNodeStatus(i, "STARTING", false)
-			h.systemd.Start("node" + strconv.Itoa(i))
+			if err := h.procMgr.Start(name); err != nil {
+				fmt.Printf("[handler] start-all-nodes: node %d failed: %v\n", i, err)
+			}
 		}
 		// Wait and detect leader
 		leader := h.cluster.DetectLeader()

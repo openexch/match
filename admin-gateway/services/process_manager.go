@@ -27,19 +27,20 @@ const (
 
 // ServiceDef defines how to start and manage a process
 type ServiceDef struct {
-	Name       string            `json:"name"`
-	Display    string            `json:"display"`
-	Role       ServiceRole       `json:"role"`
-	Port       int               `json:"port,omitempty"`
-	Command    []string          `json:"-"` // command + args
-	Env        map[string]string `json:"-"` // extra environment variables
-	WorkDir    string            `json:"-"` // working directory
-	PreStart   [][]string        `json:"-"` // pre-start commands (run sequentially)
-	DependsOn  []string          `json:"dependsOn,omitempty"`
-	StartOrder int               `json:"-"`
-	AutoRestart bool             `json:"-"` // restart on crash
-	RestartSec  int              `json:"-"` // seconds between restart attempts
-	StopTimeout int              `json:"-"` // seconds to wait for graceful stop before SIGKILL
+	Name        string            `json:"name"`
+	Display     string            `json:"display"`
+	Role        ServiceRole       `json:"role"`
+	Port        int               `json:"port,omitempty"`
+	ExtraPorts  []int             `json:"-"` // additional ports to check (e.g. Aeron UDP egress)
+	Command     []string          `json:"-"` // command + args
+	Env         map[string]string `json:"-"` // extra environment variables
+	WorkDir     string            `json:"-"` // working directory
+	PreStart    [][]string        `json:"-"` // pre-start commands (run sequentially)
+	DependsOn   []string          `json:"dependsOn,omitempty"`
+	StartOrder  int               `json:"-"`
+	AutoRestart bool              `json:"-"` // restart on crash
+	RestartSec  int               `json:"-"` // seconds between restart attempts
+	StopTimeout int               `json:"-"` // seconds to wait for graceful stop before SIGKILL
 }
 
 // ProcessInfo is the live state of a managed service
@@ -65,6 +66,7 @@ type managedProcess struct {
 	cmd          *exec.Cmd
 	pid          int
 	running      bool
+	starting     bool // true while a start is in progress (prevents auto-restart race)
 	startedAt    time.Time
 	restartCount int
 	status       string // "running", "stopped", "starting", "stopping", "failed", "crashed"
@@ -168,6 +170,7 @@ func NewProcessManager(cfg *config.Config, _ *Systemd) *ProcessManager {
 			},
 			{
 				Name: "order", Display: "Order Gateway", Role: RoleGateway, Port: 8080,
+				ExtraPorts: []int{9092}, // Aeron UDP egress port
 				Command: append(gatewayCmd(), "-cp", "match-gateway/target/match-gateway.jar",
 					"com.match.infrastructure.gateway.OrderGatewayMain"),
 				Env: map[string]string{
@@ -181,6 +184,7 @@ func NewProcessManager(cfg *config.Config, _ *Systemd) *ProcessManager {
 			},
 			{
 				Name: "market", Display: "Market Gateway", Role: RoleGateway, Port: 8081,
+				ExtraPorts: []int{9091}, // Aeron UDP egress port
 				Command: append(gatewayCmd(), "-cp", "match-gateway/target/match-gateway.jar",
 					"com.match.infrastructure.gateway.MarketGatewayMain"),
 				Env: map[string]string{
@@ -225,7 +229,28 @@ func NewProcessManager(cfg *config.Config, _ *Systemd) *ProcessManager {
 }
 
 func (pm *ProcessManager) Shutdown() {
+	// Signal all monitor goroutines to stop auto-restarting
 	close(pm.stopChan)
+
+	// Also close every per-process stopChan to prevent any in-flight auto-restarts
+	for _, def := range pm.services {
+		if def.Name == "admin" {
+			continue
+		}
+		proc := pm.procs[def.Name]
+		proc.mu.Lock()
+		if proc.stopChan != nil {
+			select {
+			case <-proc.stopChan:
+			default:
+				close(proc.stopChan)
+			}
+		}
+		proc.mu.Unlock()
+	}
+
+	// Brief pause to let any in-flight restarts see the closed channels
+	time.Sleep(500 * time.Millisecond)
 }
 
 // --- Public API ---
@@ -347,7 +372,15 @@ func (pm *ProcessManager) Restart(name string) error {
 		if err := pm.stopProcess(name, true); err != nil {
 			return fmt.Errorf("failed to stop %s for restart: %w", name, err)
 		}
-		time.Sleep(1 * time.Second)
+		// Wait for port release if the service binds a port
+		if def.Port > 0 {
+			if err := pm.waitForPortFree(def.Port, 20*time.Second); err != nil {
+				fmt.Printf("[PM] Warning: port %d not free after stop, proceeding anyway: %v\n", def.Port, err)
+			}
+		} else {
+			// Brief pause for non-port services (Aeron cleanup)
+			time.Sleep(2 * time.Second)
+		}
 	}
 
 	return pm.startProcess(*def)
@@ -496,31 +529,94 @@ func (pm *ProcessManager) startProcessNoRotate(def ServiceDef) error {
 
 func (pm *ProcessManager) startProcessInner(def ServiceDef, rotateLogs bool) error {
 	proc := pm.procs[def.Name]
-	proc.mu.Lock()
-	defer proc.mu.Unlock()
 
+	// Phase 1: Check state and claim the start (hold lock briefly)
+	proc.mu.Lock()
 	if proc.running {
+		proc.mu.Unlock()
 		return fmt.Errorf("%s is already running", def.Name)
 	}
-
+	if proc.starting {
+		proc.mu.Unlock()
+		return fmt.Errorf("%s is already starting", def.Name)
+	}
+	proc.starting = true
 	proc.status = "starting"
+	proc.mu.Unlock()
+
+	// Phase 2: Pre-start work WITHOUT holding the lock (port wait, cleanup, etc.)
+	// This allows status queries and stop commands to proceed during preparation.
+	var startErr error
 
 	// Clean stale Aeron state for cluster nodes
 	if def.Role == RoleClusterNode {
 		pm.cleanStaleAeronState(def.Name)
 	}
 
+	// Kill orphaned processes on ALL ports (main + extra) BEFORE waiting for ports.
+	// An orphan may hold both the HTTP port and Aeron egress port — must kill first.
+	if def.Port > 0 {
+		pm.killOrphanedPortHolder(def.Port, def.Name)
+	}
+	for _, extraPort := range def.ExtraPorts {
+		pm.killOrphanedPortHolder(extraPort, def.Name)
+	}
+
+	// Clean stale Aeron MediaDriver dirs for gateways
+	if def.Role == RoleGateway {
+		pm.cleanStaleGatewayAeron(def.Name)
+	}
+
+	// Wait for port to be free (gateways bind HTTP ports)
+	if def.Port > 0 {
+		if err := pm.waitForPortFree(def.Port, 15*time.Second); err != nil {
+			startErr = fmt.Errorf("port %d not free for %s: %w", def.Port, def.Name, err)
+		}
+	}
+	// Also wait for extra ports (Aeron egress)
+	if startErr == nil {
+		for _, extraPort := range def.ExtraPorts {
+			if err := pm.waitForPortFree(extraPort, 10*time.Second); err != nil {
+				startErr = fmt.Errorf("extra port %d not free for %s: %w", extraPort, def.Name, err)
+				break
+			}
+		}
+	}
+
 	// Run pre-start commands
-	for _, preCmd := range def.PreStart {
-		if len(preCmd) == 0 {
-			continue
+	if startErr == nil {
+		for _, preCmd := range def.PreStart {
+			if len(preCmd) == 0 {
+				continue
+			}
+			cmd := exec.Command(preCmd[0], preCmd[1:]...)
+			cmd.Dir = def.WorkDir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				startErr = fmt.Errorf("pre-start command %v failed: %s: %w", preCmd, string(out), err)
+				break
+			}
 		}
-		cmd := exec.Command(preCmd[0], preCmd[1:]...)
-		cmd.Dir = def.WorkDir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			proc.status = "failed"
-			return fmt.Errorf("pre-start command %v failed: %s: %w", preCmd, string(out), err)
-		}
+	}
+
+	// If pre-start failed, mark as failed and return
+	if startErr != nil {
+		proc.mu.Lock()
+		proc.status = "failed"
+		proc.starting = false
+		proc.mu.Unlock()
+		return startErr
+	}
+
+	// Phase 3: Actually start the process (hold lock for state mutation)
+	proc.mu.Lock()
+	defer func() {
+		proc.starting = false
+		proc.mu.Unlock()
+	}()
+
+	// Re-check: someone might have started it while we were doing pre-start work
+	if proc.running {
+		return fmt.Errorf("%s is already running (started while preparing)", def.Name)
 	}
 
 	// Rotate log file (skip on auto-restart to preserve crash context)
@@ -584,6 +680,15 @@ func (pm *ProcessManager) stopProcess(name string, force bool) error {
 	proc := pm.procs[name]
 	proc.mu.Lock()
 
+	// Always cancel pending auto-restarts, even if process appears stopped
+	if proc.stopChan != nil {
+		select {
+		case <-proc.stopChan:
+		default:
+			close(proc.stopChan)
+		}
+	}
+
 	if !proc.running || proc.cmd == nil {
 		// Maybe an adopted process — try killing by PID
 		if proc.pid > 0 {
@@ -606,21 +711,14 @@ func (pm *ProcessManager) stopProcess(name string, force bool) error {
 			fmt.Printf("[PM] Stopped %s (adopted process)\n", name)
 			return nil
 		}
+		proc.status = "stopped"
 		proc.mu.Unlock()
-		return fmt.Errorf("%s is not running", name)
+		return nil // Not an error — just confirms it's stopped
 	}
 
 	proc.status = "stopping"
 	pid := proc.pid
-	stopChan := proc.stopChan
 	proc.mu.Unlock()
-
-	// Signal the monitor to stop auto-restart
-	select {
-	case <-stopChan:
-	default:
-		close(stopChan)
-	}
 
 	// Graceful shutdown: SIGTERM to process group
 	def := pm.findDef(name)
@@ -644,7 +742,17 @@ func (pm *ProcessManager) stopProcess(name string, force bool) error {
 	if isProcessAlive(pid) {
 		fmt.Printf("[PM] Force killing %s (PID %d)\n", name, pid)
 		syscall.Kill(-pid, syscall.SIGKILL)
-		time.Sleep(500 * time.Millisecond)
+		// Wait for the process to actually die (up to 5s after SIGKILL)
+		killDeadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(killDeadline) {
+			if !isProcessAlive(pid) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if isProcessAlive(pid) {
+			fmt.Printf("[PM] WARNING: %s (PID %d) still alive after SIGKILL + 5s\n", name, pid)
+		}
 	}
 
 	proc.mu.Lock()
@@ -716,11 +824,27 @@ func (pm *ProcessManager) monitor(def ServiceDef, proc *managedProcess) {
 		fmt.Printf("[PM] %s crashed (PID %d, exit: %s)\n", def.Name, oldPid, exitMsg)
 	}
 
-	// Auto-restart if enabled
+	// Auto-restart if enabled (with crash-loop detection)
 	if def.AutoRestart {
 		restartSec := def.RestartSec
 		if restartSec <= 0 {
 			restartSec = 5
+		}
+
+		// Crash-loop detection: if restarted 5+ times, apply exponential backoff
+		proc.mu.Lock()
+		rapidRestarts := proc.restartCount
+		proc.mu.Unlock()
+
+		const maxRapidRestarts = 5
+		if rapidRestarts >= maxRapidRestarts {
+			// Exponential backoff: 30s, 60s, 120s, 240s... up to 5min
+			backoffSec := 30 * (1 << (rapidRestarts - maxRapidRestarts))
+			if backoffSec > 300 {
+				backoffSec = 300
+			}
+			restartSec = backoffSec
+			fmt.Printf("[PM] %s in crash loop (%d restarts), backing off to %ds\n", def.Name, rapidRestarts, restartSec)
 		}
 
 		proc.mu.Lock()
@@ -737,7 +861,19 @@ func (pm *ProcessManager) monitor(def ServiceDef, proc *managedProcess) {
 			return
 		}
 
+		// Check if someone else is already starting this service
 		proc.mu.Lock()
+		if proc.starting || proc.running {
+			proc.mu.Unlock()
+			fmt.Printf("[PM] Skipping auto-restart of %s — already %s\n",
+				def.Name, func() string {
+					if proc.running {
+						return "running"
+					}
+					return "starting"
+				}())
+			return
+		}
 		proc.restartCount++
 		proc.mu.Unlock()
 
@@ -789,6 +925,29 @@ func (pm *ProcessManager) adoptExisting() {
 		} else {
 			// Stale PID file
 			pm.removePID(def.Name)
+		}
+	}
+
+	// After adoption, kill orphaned processes holding ports that belong to adopted services.
+	// This handles the race where auto-restart spawns a duplicate during admin restart.
+	pm.cleanupOrphansAfterAdoption()
+}
+
+// cleanupOrphansAfterAdoption kills processes holding service ports that aren't the adopted PID.
+// Runs once at startup to catch orphans from the previous admin instance's auto-restart race.
+func (pm *ProcessManager) cleanupOrphansAfterAdoption() {
+	for _, def := range pm.services {
+		if def.Name == "admin" || !pm.procs[def.Name].running {
+			continue
+		}
+
+		// Check main port
+		if def.Port > 0 {
+			pm.killOrphanedPortHolder(def.Port, def.Name)
+		}
+		// Check extra ports (Aeron egress)
+		for _, extraPort := range def.ExtraPorts {
+			pm.killOrphanedPortHolder(extraPort, def.Name)
 		}
 	}
 }
@@ -861,6 +1020,148 @@ func (pm *ProcessManager) cleanStaleAeronState(name string) {
 			matches, _ := filepath.Glob(pattern)
 			for _, m := range matches {
 				os.Remove(m)
+			}
+		}
+	}
+}
+
+// isPortInUse checks both TCP and UDP for a port being in use.
+func isPortInUse(port int) bool {
+	for _, proto := range []string{"-t", "-u"} {
+		cmd := exec.Command("ss", proto+"lnH", fmt.Sprintf("sport = :%d", port))
+		out, err := cmd.Output()
+		if err == nil && len(strings.TrimSpace(string(out))) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// waitForPortFree polls until a port (TCP or UDP) is no longer in use.
+// Logs what PID is holding the port for easier debugging.
+func (pm *ProcessManager) waitForPortFree(port int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	logged := false
+	for time.Now().Before(deadline) {
+		if !isPortInUse(port) {
+			return nil
+		}
+		if !logged {
+			holder := pm.findPortHolder(port)
+			if holder != "" {
+				fmt.Printf("[PM] Port %d held by %s, waiting up to %s...\n", port, holder, timeout)
+			} else {
+				fmt.Printf("[PM] Port %d still in use, waiting up to %s...\n", port, timeout)
+			}
+			logged = true
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	holder := pm.findPortHolder(port)
+	return fmt.Errorf("port %d still in use after %s (holder: %s)", port, timeout, holder)
+}
+
+// findPortHolder returns a description of the process holding a port (TCP or UDP).
+func (pm *ProcessManager) findPortHolder(port int) string {
+	for _, proto := range []string{"-t", "-u"} {
+		cmd := exec.Command("ss", proto+"lnpH", fmt.Sprintf("sport = :%d", port))
+		out, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+		line := strings.TrimSpace(string(out))
+		if line == "" {
+			continue
+		}
+		// ss -p output includes something like: users:(("java",pid=12345,fd=6))
+		if idx := strings.Index(line, "users:"); idx >= 0 {
+			return strings.TrimSpace(line[idx:])
+		}
+		return line
+	}
+	return "none"
+}
+
+// killOrphanedPortHolder finds and kills any process holding a port that isn't tracked by the PM.
+// This handles orphaned gateway processes left behind from failed restarts.
+func (pm *ProcessManager) killOrphanedPortHolder(port int, serviceName string) {
+	cmd := exec.Command("ss", "-tlnpH", fmt.Sprintf("sport = :%d", port))
+	out, _ := cmd.Output()
+	if len(strings.TrimSpace(string(out))) == 0 {
+		// Also check UDP (Aeron egress uses UDP)
+		cmd = exec.Command("ss", "-ulnpH", fmt.Sprintf("sport = :%d", port))
+		out, _ = cmd.Output()
+	}
+	if len(strings.TrimSpace(string(out))) == 0 {
+		return
+	}
+
+	// Extract PID from ss output like: users:(("java",pid=12345,fd=6))
+	line := string(out)
+	pidIdx := strings.Index(line, "pid=")
+	if pidIdx < 0 {
+		return
+	}
+	pidStr := line[pidIdx+4:]
+	if commaIdx := strings.IndexAny(pidStr, ",)"); commaIdx > 0 {
+		pidStr = pidStr[:commaIdx]
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(pidStr))
+	if err != nil || pid <= 0 {
+		return
+	}
+
+	// Check if this PID is the one we're tracking
+	proc := pm.procs[serviceName]
+	proc.mu.Lock()
+	trackedPID := proc.pid
+	proc.mu.Unlock()
+
+	if pid == trackedPID {
+		return // It's our tracked process, not an orphan
+	}
+
+	// It's an orphan — kill it
+	fmt.Printf("[PM] Killing orphaned process PID %d holding port %d (expected by %s)\n", pid, port, serviceName)
+	syscall.Kill(-pid, syscall.SIGTERM)
+	time.Sleep(2 * time.Second)
+	if isProcessAlive(pid) {
+		syscall.Kill(-pid, syscall.SIGKILL)
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Clean its Aeron directory
+	prefix := fmt.Sprintf("aeron-%s-%d", serviceName, pid)
+	dirPath := filepath.Join("/dev/shm", prefix)
+	if _, err := os.Stat(dirPath); err == nil {
+		os.RemoveAll(dirPath)
+		fmt.Printf("[PM] Cleaned orphan Aeron dir: %s\n", dirPath)
+	}
+}
+
+// cleanStaleGatewayAeron removes stale MediaDriver directories for gateway processes
+func (pm *ProcessManager) cleanStaleGatewayAeron(name string) {
+	// Gateway MediaDriver dirs are named aeron-{name}-{pid}
+	// Clean any that don't belong to a running process
+	entries, err := os.ReadDir("/dev/shm")
+	if err != nil {
+		return
+	}
+	prefix := fmt.Sprintf("aeron-%s-", name)
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), prefix) {
+			// Extract PID from directory name
+			pidStr := strings.TrimPrefix(entry.Name(), prefix)
+			pid, err := strconv.Atoi(pidStr)
+			if err != nil {
+				continue
+			}
+			// Check if this PID is still alive
+			if err := syscall.Kill(pid, 0); err != nil {
+				// Process is dead, clean up
+				dirPath := filepath.Join("/dev/shm", entry.Name())
+				os.RemoveAll(dirPath)
+				fmt.Printf("[PM] Cleaned stale gateway Aeron dir: %s\n", dirPath)
 			}
 		}
 	}

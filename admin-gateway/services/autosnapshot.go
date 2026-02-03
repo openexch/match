@@ -1,7 +1,7 @@
 package services
 
 import (
-	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -12,6 +12,7 @@ type AutoSnapshot struct {
 	enabled           bool
 	intervalMinutes   int64
 	lastSnapshotPos   int64
+	snapshotCount     int
 	stopChan          chan struct{}
 	opsSvc            *OperationsService
 }
@@ -40,19 +41,14 @@ func (a *AutoSnapshot) Start(intervalMinutes int64) {
 		for {
 			select {
 			case <-ticker.C:
-				if !a.opsSvc.progress.IsRunning() {
-					fmt.Println("Auto-snapshot: triggering snapshot...")
-					a.opsSvc.Snapshot()
-				} else {
-					fmt.Println("Auto-snapshot skipped: another operation in progress")
-				}
+				a.runSnapshotCycle()
 			case <-a.stopChan:
 				return
 			}
 		}
 	}()
 
-	fmt.Printf("Auto-snapshot enabled: every %d minutes\n", intervalMinutes)
+	log.Printf("Auto-snapshot enabled: every %d minutes", intervalMinutes)
 }
 
 // Stop disables periodic snapshots
@@ -94,6 +90,65 @@ func (a *AutoSnapshot) GetLastPosition() int64 {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.lastSnapshotPos
+}
+
+// runSnapshotCycle takes a snapshot and then runs compaction.
+// Every 6th cycle (~30 min at 5-min interval), runs RollingArchiveCleanup instead of Compact.
+func (a *AutoSnapshot) runSnapshotCycle() {
+	if a.opsSvc.progress.IsRunning() {
+		log.Println("Auto-snapshot skipped: another operation in progress")
+		return
+	}
+
+	log.Println("Auto-snapshot: triggering snapshot...")
+	if err := a.opsSvc.Snapshot(); err != nil {
+		log.Printf("Auto-snapshot: failed to start snapshot: %v", err)
+		return
+	}
+
+	if !a.waitForOperation(5 * time.Minute) {
+		log.Println("Auto-snapshot: snapshot did not complete in time, skipping compaction")
+		return
+	}
+
+	a.mu.Lock()
+	a.snapshotCount++
+	count := a.snapshotCount
+	a.mu.Unlock()
+
+	// Every 6th snapshot (~30 min): full rolling archive cleanup (truncates consensus log)
+	// Otherwise: lightweight compact (cleans orphaned segments, no downtime)
+	if count%6 == 0 {
+		log.Println("Auto-snapshot: triggering rolling archive cleanup (every 6th cycle)...")
+		if err := a.opsSvc.RollingArchiveCleanup(); err != nil {
+			log.Printf("Auto-snapshot: failed to start rolling cleanup: %v", err)
+		}
+	} else {
+		log.Println("Auto-snapshot: triggering compact...")
+		if err := a.opsSvc.Compact(); err != nil {
+			log.Printf("Auto-snapshot: failed to start compact: %v", err)
+		}
+	}
+}
+
+// waitForOperation polls until the current operation finishes or timeout is reached.
+func (a *AutoSnapshot) waitForOperation(timeout time.Duration) bool {
+	deadline := time.After(timeout)
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			return false
+		case <-tick.C:
+			if !a.opsSvc.progress.IsRunning() {
+				return true
+			}
+		case <-a.stopChan:
+			return false
+		}
+	}
 }
 
 // ToMap returns status as a map
