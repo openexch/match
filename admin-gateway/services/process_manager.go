@@ -201,13 +201,7 @@ func NewProcessManager(cfg *config.Config, _ *Systemd) *ProcessManager {
 				// Admin is self — we don't manage ourselves, just report status
 				StartOrder: 7,
 			},
-			{
-				Name: "ui", Display: "Trading UI", Role: RoleInfra, Port: 3000,
-				Command: []string{"/usr/bin/npx", "vite", "preview", "--port", "3000", "--host"},
-				WorkDir: filepath.Join(cfg.ProjectDir, "match/ui"),
-				DependsOn: []string{"order", "market"}, StartOrder: 8,
-				AutoRestart: true, RestartSec: 5, StopTimeout: 5,
-			},
+			// UI removed — nginx serves static files from match/ui/dist directly
 		},
 		stopChan: make(chan struct{}),
 	}
