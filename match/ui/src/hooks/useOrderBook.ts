@@ -10,7 +10,7 @@ export interface LevelChange {
 }
 
 // Convert price to string key for consistent Map lookups (avoids floating-point precision issues)
-export const priceKey = (price: number): string => price.toFixed(8);
+export const priceKey = (price: number): string => (price ?? 0).toFixed(8);
 
 const INITIAL_ORDER_BOOK: OrderBook = {
   bids: [],

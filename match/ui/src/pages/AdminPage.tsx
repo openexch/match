@@ -12,8 +12,11 @@ interface NodeStatus {
   status?: NodeStatusType;
   healthy?: boolean;
   // Per-node data
-  logPosition?: number;
+  logPosition?: number;      // From recording-log (stale, term boundaries only)
+  commitPosition?: number;   // Real-time from Aeron counters
   snapshotPosition?: number;
+  logDelta?: number;         // commitPosition - snapshotPosition
+  snapshotCount?: number;
   archiveBytes?: number;
   archiveDiskBytes?: number;
 }
@@ -928,17 +931,15 @@ export function AdminPage() {
                   </div>
                   <div className="node-data">
                     <div className="node-data-row">
-                      <span className="data-label">Log:</span>
-                      <span className="data-value">{formatPosition(node.logPosition)}</span>
+                      <span className="data-label">Commit:</span>
+                      <span className="data-value">{formatPosition(node.commitPosition)}</span>
                       <span className="data-label">Snap:</span>
                       <span className="data-value">{formatPosition(node.snapshotPosition)}</span>
                     </div>
                     <div className="node-data-row">
                       <span className="data-label">Delta:</span>
                       <span className="data-value delta">
-                        {node.logPosition !== undefined && node.snapshotPosition !== undefined
-                          ? formatPosition(node.logPosition - node.snapshotPosition)
-                          : '--'}
+                        {formatPosition(node.logDelta)}
                       </span>
                       <span className="data-label">Archive:</span>
                       <span className="data-value">{node.archiveBytes !== undefined ? formatBytes(node.archiveBytes) : '--'}</span>
@@ -947,20 +948,20 @@ export function AdminPage() {
                         <div className="node-popover">
                           <div className="popover-title">Node Details</div>
                           <div className="popover-row">
-                            <span>Log Position:</span>
-                            <span>{node.logPosition !== undefined ? node.logPosition.toLocaleString() : '--'}</span>
+                            <span>Commit Position:</span>
+                            <span>{node.commitPosition !== undefined ? node.commitPosition.toLocaleString() : '--'}</span>
                           </div>
                           <div className="popover-row">
                             <span>Snapshot Position:</span>
                             <span>{node.snapshotPosition !== undefined ? node.snapshotPosition.toLocaleString() : '--'}</span>
                           </div>
                           <div className="popover-row">
-                            <span>Delta (uncommitted):</span>
-                            <span>
-                              {node.logPosition !== undefined && node.snapshotPosition !== undefined
-                                ? (node.logPosition - node.snapshotPosition).toLocaleString()
-                                : '--'}
-                            </span>
+                            <span>Delta (since snapshot):</span>
+                            <span>{node.logDelta !== undefined ? node.logDelta.toLocaleString() : '--'}</span>
+                          </div>
+                          <div className="popover-row">
+                            <span>Snapshot Count:</span>
+                            <span>{node.snapshotCount !== undefined ? node.snapshotCount : '--'}</span>
                           </div>
                           <div className="popover-divider" />
                           <div className="popover-row">
@@ -979,7 +980,7 @@ export function AdminPage() {
                         <span className="data-label">Mem:</span>
                         <span className="data-value">{formatBytes(nodeProc.memoryBytes)}</span>
                         <span className="data-label">CPU:</span>
-                        <span className="data-value">{nodeProc.cpuPercent.toFixed(1)}%</span>
+                        <span className="data-value">{(nodeProc.cpuPercent ?? 0).toFixed(1)}%</span>
                         <span className="data-label">Up:</span>
                         <span className="data-value">{formatUptime(nodeProc.uptimeMs)}</span>
                       </div>
@@ -1082,7 +1083,7 @@ export function AdminPage() {
                       <div className="process-metrics">
                         <span className="metric">PID <span className="metric-value">{proc.pid}</span></span>
                         <span className="metric">Mem <span className="metric-value">{formatBytes(proc.memoryBytes)}</span></span>
-                        <span className="metric">CPU <span className="metric-value">{proc.cpuPercent.toFixed(1)}%</span></span>
+                        <span className="metric">CPU <span className="metric-value">{(proc.cpuPercent ?? 0).toFixed(1)}%</span></span>
                         <span className="metric">Up <span className="metric-value">{formatUptime(proc.uptimeMs)}</span></span>
                       </div>
                     )}

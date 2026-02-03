@@ -105,16 +105,18 @@ function calcVolumeMA(data: CandleData[], period: number): (LineData | null)[] {
   return result;
 }
 
-function formatPrice(v: number): string {
-  if (v >= 1000) return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (v >= 1) return v.toFixed(4);
-  return v.toFixed(6);
+function formatPrice(v: number | undefined | null): string {
+  const n = v ?? 0;
+  if (n >= 1000) return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (n >= 1) return n.toFixed(4);
+  return n.toFixed(6);
 }
 
-function formatVolume(v: number): string {
-  if (v >= 1_000_000) return (v / 1_000_000).toFixed(2) + 'M';
-  if (v >= 1_000) return (v / 1_000).toFixed(2) + 'K';
-  return v.toFixed(2);
+function formatVolume(v: number | undefined | null): string {
+  const n = v ?? 0;
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(2) + 'K';
+  return n.toFixed(2);
 }
 
 function getMaValueAtIndex(maData: (LineData | null)[], index: number): number | null {
@@ -746,7 +748,7 @@ export function Chart({ candles, currentCandle, symbol, onIntervalChange, active
               </span>
               <span className={displayOhlcv.isUp ? 'ohlcv-change-up' : 'ohlcv-change-down'}>
                 {displayOhlcv.change >= 0 ? '+' : ''}{formatPrice(displayOhlcv.change)}
-                ({displayOhlcv.changePct >= 0 ? '+' : ''}{displayOhlcv.changePct.toFixed(2)}%)
+                ({(displayOhlcv.changePct ?? 0) >= 0 ? '+' : ''}{(displayOhlcv.changePct ?? 0).toFixed(2)}%)
               </span>
             </div>
             <div className="ohlcv-row ohlcv-vol-row">

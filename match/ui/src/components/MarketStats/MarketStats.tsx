@@ -16,7 +16,9 @@ export function MarketStats({ market, stats, orderBook }: MarketStatsProps) {
     ? (spread / orderBook.asks[0].price) * 100
     : 0;
 
-  const isPositive = stats.priceChange >= 0;
+  const priceChange = stats.priceChange ?? 0;
+  const priceChangePercent = stats.priceChangePercent ?? 0;
+  const isPositive = priceChange >= 0;
 
   return (
     <div className="market-stats">
@@ -30,7 +32,7 @@ export function MarketStats({ market, stats, orderBook }: MarketStatsProps) {
       <div className="stat-item">
         <span className="stat-label">24h Change</span>
         <span className={`stat-value ${isPositive ? 'positive' : 'negative'}`}>
-          {isPositive ? '▲ +' : '▼ '}{formatPrice(stats.priceChange)} ({isPositive ? '+' : ''}{stats.priceChangePercent.toFixed(2)}%)
+          {isPositive ? '▲ +' : '▼ '}{formatPrice(priceChange)} ({isPositive ? '+' : ''}{priceChangePercent.toFixed(2)}%)
         </span>
       </div>
 

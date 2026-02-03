@@ -1,18 +1,20 @@
-export function formatPrice(price: number): string {
-  return price.toLocaleString('en-US', {
+export function formatPrice(price: number | undefined | null): string {
+  const val = price ?? 0;
+  return val.toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
 }
 
-export function formatQuantity(quantity: number): string {
-  if (quantity >= 1) {
-    return quantity.toLocaleString('en-US', {
+export function formatQuantity(quantity: number | undefined | null): string {
+  const val = quantity ?? 0;
+  if (val >= 1) {
+    return val.toLocaleString('en-US', {
       minimumFractionDigits: 4,
       maximumFractionDigits: 4,
     });
   }
-  return quantity.toLocaleString('en-US', {
+  return val.toLocaleString('en-US', {
     minimumFractionDigits: 8,
     maximumFractionDigits: 8,
   });
