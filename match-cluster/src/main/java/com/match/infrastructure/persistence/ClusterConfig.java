@@ -205,6 +205,9 @@ public final class ClusterConfig
                 .controlResponseChannel(archiveContext.localControlChannel())
                 .aeronDirectoryName(aeronDirName);
 
+        // Snapshot channel: 64MB term buffer -> 8MB max message size (snapshots are ~6MB)
+        final String snapshotChannel = "aeron:ipc?term-length=67108864";
+
         // ==================== ULTRA-LOW LATENCY CONSENSUS MODULE CONFIG ====================
         final ConsensusModule.Context consensusModuleContext = new ConsensusModule.Context()
                 .clusterMemberId(memberId)
@@ -213,6 +216,7 @@ public final class ClusterConfig
                 .archiveContext(aeronArchiveContext.clone())
                 .serviceCount(1 + additionalServices.length)
                 .replicationChannel("aeron:udp?endpoint=" + hostname + ":0")
+                .snapshotChannel(snapshotChannel)
                 // Idle strategy for consensus
                 .idleStrategySupplier(org.agrona.concurrent.BusySpinIdleStrategy::new)
                 // Timing for consistent latency (tighter timeouts)
@@ -241,7 +245,9 @@ public final class ClusterConfig
                 // Idle strategy: BusySpin for lowest latency
                 .idleStrategySupplier(org.agrona.concurrent.BusySpinIdleStrategy::new)
                 // Snapshot duration threshold (trigger warning if snapshot takes too long)
-                .snapshotDurationThresholdNs(5_000_000_000L);  // 5 seconds
+                .snapshotDurationThresholdNs(5_000_000_000L)  // 5 seconds
+                // Snapshot channel: 64MB term buffer -> 8MB max message size
+                .snapshotChannel(snapshotChannel);
         serviceContexts.add(clusteredServiceContext);
 
         for (int i = 0; i < additionalServices.length; i++)
@@ -253,7 +259,8 @@ public final class ClusterConfig
                     .clusteredService(additionalServices[i])
                     .serviceId(i + 1)
                     .idleStrategySupplier(org.agrona.concurrent.BusySpinIdleStrategy::new)
-                    .snapshotDurationThresholdNs(5_000_000_000L);
+                    .snapshotDurationThresholdNs(5_000_000_000L)
+                    .snapshotChannel(snapshotChannel);
             serviceContexts.add(additionalServiceContext);
         }
 
