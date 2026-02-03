@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -37,40 +38,46 @@ func (o *OperationsService) SetProcessManager(pm *ProcessManager) {
 	o.procMgr = pm
 }
 
-// startService starts a service via process manager (preferred) or systemd (fallback)
+// isNodeRunning checks if a node is running via ProcessManager
+func (o *OperationsService) isNodeRunning(nodeId int) bool {
+	if o.procMgr == nil {
+		return false // No PM means can't determine state
+	}
+	info := o.procMgr.Get(fmt.Sprintf("node%d", nodeId))
+	return info != nil && info.Running
+}
+
+// startService starts a service via process manager
 func (o *OperationsService) startService(name string) {
-	if o.procMgr != nil {
-		if err := o.procMgr.startByName(name); err != nil {
-			fmt.Printf("[ops] PM start %s failed, falling back to systemd: %v\n", name, err)
-			o.systemd.Start(name)
-		}
+	if o.procMgr == nil {
+		fmt.Printf("[ops] ERROR: ProcessManager not initialized, cannot start %s\n", name)
 		return
 	}
-	o.systemd.Start(name)
+	if err := o.procMgr.startByName(name); err != nil {
+		fmt.Printf("[ops] PM start %s failed: %v\n", name, err)
+	}
 }
 
-// stopService stops a service via process manager (preferred) or systemd (fallback)
+// stopService stops a service via process manager
 func (o *OperationsService) stopService(name string) {
-	if o.procMgr != nil {
-		if err := o.procMgr.stopProcess(name, true); err != nil {
-			fmt.Printf("[ops] PM stop %s failed, falling back to systemd: %v\n", name, err)
-			o.systemd.Stop(name)
-		}
+	if o.procMgr == nil {
+		fmt.Printf("[ops] ERROR: ProcessManager not initialized, cannot stop %s\n", name)
 		return
 	}
-	o.systemd.Stop(name)
+	if err := o.procMgr.stopProcess(name, true); err != nil {
+		fmt.Printf("[ops] PM stop %s failed: %v\n", name, err)
+	}
 }
 
-// restartService restarts a service via process manager (preferred) or systemd (fallback)
+// restartService restarts a service via process manager
 func (o *OperationsService) restartService(name string) {
-	if o.procMgr != nil {
-		if err := o.procMgr.Restart(name); err != nil {
-			fmt.Printf("[ops] PM restart %s failed, falling back to systemd: %v\n", name, err)
-			o.systemd.Restart(name)
-		}
+	if o.procMgr == nil {
+		fmt.Printf("[ops] ERROR: ProcessManager not initialized, cannot restart %s\n", name)
 		return
 	}
-	o.systemd.Restart(name)
+	if err := o.procMgr.Restart(name); err != nil {
+		fmt.Printf("[ops] PM restart %s failed: %v\n", name, err)
+	}
 }
 
 // RollingUpdate performs a rolling update of all cluster nodes
@@ -773,20 +780,56 @@ func (o *OperationsService) waitForNodeRejoin(nodeId int, timeout time.Duration)
 	fmt.Printf("Node %d rejoin timeout after %v, continuing...\n", nodeId, timeout)
 }
 
-// Cleanup removes stale Aeron files (requires all nodes stopped)
-func (o *OperationsService) Cleanup() map[string]interface{} {
-	result := map[string]interface{}{}
-	var cleaned []string
-	var errors []string
+// CleanupOptions configures the cleanup operation
+type CleanupOptions struct {
+	Force  bool `json:"force"`
+	DryRun bool `json:"dryRun"`
+	Backup bool `json:"backup"`
+}
 
-	// Check if any nodes are running
+// Cleanup removes stale Aeron files (requires all nodes stopped and force=true)
+func (o *OperationsService) Cleanup(opts CleanupOptions) map[string]interface{} {
+	result := map[string]interface{}{}
+
+	// Require force flag for destructive operation
+	if !opts.Force {
+		result["success"] = false
+		result["error"] = "Destructive operation requires force=true"
+		return result
+	}
+
+	// Check if any nodes are running via ProcessManager
 	for i := 0; i < 3; i++ {
-		if o.systemd.IsActive(fmt.Sprintf("node%d", i)) {
+		if o.isNodeRunning(i) {
 			result["success"] = false
 			result["error"] = fmt.Sprintf("Node %d is still running. Stop all nodes before cleanup.", i)
 			return result
 		}
 	}
+
+	// Dry-run mode: report what would be cleaned
+	if opts.DryRun {
+		wouldClean := []string{
+			"/dev/shm/aeron-*",
+			"/dev/shm/aeron-cluster/node*/cluster/cluster-mark*.dat",
+			"/dev/shm/aeron-cluster/node*/cluster/*.lck",
+			"/dev/shm/aeron-cluster/node*/archive/archive-mark.dat",
+			"/tmp/aeron-* (gateway files)",
+		}
+		result["success"] = true
+		result["dryRun"] = true
+		result["wouldClean"] = wouldClean
+		return result
+	}
+
+	// Backup mark files before cleanup if requested
+	if opts.Backup {
+		backupPath := o.backupMarkFiles()
+		result["backupCreated"] = backupPath
+	}
+
+	var cleaned []string
+	var errors []string
 
 	// Clean shared memory aeron files
 	if err := exec.Command("bash", "-c", "rm -rf /dev/shm/aeron-* 2>/dev/null || true").Run(); err != nil {
@@ -825,6 +868,201 @@ func (o *OperationsService) Cleanup() map[string]interface{} {
 	return result
 }
 
+// CleanupNode removes stale Aeron files for a single node
+func (o *OperationsService) CleanupNode(nodeId int, force, dryRun bool) map[string]interface{} {
+	result := map[string]interface{}{"nodeId": nodeId}
+
+	if nodeId < 0 || nodeId > 2 {
+		result["success"] = false
+		result["error"] = "Invalid nodeId (must be 0, 1, or 2)"
+		return result
+	}
+
+	if !force {
+		result["success"] = false
+		result["error"] = "Destructive operation requires force=true"
+		return result
+	}
+
+	if o.isNodeRunning(nodeId) {
+		result["success"] = false
+		result["error"] = fmt.Sprintf("Node %d is still running", nodeId)
+		return result
+	}
+
+	nodeDir := fmt.Sprintf("%s/node%d", o.cfg.ClusterDir, nodeId)
+	files := []string{
+		nodeDir + "/cluster/cluster-mark*.dat",
+		nodeDir + "/cluster/*.lck",
+		nodeDir + "/archive/archive-mark.dat",
+	}
+
+	if dryRun {
+		result["success"] = true
+		result["dryRun"] = true
+		result["wouldClean"] = files
+		return result
+	}
+
+	// Clean files
+	for _, pattern := range files {
+		exec.Command("bash", "-c", "rm -f "+pattern+" 2>/dev/null").Run()
+	}
+
+	result["success"] = true
+	result["cleaned"] = files
+	result["message"] = fmt.Sprintf("Node %d mark files cleaned", nodeId)
+	return result
+}
+
+// BackupInfo contains information about available backups
+type BackupInfo struct {
+	BackupDir       string `json:"backupDir"`
+	HasRecordingLog bool   `json:"hasRecordingLog"`
+	HasArchive      bool   `json:"hasArchive"`
+	RecordingCount  int    `json:"recordingCount"`
+}
+
+// GetBackupInfo returns information about backup data availability
+func (o *OperationsService) GetBackupInfo() BackupInfo {
+	backupDir := filepath.Join(o.cfg.ProjectDir, "backup")
+	info := BackupInfo{BackupDir: backupDir}
+
+	if _, err := os.Stat(filepath.Join(backupDir, "cluster/recording.log")); err == nil {
+		info.HasRecordingLog = true
+	}
+	if _, err := os.Stat(filepath.Join(backupDir, "archive/archive.catalog")); err == nil {
+		info.HasArchive = true
+	}
+	matches, _ := filepath.Glob(filepath.Join(backupDir, "archive/*.rec"))
+	info.RecordingCount = len(matches)
+
+	return info
+}
+
+// RecoverFromBackup restores a node's cluster data from the backup directory
+func (o *OperationsService) RecoverFromBackup(nodeId int, force, dryRun bool) map[string]interface{} {
+	result := map[string]interface{}{"nodeId": nodeId}
+
+	if nodeId < 0 || nodeId > 2 {
+		result["success"] = false
+		result["error"] = "Invalid nodeId (must be 0, 1, or 2)"
+		return result
+	}
+
+	if !force {
+		result["success"] = false
+		result["error"] = "Destructive operation requires force=true"
+		return result
+	}
+
+	if o.isNodeRunning(nodeId) {
+		result["success"] = false
+		result["error"] = fmt.Sprintf("Node %d must be stopped before recovery", nodeId)
+		return result
+	}
+
+	backupDir := filepath.Join(o.cfg.ProjectDir, "backup")
+	nodeDir := fmt.Sprintf("%s/node%d", o.cfg.ClusterDir, nodeId)
+
+	// Check backup exists
+	if _, err := os.Stat(filepath.Join(backupDir, "archive/archive.catalog")); os.IsNotExist(err) {
+		result["success"] = false
+		result["error"] = "No backup found at " + backupDir + "/archive/archive.catalog"
+		return result
+	}
+
+	if dryRun {
+		result["success"] = true
+		result["dryRun"] = true
+		result["source"] = backupDir
+		result["target"] = nodeDir
+		return result
+	}
+
+	// Create directories
+	os.MkdirAll(filepath.Join(nodeDir, "cluster"), 0755)
+	os.MkdirAll(filepath.Join(nodeDir, "archive"), 0755)
+
+	// Copy archive catalog and recordings
+	if err := copyFile(filepath.Join(backupDir, "archive/archive.catalog"),
+		filepath.Join(nodeDir, "archive/archive.catalog")); err != nil {
+		result["success"] = false
+		result["error"] = "Failed to copy archive.catalog: " + err.Error()
+		return result
+	}
+
+	recFiles, _ := filepath.Glob(filepath.Join(backupDir, "archive/*.rec"))
+	for _, src := range recFiles {
+		if err := copyFile(src, filepath.Join(nodeDir, "archive", filepath.Base(src))); err != nil {
+			result["success"] = false
+			result["error"] = "Failed to copy " + filepath.Base(src) + ": " + err.Error()
+			return result
+		}
+	}
+
+	// Copy recording.log if exists
+	recordingLogSrc := filepath.Join(backupDir, "cluster/recording.log")
+	if _, err := os.Stat(recordingLogSrc); err == nil {
+		copyFile(recordingLogSrc, filepath.Join(nodeDir, "cluster/recording.log"))
+	}
+
+	// Seed from snapshot
+	output, err := o.cluster.SeedRecordingLogFromSnapshot(nodeId)
+	if err != nil {
+		result["success"] = false
+		result["error"] = "SeedRecordingLogFromSnapshot failed: " + err.Error()
+		result["output"] = output
+		return result
+	}
+
+	result["success"] = true
+	result["message"] = fmt.Sprintf("Node %d recovered from backup", nodeId)
+	result["recordingsCopied"] = len(recFiles)
+	return result
+}
+
+// backupMarkFiles creates a timestamped backup of mark files before cleanup
+func (o *OperationsService) backupMarkFiles() string {
+	timestamp := time.Now().Format("20060102-150405")
+	backupDir := filepath.Join(o.cfg.ProjectDir, "backup/pre-cleanup", timestamp)
+	os.MkdirAll(backupDir, 0755)
+
+	for i := 0; i < 3; i++ {
+		nodeDir := fmt.Sprintf("%s/node%d", o.cfg.ClusterDir, i)
+		nodeBackup := filepath.Join(backupDir, fmt.Sprintf("node%d", i))
+		os.MkdirAll(nodeBackup, 0755)
+
+		files := []string{"cluster/cluster-mark.dat", "cluster/recording.log",
+			"archive/archive-mark.dat", "archive/archive.catalog"}
+		for _, f := range files {
+			src := filepath.Join(nodeDir, f)
+			if _, err := os.Stat(src); err == nil {
+				copyFile(src, filepath.Join(nodeBackup, filepath.Base(f)))
+			}
+		}
+	}
+	return backupDir
+}
+
+// copyFile copies a file from src to dst
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+	return err
+}
+
 // waitForPort polls until a UDP port is open (bound) on the given host
 func (o *OperationsService) waitForPort(host string, port int, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
@@ -859,17 +1097,19 @@ func (o *OperationsService) waitForNodeStopped(nodeId int, timeout time.Duration
 	service := fmt.Sprintf("node%d", nodeId)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if !o.systemd.IsActive(service) {
+		if !o.isNodeRunning(nodeId) {
 			return
 		}
 		time.Sleep(1 * time.Second)
 	}
 	// Force kill if still running
 	fmt.Printf("Node %d still running after timeout, force killing\n", nodeId)
-	pid := o.systemd.GetPID(service)
-	if pid > 0 {
-		exec.Command("kill", "-9", fmt.Sprintf("%d", pid)).Run()
-		time.Sleep(1 * time.Second)
+	if o.procMgr != nil {
+		info := o.procMgr.Get(service)
+		if info != nil && info.PID > 0 {
+			exec.Command("kill", "-9", fmt.Sprintf("%d", info.PID)).Run()
+			time.Sleep(1 * time.Second)
+		}
 	}
 }
 

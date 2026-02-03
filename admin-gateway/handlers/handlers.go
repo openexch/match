@@ -13,7 +13,6 @@ import (
 type Handlers struct {
 	statusSvc    *services.StatusService
 	opsSvc       *services.OperationsService
-	systemd      *services.Systemd
 	cluster      *services.Cluster
 	progress     *services.Progress
 	status       *services.ClusterStatus
@@ -25,7 +24,6 @@ type Handlers struct {
 func New(
 	statusSvc *services.StatusService,
 	opsSvc *services.OperationsService,
-	systemd *services.Systemd,
 	cluster *services.Cluster,
 	progress *services.Progress,
 	status *services.ClusterStatus,
@@ -36,7 +34,6 @@ func New(
 	return &Handlers{
 		statusSvc:    statusSvc,
 		opsSvc:       opsSvc,
-		systemd:      systemd,
 		cluster:      cluster,
 		progress:     progress,
 		status:       status,
@@ -96,8 +93,11 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 	r.Post("/api/admin/processes/stop-all", h.handleProcessStopAll)
 	r.Post("/api/admin/processes/restart-all", h.handleProcessRestartAll)
 
-	// Cleanup
+	// Cleanup and recovery
 	r.Post("/api/admin/cleanup", h.handleCleanup)
+	r.Post("/api/admin/cleanup-node", h.handleCleanupNode)
+	r.Get("/api/admin/backup-info", h.handleBackupInfo)
+	r.Post("/api/admin/recover-from-backup", h.handleRecoverFromBackup)
 
 	// Health check
 	r.Get("/health", h.handleHealth)
@@ -391,7 +391,46 @@ func (h *Handlers) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 // Cleanup handler
 func (h *Handlers) handleCleanup(w http.ResponseWriter, r *http.Request) {
-	result := h.opsSvc.Cleanup()
+	var opts services.CleanupOptions
+	json.NewDecoder(r.Body).Decode(&opts) // ignore error - defaults to false values
+	result := h.opsSvc.Cleanup(opts)
+	status := http.StatusOK
+	if success, ok := result["success"].(bool); ok && !success {
+		status = http.StatusBadRequest
+	}
+	jsonResponse(w, status, result)
+}
+
+// CleanupNode handler for per-node cleanup
+func (h *Handlers) handleCleanupNode(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		NodeId int  `json:"nodeId"`
+		Force  bool `json:"force"`
+		DryRun bool `json:"dryRun"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	result := h.opsSvc.CleanupNode(req.NodeId, req.Force, req.DryRun)
+	status := http.StatusOK
+	if success, ok := result["success"].(bool); ok && !success {
+		status = http.StatusBadRequest
+	}
+	jsonResponse(w, status, result)
+}
+
+// BackupInfo handler
+func (h *Handlers) handleBackupInfo(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, http.StatusOK, h.opsSvc.GetBackupInfo())
+}
+
+// RecoverFromBackup handler
+func (h *Handlers) handleRecoverFromBackup(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		NodeId int  `json:"nodeId"`
+		Force  bool `json:"force"`
+		DryRun bool `json:"dryRun"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	result := h.opsSvc.RecoverFromBackup(req.NodeId, req.Force, req.DryRun)
 	status := http.StatusOK
 	if success, ok := result["success"].(bool); ok && !success {
 		status = http.StatusBadRequest

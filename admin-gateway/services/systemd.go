@@ -6,7 +6,10 @@ import (
 	"strings"
 )
 
-// Systemd wraps systemctl commands for user services
+// Systemd wraps systemctl commands for admin gateway self-management ONLY.
+// Cluster nodes and gateways are managed by ProcessManager, NOT systemd.
+// This struct is ONLY used by RebuildAdmin() for admin gateway self-restart.
+// DO NOT use this for cluster node operations.
 type Systemd struct{}
 
 func NewSystemd() *Systemd {

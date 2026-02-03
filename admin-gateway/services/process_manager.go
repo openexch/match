@@ -86,7 +86,7 @@ type ProcessManager struct {
 	stopChan chan struct{}
 }
 
-func NewProcessManager(cfg *config.Config, _ *Systemd) *ProcessManager {
+func NewProcessManager(cfg *config.Config) *ProcessManager {
 	homeDir, _ := os.UserHomeDir()
 	logDir := filepath.Join(homeDir, ".local/log/cluster")
 	pidDir := filepath.Join(homeDir, ".local/run/match")

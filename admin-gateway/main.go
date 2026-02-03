@@ -20,13 +20,13 @@ func main() {
 	cfg := config.Load()
 
 	// Initialize services
-	systemd := services.NewSystemd()   // still used by operations (rolling update, snapshot, etc.)
+	systemd := services.NewSystemd()   // only used by OperationsService for admin gateway self-restart
 	cluster := services.NewCluster(cfg)
 	progress := services.NewProgress()
 	clusterStatus := services.NewClusterStatus()
-	procMgr := services.NewProcessManager(cfg, systemd)
+	procMgr := services.NewProcessManager(cfg)
 
-	statusSvc := services.NewStatusService(cfg, systemd, cluster, clusterStatus)
+	statusSvc := services.NewStatusService(cfg, cluster, clusterStatus)
 	statusSvc.SetProcessManager(procMgr)
 	opsSvc := services.NewOperationsService(cfg, systemd, cluster, progress, clusterStatus)
 	opsSvc.SetProcessManager(procMgr)
@@ -36,7 +36,7 @@ func main() {
 	logSvc := services.NewLogService(cfg)
 
 	// Initialize handlers
-	h := handlers.New(statusSvc, opsSvc, systemd, cluster, progress, clusterStatus, autoSnapshot, logSvc, procMgr)
+	h := handlers.New(statusSvc, opsSvc, cluster, progress, clusterStatus, autoSnapshot, logSvc, procMgr)
 
 	// Setup router
 	r := chi.NewRouter()

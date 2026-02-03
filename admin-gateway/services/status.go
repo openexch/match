@@ -56,7 +56,6 @@ func (cs *ClusterStatus) GetLeaderId() int {
 // StatusService provides cluster status information with background caching
 type StatusService struct {
 	cfg           *config.Config
-	systemd       *Systemd
 	cluster       *Cluster
 	clusterStatus *ClusterStatus
 	pm            *ProcessManager
@@ -64,7 +63,7 @@ type StatusService struct {
 	autoSnapshot  *AutoSnapshot
 
 	// Cached status
-	cacheMu     sync.RWMutex
+	cacheMu      sync.RWMutex
 	cachedStatus map[string]interface{}
 	lastUpdate   time.Time
 
@@ -73,10 +72,9 @@ type StatusService struct {
 	stopChan     chan struct{}
 }
 
-func NewStatusService(cfg *config.Config, systemd *Systemd, cluster *Cluster, status *ClusterStatus) *StatusService {
+func NewStatusService(cfg *config.Config, cluster *Cluster, status *ClusterStatus) *StatusService {
 	s := &StatusService{
 		cfg:           cfg,
-		systemd:       systemd,
 		cluster:       cluster,
 		clusterStatus: status,
 		counters:      NewAeronCounters(),
@@ -105,25 +103,25 @@ func (s *StatusService) Stop() {
 	close(s.stopChan)
 }
 
-// isServiceRunning checks PM first, falls back to systemd
+// isServiceRunning checks if a service is running via ProcessManager
 func (s *StatusService) isServiceRunning(name string) bool {
-	if s.pm != nil {
-		info := s.pm.Get(name)
-		return info != nil && info.Running
+	if s.pm == nil {
+		return false
 	}
-	return s.systemd.IsActive(name)
+	info := s.pm.Get(name)
+	return info != nil && info.Running
 }
 
-// getServicePID gets PID from PM first, falls back to systemd
+// getServicePID gets PID from ProcessManager
 func (s *StatusService) getServicePID(name string) int {
-	if s.pm != nil {
-		info := s.pm.Get(name)
-		if info != nil {
-			return info.PID
-		}
+	if s.pm == nil {
 		return 0
 	}
-	return s.systemd.GetPID(name)
+	info := s.pm.Get(name)
+	if info != nil {
+		return info.PID
+	}
+	return 0
 }
 
 func (s *StatusService) backgroundPoller() {
