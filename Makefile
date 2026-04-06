@@ -14,78 +14,12 @@
 
 # ==================== CONFIGURATION ====================
 PROJECT_DIR := $(shell pwd)
-SERVICE_USER := $(shell whoami)
-COMMA := ,
-CLUSTER_ADDRS := 127.0.0.1$(COMMA)127.0.0.1$(COMMA)127.0.0.1
-
-# JAR paths
-CLUSTER_JAR = match-cluster/target/match-cluster.jar
-GATEWAY_JAR = match-gateway/target/match-gateway.jar
-LOADTEST_JAR = match-loadtest/target/match-loadtest.jar
-
-# JVM flags for ultra-low latency
-JAVA_OPTS = -XX:+UseZGC -XX:+ZGenerational -XX:+UnlockDiagnosticVMOptions -XX:GuaranteedSafepointInterval=0 \
-	-XX:+AlwaysPreTouch -XX:+UseNUMA -XX:+PerfDisableSharedMem \
-	-XX:+TieredCompilation -XX:TieredStopAtLevel=4 \
-	--add-opens java.base/jdk.internal.misc=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
-	-Xmx2g -Xms2g
-
-# CPU cores for pinning (24 cores available on i7-13700K)
-CPU_NODE0 = 0-3
-CPU_NODE1 = 4-7
-CPU_NODE2 = 8-11
 
 # ==================== USER SERVICE CONFIGURATION ====================
 LOG_DIR := $(HOME)/.local/log/cluster
 USER_SERVICE_DIR := $(HOME)/.config/systemd/user
 
 LOG_ROTATE = /bin/bash -c '"'"'test -f $(LOG_DIR)/$(1).log && mv $(LOG_DIR)/$(1).log $(LOG_DIR)/$(1).log.$$(date +%%Y%%m%%d-%%H%%M%%S) || true'"'"'
-
-# Java service template: $(1)=name, $(2)=desc, $(3)=env_lines, $(4)=pre_cmds, $(5)=exec, $(6)=restart_sec, $(7)=extra_limits
-define JAVA_SERVICE
-@printf '%s\n' \
-	'[Unit]' \
-	'Description=$(2)' \
-	'After=default.target' \
-	'' \
-	'[Service]' \
-	'Type=simple' \
-	'WorkingDirectory=$(PROJECT_DIR)' \
-	$(3) \
-	'ExecStartPre=$(call LOG_ROTATE,$(1))' \
-	$(4) \
-	'ExecStart=$(5)' \
-	'Restart=on-failure' \
-	'RestartSec=$(6)' \
-	'TimeoutStopSec=5' \
-	'KillMode=mixed' \
-	$(7) \
-	'StandardOutput=append:$(LOG_DIR)/$(1).log' \
-	'StandardError=append:$(LOG_DIR)/$(1).log' \
-	'' \
-	'[Install]' \
-	'WantedBy=default.target' > $(USER_SERVICE_DIR)/$(1).service
-endef
-
-define UI_SERVICE
-@printf '%s\n' \
-	'[Unit]' \
-	'Description=Match Engine Trading UI' \
-	'After=default.target' \
-	'' \
-	'[Service]' \
-	'Type=simple' \
-	'WorkingDirectory=$(PROJECT_DIR)/match/ui' \
-	'ExecStartPre=$(call LOG_ROTATE,ui)' \
-	'ExecStart=/usr/bin/npx vite preview --port 3000 --host' \
-	'Restart=on-failure' \
-	'RestartSec=5' \
-	'StandardOutput=append:$(LOG_DIR)/ui.log' \
-	'StandardError=append:$(LOG_DIR)/ui.log' \
-	'' \
-	'[Install]' \
-	'WantedBy=default.target' > $(USER_SERVICE_DIR)/ui.service
-endef
 
 # ==================== INSTALLATION ====================
 
@@ -302,7 +236,7 @@ reinstall-services: uninstall-services install-services
 
 # ==================== BUILD ====================
 
-build: build-ui build-java
+build: build-ui build-java build-admin
 	@echo "✓ Build complete"
 
 build-java:
@@ -364,7 +298,7 @@ help:
 	@echo "Build & Setup:"
 	@echo "  make install-deps       Install system dependencies (once)"
 	@echo "  make install            Build and start everything fresh"
-	@echo "  make build              Build all (Java + UI)"
+	@echo "  make build              Build all (Java + Admin + UI)"
 	@echo "  make build-java         Build all Java modules"
 	@echo "  make build-cluster      Build cluster module only"
 	@echo "  make build-gateway      Build gateway module only"
