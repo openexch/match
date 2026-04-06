@@ -2,7 +2,8 @@
 
 **Date:** January 28, 2026  
 **Scope:** All Java source files across 4 Maven modules + Go admin-gateway  
-**Context:** High-performance Aeron Cluster-based order matching engine
+**Context:** High-performance Aeron Cluster-based order matching engine  
+**Status (as of April 2026):** All 6 critical issues (C1-C6) have been resolved. C6 (`System.exit()`) remains only in the backup utility (`ClusterBackupApp`), not in production code paths.
 
 ## Executive Summary
 

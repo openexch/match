@@ -9,8 +9,9 @@ match/
 ├── pom.xml                    # Parent POM (aggregator)
 ├── match-common/              # Shared code
 ├── match-cluster/             # Cluster nodes
-├── match-gateway/             # Gateways (Order, Market, Admin)
-└── match-loadtest/            # Load testing tools
+├── match-gateway/             # Gateways (Order, Market)
+├── match-loadtest/            # Load testing tools
+└── admin-gateway/             # Admin Gateway (Go, not Maven)
 ```
 
 ### match-common
@@ -38,12 +39,21 @@ Cluster nodes (Aeron Cluster service):
 Gateway processes:
 - Order Gateway (`OrderGatewayMain`) - HTTP API on port 8080
 - Market Gateway (`MarketGatewayMain`) - WebSocket on port 8081
-- Admin Gateway (`AdminGatewayMain`) - HTTP API on port 8082
 - Aeron cluster client (`AeronGateway`)
 - HTTP/WebSocket handlers
 
 **Produces:** `match-gateway/target/match-gateway.jar` (uber JAR)
 **Dependencies:** match-common, aeron-all, netty-all
+
+### admin-gateway (Go)
+Admin and process management service (not a Maven module):
+- Process manager for all cluster nodes and gateways
+- HTTP API on port 8082
+- Cluster operations (rolling update, snapshot, cleanup)
+- Log aggregation and monitoring
+
+**Produces:** `admin-gateway/admin-gateway` (Go binary)
+**Build:** `make build-admin` or `cd admin-gateway && go build -o admin-gateway .`
 
 ### match-loadtest
 Load testing tools:
@@ -69,18 +79,20 @@ make build-loadtest   # Load test only
 
 ## Running Services
 
-After building, the systemd services use these JARs:
+After building, the processes use these artifacts:
 - Cluster nodes (node0, node1, node2): `match-cluster.jar`
 - Backup node: `match-cluster.jar`
-- Order/Market/Admin gateways: `match-gateway.jar`
+- Order/Market gateways: `match-gateway.jar`
+- Admin gateway: `admin-gateway/admin-gateway` (Go binary)
+
+Only the admin gateway runs as a systemd service. All other processes are managed via the admin gateway's HTTP API:
 
 ```bash
-# Reinstall services after code changes
-make reinstall-services
+# Start everything via admin gateway
+curl -X POST http://localhost:8082/api/admin/processes/start-all
 
-# Start the cluster
-systemctl --user start node0 node1 node2 backup
-systemctl --user start order market admin
+# Or start individual processes
+curl -X POST http://localhost:8082/api/admin/processes/node0/start
 ```
 
 ## Safe Deployment
@@ -90,15 +102,6 @@ The multi-module structure enables safer rolling updates:
 1. **Gateway-only changes**: Build and deploy only `match-gateway.jar`
 2. **Cluster changes**: Use rolling update via admin API
 3. **Shared code changes**: Rebuild all modules
-
-## Migration from Monolithic Structure
-
-The old structure (`match/target/cluster-engine-1.0.jar`) is preserved for reference.
-To fully migrate:
-
-1. Verify new JARs work: `make reinstall-services && systemctl --user restart node0 node1 node2`
-2. Test order submission and market data
-3. Delete old structure when confident: `rm -rf match/target/`
 
 ## SBE Code Generation
 

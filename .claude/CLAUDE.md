@@ -9,7 +9,7 @@ Ultra-low latency matching engine running on a **3-node Aeron Cluster** (Raft co
 │  Order Gateway  │     │ Market Gateway  │     │  Admin Gateway  │
 │   HTTP :8080    │     │   WS :8081      │     │   HTTP :8082    │
 └────────┬────────┘     └────────┬────────┘     └────────┬────────┘
-         │ ingress               │ egress                │ systemctl
+         │ ingress               │ egress                │ process mgmt
          ▼                       ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Aeron Cluster (Raft)                         │
@@ -66,9 +66,13 @@ curl -X POST http://localhost:8082/api/admin/rolling-update
 curl -X POST http://localhost:8082/api/admin/snapshot
 ```
 
-### Restart Gateways
+### Process Management
 ```bash
-curl -X POST http://localhost:8082/api/admin/restart-gateway
+curl http://localhost:8082/api/admin/processes                        # List all processes
+curl -X POST http://localhost:8082/api/admin/processes/start-all      # Start all (dependency order)
+curl -X POST http://localhost:8082/api/admin/processes/stop-all       # Stop all (reverse order)
+curl -X POST http://localhost:8082/api/admin/processes/node0/start    # Start specific process
+curl -X POST http://localhost:8082/api/admin/processes/node0/stop     # Stop specific process
 ```
 
 ### Check Operation Progress
@@ -81,34 +85,40 @@ curl http://localhost:8082/api/admin/progress
 curl "http://localhost:8082/api/admin/logs?node=0&lines=100"
 ```
 
+### Rebuild & Self-Update
+```bash
+curl -X POST http://localhost:8082/api/admin/rebuild-admin            # Self-update admin gateway
+curl -X POST http://localhost:8082/api/admin/rebuild-cluster          # Rebuild cluster module
+curl -X POST http://localhost:8082/api/admin/rebuild-gateway          # Rebuild gateway module
+```
+
 ## Key Files
 
 | Component | Path |
 |-----------|------|
-| Cluster Setup | `match/src/main/java/com/match/infrastructure/persistence/AeronCluster.java` |
-| Cluster Service | `match/src/main/java/com/match/infrastructure/persistence/AppClusteredService.java` |
-| Matching Engine | `match/src/main/java/com/match/application/engine/Engine.java` |
-| Order Book | `match/src/main/java/com/match/application/orderbook/DirectMatchingEngine.java` |
-| Admin Service | `match/src/main/java/com/match/infrastructure/admin/ClusterAdminService.java` |
-| Admin HTTP API | `match/src/main/java/com/match/infrastructure/http/AdminHttpApi.java` |
-| Gateway Base | `match/src/main/java/com/match/infrastructure/gateway/AeronGateway.java` |
-| Constants | `match/src/main/java/com/match/infrastructure/InfrastructureConstants.java` |
-| SBE Schema | `match/src/main/resources/sbe/order-schema.xml` |
+| Cluster Setup | `match-cluster/src/main/java/com/match/infrastructure/persistence/AeronCluster.java` |
+| Cluster Service | `match-cluster/src/main/java/com/match/infrastructure/persistence/AppClusteredService.java` |
+| Matching Engine | `match-cluster/src/main/java/com/match/application/engine/Engine.java` |
+| Order Book | `match-cluster/src/main/java/com/match/application/orderbook/DirectMatchingEngine.java` |
+| Gateway Base | `match-gateway/src/main/java/com/match/infrastructure/gateway/AeronGateway.java` |
+| Constants | `match-common/src/main/java/com/match/infrastructure/InfrastructureConstants.java` |
+| SBE Schema | `match-common/src/main/resources/sbe/order-schema.xml` |
+| Admin Gateway | `admin-gateway/` (Go service) |
 
 ## Build Commands
 
 ```bash
-make build-java    # Build JAR (mvn clean package -DskipTests)
+make build-java    # Build Java modules (mvn clean package -DskipTests)
+make build-admin   # Build Go admin gateway
 make build-ui      # Build React UI
+make build         # Build everything
 make install       # Full installation with services
 ```
 
-## Systemd Services (User-Level)
+## Service Management Architecture
 
-Services are at `~/.config/systemd/user/`:
-- `node0`, `node1`, `node2` - Cluster nodes
-- `market`, `order`, `admin` - Gateways
-- `backup` - Backup node
+Only `admin.service` runs as a systemd unit (`~/.config/systemd/user/admin.service`).
+All other processes (`node0`, `node1`, `node2`, `backup`, `order`, `market`) are managed by the Go admin gateway's built-in process manager via HTTP API.
 
 Logs at: `~/.local/log/cluster/`
 
@@ -129,7 +139,7 @@ Logs at: `~/.local/log/cluster/`
 
 ```
 1. HTTP POST /order → OrderGateway (8080)
-2. → AeronGateway.sendOrder() → Cluster ingress
+2. → AeronGateway.submitOrder() → Cluster ingress
 3. → AppClusteredService.onSessionMessage()
 4. → Engine.acceptOrder() → DirectMatchingEngine.processLimitOrder()
 5. → Publish TradeExecution + OrderStatus via egress
@@ -147,8 +157,11 @@ After any infrastructure change:
 ## Load Testing
 
 ```bash
-./run-load-test.sh baseline   # 1k/s for 60s - baseline
-./run-load-test.sh stress     # 10k/s for 60s - stress test
+./run-load-test.sh quick        # Smoke test: 1k/s for 10s
+./run-load-test.sh baseline     # Baseline: 1k/s for 60s
+./run-load-test.sh stress       # Stress: 10k/s for 60s
+./run-load-test.sh endurance    # Endurance: 2k/s for 1 hour
+./run-load-test.sh progressive  # Ramp: 1k → 10k/s
 ```
 
 ## Debugging
