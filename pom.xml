@@ -11,6 +11,15 @@
 
     <name>Match Engine Parent</name>
     <description>High-performance order matching engine using Aeron Cluster</description>
+    <url>https://github.com/openexch/match</url>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
 
     <modules>
         <module>match-common</module>
