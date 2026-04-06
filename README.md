@@ -2,9 +2,9 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/projects/jdk/21/)
-[![Aeron](https://img.shields.io/badge/Aeron%20Cluster-1.48.1-green.svg)](https://github.com/real-logic/aeron)
+[![Aeron](https://img.shields.io/badge/Aeron%20Cluster-1.48.1-green.svg)](https://github.com/aeron-io/aeron)
 
-Ultra-low latency order matching engine built on a 3-node [Aeron Cluster](https://github.com/real-logic/aeron) (Raft consensus). Designed for 24/7 operation with zero downtime.
+Ultra-low latency order matching engine built on a 3-node [Aeron Cluster](https://github.com/aeron-io/aeron) (Raft consensus). Designed for 24/7 operation with zero downtime.
 
 ## Key Features
 
@@ -64,8 +64,8 @@ Ultra-low latency order matching engine built on a 3-node [Aeron Cluster](https:
 - Java 21+
 - Maven 3+
 - Node.js 18+
-- Go 1.21+
-- Linux (systemd user services)
+- Go 1.22+
+- Linux (Ubuntu/Debian recommended)
 
 ### Install & Run
 
@@ -125,9 +125,10 @@ match/
 curl -X POST http://localhost:8080/order \
   -H "Content-Type: application/json" \
   -d '{
-    "symbol": "BTC-USD",
-    "side": "BUY",
-    "type": "LIMIT",
+    "userId": "user1",
+    "market": "BTC-USD",
+    "orderSide": "BUY",
+    "orderType": "LIMIT",
     "price": 100000.00,
     "quantity": 0.5
   }'
@@ -137,27 +138,51 @@ curl -X POST http://localhost:8080/order \
 
 ```javascript
 const ws = new WebSocket('ws://localhost:8081/ws');
+
+// Subscribe to a market (required to receive data)
+ws.onopen = () => {
+  ws.send(JSON.stringify({ action: 'subscribe', marketId: 1 }));
+};
+
 ws.onmessage = (event) => {
   const data = JSON.parse(event.data);
-  // BookSnapshot, BookDelta, TradeExecution, MarketStats
+  // BOOK_SNAPSHOT, BOOK_DELTA, TRADE_EXECUTION, etc.
 };
+
+// Other client commands:
+// { "action": "refresh", "marketId": 1 }
+// { "action": "unsubscribe", "marketId": 1 }
+// { "action": "getOrderBook", "marketId": 1 }
+// { "action": "getTrades", "limit": 50 }
+// { "action": "ping" }
 ```
 
 ### Admin API
+
+The Admin Gateway (Go) acts as the process manager for the entire system — cluster nodes, gateways, and operational tasks are all managed through its API.
 
 ```bash
 # Cluster status
 curl http://localhost:8082/api/admin/status
 
-# Rolling update (zero downtime)
-curl -X POST http://localhost:8082/api/admin/rolling-update
+# Process management
+curl http://localhost:8082/api/admin/processes                        # List all processes
+curl -X POST http://localhost:8082/api/admin/processes/start-all      # Start all (dependency order)
+curl -X POST http://localhost:8082/api/admin/processes/stop-all       # Stop all (reverse order)
+curl -X POST http://localhost:8082/api/admin/processes/node0/start    # Start specific process
+curl -X POST http://localhost:8082/api/admin/processes/node0/stop     # Stop specific process
 
-# Take snapshot
-curl -X POST http://localhost:8082/api/admin/snapshot
+# Operations
+curl -X POST http://localhost:8082/api/admin/rolling-update           # Zero-downtime deployment
+curl -X POST http://localhost:8082/api/admin/snapshot                 # Take cluster snapshot
+curl -X POST http://localhost:8082/api/admin/rebuild-admin            # Self-update admin gateway
 
-# View logs
+# Logs & monitoring
 curl "http://localhost:8082/api/admin/logs?node=0&lines=100"
+curl http://localhost:8082/api/admin/progress                         # Operation progress
 ```
+
+Managed processes: `node0`, `node1`, `node2`, `backup`, `order`, `market`
 
 ## Load Testing
 
