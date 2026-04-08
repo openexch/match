@@ -10,7 +10,7 @@
 #
 # ==================================================================
 
-.PHONY: install install-deps optimize-os help install-services uninstall-services reinstall-services build build-java build-cluster build-gateway build-admin build-loadtest build-ui sbe setup-port-80 os-check rebuild-admin processes processes-summary
+.PHONY: install install-deps optimize-os help install-services uninstall-services reinstall-services build build-java build-cluster build-gateway build-admin build-loadtest sbe os-check rebuild-admin processes processes-summary
 
 # ==================== CONFIGURATION ====================
 PROJECT_DIR := $(shell pwd)
@@ -52,21 +52,6 @@ install-deps:
 		sudo apt install -y maven; \
 	fi
 	@echo ""
-	@echo "→ Checking Node.js 18+..."
-	@if command -v node >/dev/null 2>&1; then \
-		node_version=$$(node -v | cut -d'v' -f2 | cut -d'.' -f1); \
-		if [ "$$node_version" -ge 18 ] 2>/dev/null; then \
-			echo "  ✓ Node.js $$node_version found"; \
-		else \
-			echo "  ✗ Node.js 18+ required"; \
-			exit 1; \
-		fi; \
-	else \
-		echo "  Installing Node.js..."; \
-		curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -; \
-		sudo apt install -y nodejs; \
-	fi
-	@echo ""
 	@echo "→ Checking system utilities..."
 	@sudo apt install -y taskset util-linux procps net-tools 2>/dev/null || true
 	@echo "  ✓ All dependencies installed"
@@ -76,20 +61,16 @@ install:
 	@echo "║           Installing Matching Engine Cluster                     ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@systemctl --user stop ui admin order market backup node2 node1 node0 2>/dev/null || true
-	@echo "→ Step 1/5: Building UI..."
-	@cd match/ui && npm install --silent && npm run build --silent
-	@echo "  ✓ UI built"
-	@echo ""
-	@echo "→ Step 2/5: Building Java components..."
+	@systemctl --user stop admin order market backup node2 node1 node0 2>/dev/null || true
+	@echo "→ Step 1/4: Building Java components..."
 	@mvn clean package -DskipTests -q
 	@echo "  ✓ Java components built"
 	@echo ""
-	@echo "→ Step 3/5: Building admin gateway (Go)..."
+	@echo "→ Step 2/4: Building admin gateway (Go)..."
 	@cd admin-gateway && go build -o admin-gateway .
 	@echo "  ✓ Admin gateway built"
 	@echo ""
-	@echo "→ Step 4/5: Installing admin service + cleaning cluster state..."
+	@echo "→ Step 3/4: Installing admin service + cleaning cluster state..."
 	@$(MAKE) -s install-services
 	@rm -rf /dev/shm/aeron-* 2>/dev/null || true
 	@rm -rf /dev/shm/aeron-cluster/node0/* /dev/shm/aeron-cluster/node1/* /dev/shm/aeron-cluster/node2/* 2>/dev/null || true
@@ -97,7 +78,7 @@ install:
 	@mkdir -p /dev/shm/aeron-cluster/node0 /dev/shm/aeron-cluster/node1 /dev/shm/aeron-cluster/node2 /dev/shm/aeron-cluster/backup
 	@echo "  ✓ Cluster state cleaned"
 	@echo ""
-	@echo "→ Step 5/5: Starting cluster via Admin Process Manager..."
+	@echo "→ Step 4/4: Starting cluster via Admin Process Manager..."
 	@systemctl --user start admin
 	@sleep 2
 	@curl -sf -X POST http://localhost:8082/api/admin/processes/start-all > /dev/null
@@ -108,7 +89,6 @@ install:
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
 	@echo "║  ✓ Installation Complete!                                        ║"
 	@echo "║                                                                  ║"
-	@echo "║  Trading UI:     http://localhost:3000                           ║"
 	@echo "║  Order API:      http://localhost:8080/order                     ║"
 	@echo "║  Market WS:      ws://localhost:8081/ws                          ║"
 	@echo "║  Admin API:      http://localhost:8082/api/admin/status          ║"
@@ -174,11 +154,11 @@ install-services:
 	@mkdir -p $(LOG_DIR)
 	@mkdir -p $(HOME)/.local/run/match
 	@echo "→ Removing old per-service systemd units (if any)..."
-	@systemctl --user stop node0 node1 node2 backup order market ui 2>/dev/null || true
-	@systemctl --user disable node0 node1 node2 backup order market ui 2>/dev/null || true
+	@systemctl --user stop node0 node1 node2 backup order market 2>/dev/null || true
+	@systemctl --user disable node0 node1 node2 backup order market 2>/dev/null || true
 	@rm -f $(USER_SERVICE_DIR)/node0.service $(USER_SERVICE_DIR)/node1.service $(USER_SERVICE_DIR)/node2.service
 	@rm -f $(USER_SERVICE_DIR)/backup.service $(USER_SERVICE_DIR)/market.service
-	@rm -f $(USER_SERVICE_DIR)/order.service $(USER_SERVICE_DIR)/ui.service
+	@rm -f $(USER_SERVICE_DIR)/order.service
 	@echo "→ Installing admin.service (Go process manager)..."
 	@printf '%s\n' \
 		'[Unit]' \
@@ -224,7 +204,7 @@ uninstall-services:
 	@echo "→ Cleaning up old service files..."
 	@rm -f $(USER_SERVICE_DIR)/node0.service $(USER_SERVICE_DIR)/node1.service $(USER_SERVICE_DIR)/node2.service
 	@rm -f $(USER_SERVICE_DIR)/backup.service $(USER_SERVICE_DIR)/market.service
-	@rm -f $(USER_SERVICE_DIR)/order.service $(USER_SERVICE_DIR)/ui.service
+	@rm -f $(USER_SERVICE_DIR)/order.service
 	@systemctl --user daemon-reload
 	@echo "→ Cleaning PID files..."
 	@rm -f $(HOME)/.local/run/match/*.pid
@@ -236,7 +216,7 @@ reinstall-services: uninstall-services install-services
 
 # ==================== BUILD ====================
 
-build: build-ui build-java build-admin
+build: build-java build-admin
 	@echo "✓ Build complete"
 
 build-java:
@@ -265,20 +245,12 @@ processes-summary:
 build-loadtest:
 	mvn package -pl match-loadtest -am -DskipTests -q
 
-build-ui:
-	cd match/ui && npm install && npm run build
-
 # ==================== CODE GENERATION ====================
 
 sbe:
 	java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED -Dsbe.generate.ir=true -Dsbe.target.language=Java -Dsbe.target.namespace=com.match.infrastructure.generated -Dsbe.output.dir=match-common/src/main/java -Dsbe.errorLog=yes -jar binaries/sbe-all-1.35.3.jar match-common/src/main/resources/sbe/order-schema.xml
 
 # ==================== SETUP (run once) ====================
-
-setup-port-80:
-	@echo "→ Granting node permission to bind to port 80..."
-	@sudo setcap 'cap_net_bind_service=+ep' /usr/bin/node
-	@echo "  ✓ Done. Run 'make reinstall-services' to apply."
 
 os-check:
 	@echo "=== CPU Governor ==="
@@ -298,12 +270,11 @@ help:
 	@echo "Build & Setup:"
 	@echo "  make install-deps       Install system dependencies (once)"
 	@echo "  make install            Build and start everything fresh"
-	@echo "  make build              Build all (Java + Admin + UI)"
+	@echo "  make build              Build all (Java + Admin)"
 	@echo "  make build-java         Build all Java modules"
 	@echo "  make build-cluster      Build cluster module only"
 	@echo "  make build-gateway      Build gateway module only"
 	@echo "  make build-admin        Build admin gateway (Go)"
-	@echo "  make build-ui           Build UI only"
 	@echo "  make sbe                Generate SBE codec classes"
 	@echo ""
 	@echo "Process Manager:"
@@ -317,7 +288,6 @@ help:
 	@echo "System:"
 	@echo "  make optimize-os        OS tuning for low latency (sudo)"
 	@echo "  make os-check           Show current OS settings"
-	@echo "  make setup-port-80      Allow node to bind port 80 (sudo)"
 	@echo ""
 	@echo "Runtime: http://localhost:8082/api/admin/"
 	@echo "  GET  .../processes                  Live process status"

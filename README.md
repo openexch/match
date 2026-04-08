@@ -14,19 +14,13 @@ Ultra-low latency order matching engine built on a 3-node [Aeron Cluster](https:
 - **5 market pairs** — BTC, ETH, SOL, XRP, DOGE against USD with optimized price-level indexing
 - **Fixed-point arithmetic** — 8-decimal precision (10^8 scaling) throughout, no floating-point in the hot path
 - **Rolling updates** — Zero-downtime deployments via Admin API
-- **Trading UI** — React/TypeScript dashboard with real-time order book, charts, and order management
 - **Chaos engineering** — Built-in failure injection suite for resilience testing
 - **Load testing** — Configurable scenarios from 1k to 10k+ orders/sec
 
 ## Architecture
 
 ```
-                    ┌──────────────────────────────────────┐
-                    │           Trading UI (React)          │
-                    │            localhost:3000              │
-                    └──────┬─────────────┬─────────────────┘
-                           │             │
-                    ┌──────▼──────┐  ┌───▼──────────────┐  ┌──────────────────┐
+                    ┌──────────────┐  ┌────────────────────┐  ┌──────────────────┐
                     │   Order     │  │  Market Gateway   │  │  Admin Gateway   │
                     │  Gateway    │  │   WebSocket       │  │   (Go)           │
                     │  HTTP :8080 │  │   WS :8081        │  │   HTTP :8082     │
@@ -54,7 +48,6 @@ Ultra-low latency order matching engine built on a 3-node [Aeron Cluster](https:
 | Event Processing | LMAX Disruptor 4.0.0 |
 | Network I/O | Netty 4.1.100 |
 | Admin Gateway | Go |
-| Frontend | React 18, TypeScript, Vite, Lightweight Charts |
 | Build | Maven, Make |
 
 ## Quick Start
@@ -63,7 +56,6 @@ Ultra-low latency order matching engine built on a 3-node [Aeron Cluster](https:
 
 - Java 21+
 - Maven 3+
-- Node.js 18+
 - Go 1.22+
 - Linux (Ubuntu/Debian recommended)
 
@@ -80,14 +72,11 @@ make install
 curl http://localhost:8082/api/admin/status
 ```
 
-The trading UI will be available at `http://localhost:3000`.
-
 ### Build Only
 
 ```bash
 make build-java      # Build Java modules
 make build-admin     # Build Go admin gateway
-make build-ui        # Build React UI
 make build           # Build everything
 ```
 
@@ -100,7 +89,6 @@ match/
 ├── match-gateway/      # Order (HTTP) and Market (WebSocket) gateways
 ├── match-loadtest/     # Load testing and benchmarking tools
 ├── admin-gateway/      # Go-based admin/process management service
-├── match/ui/           # React/TypeScript trading dashboard
 ├── scripts/            # Chaos engineering and test scripts
 ├── docs/               # Technical documentation
 └── Makefile            # Build, deploy, and operations automation
@@ -114,7 +102,7 @@ match/
 3. → Engine.acceptOrder() → DirectMatchingEngine
 4. → O(1) price lookup → Price-time priority matching
 5. → SBE-encoded TradeExecution + OrderStatus via egress
-6. → Market Gateway → WebSocket → Trading UI
+6. → Market Gateway → WebSocket → clients
 ```
 
 ## API

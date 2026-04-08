@@ -201,7 +201,7 @@ func NewProcessManager(cfg *config.Config) *ProcessManager {
 				// Admin is self — we don't manage ourselves, just report status
 				StartOrder: 7,
 			},
-			// UI removed — nginx serves static files from match/ui/dist directly
+			// Trading UI lives in separate repo (trading-ui)
 		},
 		stopChan: make(chan struct{}),
 	}

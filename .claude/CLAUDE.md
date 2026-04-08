@@ -110,7 +110,6 @@ curl -X POST http://localhost:8082/api/admin/rebuild-gateway          # Rebuild 
 ```bash
 make build-java    # Build Java modules (mvn clean package -DskipTests)
 make build-admin   # Build Go admin gateway
-make build-ui      # Build React UI
 make build         # Build everything
 make install       # Full installation with services
 ```
