@@ -6,10 +6,11 @@ Ultra-low latency matching engine running on a **3-node Aeron Cluster** (Raft co
 ## Architecture
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Order Gateway  │     │ Market Gateway  │     │  Admin Gateway  │
+│       OMS       │     │ Market Gateway  │     │  Admin Gateway  │
 │   HTTP :8080    │     │   WS :8081      │     │   HTTP :8082    │
-└────────┬────────┘     └────────┬────────┘     └────────┬────────┘
-         │ ingress               │ egress                │ process mgmt
+│ (separate repo) │     └────────┬────────┘     │   (Go service)  │
+└────────┬────────┘              │ egress       └────────┬────────┘
+         │ ingress               │                       │ process mgmt
          ▼                       ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Aeron Cluster (Raft)                         │
@@ -117,7 +118,7 @@ make install       # Full installation with services
 ## Service Management Architecture
 
 Only `admin.service` runs as a systemd unit (`~/.config/systemd/user/admin.service`).
-All other processes (`node0`, `node1`, `node2`, `backup`, `order`, `market`) are managed by the Go admin gateway's built-in process manager via HTTP API.
+All other processes (`node0`, `node1`, `node2`, `backup`, `oms`, `market`) are managed by the Go admin gateway's built-in process manager via HTTP API.
 
 Logs at: `~/.local/log/cluster/`
 
@@ -125,7 +126,6 @@ Logs at: `~/.local/log/cluster/`
 
 | Parameter | Value | Location |
 |-----------|-------|----------|
-| Order Gateway Port | 8080 | InfrastructureConstants |
 | Market Gateway Port | 8081 | InfrastructureConstants |
 | Admin Gateway Port | 8082 | InfrastructureConstants |
 | Cluster Base Port | 9000 | InfrastructureConstants |
@@ -137,12 +137,13 @@ Logs at: `~/.local/log/cluster/`
 ## Order Flow
 
 ```
-1. HTTP POST /order → OrderGateway (8080)
-2. → AeronGateway.submitOrder() → Cluster ingress
-3. → AppClusteredService.onSessionMessage()
-4. → Engine.acceptOrder() → DirectMatchingEngine.processLimitOrder()
-5. → Publish TradeExecution + OrderStatus via egress
-6. → MarketGateway → WebSocket → UI
+1. HTTP POST /api/v1/orders → OMS (8080, separate repo: order-management)
+2. → Risk checks → Balance holds → ClusterClient.submitOrder()
+3. → SBE CreateOrder → Cluster ingress
+4. → AppClusteredService.onSessionMessage()
+5. → Engine.acceptOrder() → DirectMatchingEngine.processLimitOrder()
+6. → Publish TradeExecution + OrderStatus via egress
+7. → MarketGateway → WebSocket → UI
 ```
 
 ## Testing Changes

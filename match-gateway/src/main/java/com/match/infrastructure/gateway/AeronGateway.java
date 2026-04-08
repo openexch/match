@@ -14,17 +14,14 @@ import io.aeron.logbuffer.Header;
 import io.aeron.samples.cluster.ClusterConfig;
 import org.agrona.CloseHelper;
 import org.agrona.DirectBuffer;
-import org.agrona.ExpandableDirectByteBuffer;
 import org.agrona.concurrent.BackoffIdleStrategy;
 import org.agrona.concurrent.IdleStrategy;
-import org.agrona.concurrent.ManyToOneConcurrentArrayQueue;
 import org.agrona.concurrent.UnsafeBuffer;
 
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Core Aeron Cluster client connection manager.
@@ -69,29 +66,6 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     private final String ingressEndpoints;
     private final String egressChannel;
 
-    // Encoders for outbound messages (used only by polling thread for internal offers)
-    private final ExpandableDirectByteBuffer buffer = new ExpandableDirectByteBuffer(512);
-    private final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
-    private final CreateOrderEncoder createOrderEncoder = new CreateOrderEncoder();
-
-    // MPSC order queue: HTTP threads enqueue, polling thread drains and offers
-    private static final int ORDER_MSG_POOL_SIZE = 4096;
-    private static final int ORDER_MSG_BUFFER_SIZE = 128; // CreateOrder is ~50 bytes encoded
-    private final ManyToOneConcurrentArrayQueue<OrderMessage> orderQueue = new ManyToOneConcurrentArrayQueue<>(4096);
-    private final OrderMessage[] orderMessagePool;
-    private final AtomicInteger poolIndex = new AtomicInteger(0);
-    private final UnsafeBuffer orderBuffer = new UnsafeBuffer(new byte[ORDER_MSG_BUFFER_SIZE]);
-
-    /**
-     * Pre-allocated message holder for the MPSC queue.
-     * HTTP threads copy encoded bytes into a pooled instance, enqueue it,
-     * and the polling thread drains and offers to the cluster.
-     */
-    static class OrderMessage {
-        final byte[] data = new byte[ORDER_MSG_BUFFER_SIZE];
-        int length;
-    }
-
     // Decoders for inbound SBE messages (egress from cluster)
     private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
     private final BookSnapshotDecoder bookSnapshotDecoder = new BookSnapshotDecoder();
@@ -135,11 +109,6 @@ public class AeronGateway implements EgressListener, AutoCloseable {
             hostnames, 9000, ClusterConfig.CLIENT_FACING_PORT_OFFSET);
         this.egressChannel = "aeron:udp?endpoint=" + egressHost + ":" + egressPort;
 
-        // Pre-allocate order message pool for MPSC queue
-        this.orderMessagePool = new OrderMessage[ORDER_MSG_POOL_SIZE];
-        for (int i = 0; i < ORDER_MSG_POOL_SIZE; i++) {
-            orderMessagePool[i] = new OrderMessage();
-        }
     }
 
     public void setEgressListener(EgressMessageListener listener) {
@@ -431,21 +400,6 @@ public class AeronGateway implements EgressListener, AutoCloseable {
                     work++;
                 }
 
-                // Drain order queue (orders submitted by HTTP threads)
-                OrderMessage msg;
-                while ((msg = orderQueue.poll()) != null) {
-                    try {
-                        orderBuffer.putBytes(0, msg.data, 0, msg.length);
-                        long result = currentCluster.offer(orderBuffer, 0, msg.length);
-                        if (result < 0) {
-                            System.err.println("Order offer failed: " + getOfferResultName(result));
-                        }
-                        work++;
-                    } catch (Exception e) {
-                        System.err.println("Order offer error: " + e.getMessage());
-                    }
-                }
-
                 // Periodic stats logging
                 long nowMs = System.currentTimeMillis();
                 if (nowMs - lastStatsLogMs > STATS_LOG_INTERVAL_MS) {
@@ -571,33 +525,6 @@ public class AeronGateway implements EgressListener, AutoCloseable {
             System.out.println("Leader transition complete — ingress publication connected to new leader");
             leaderTransitionDeadlineMs = 0;
         }
-    }
-
-    /**
-     * Submit an order from any thread (thread-safe).
-     * The caller encodes SBE into their own buffer, then this method copies
-     * the bytes into a pooled OrderMessage and enqueues for the polling thread.
-     *
-     * @return true if enqueued successfully, false if queue is full
-     */
-    public boolean submitOrder(DirectBuffer buffer, int offset, int length) {
-        return enqueueOrder(buffer, offset, length);
-    }
-
-    /**
-     * Copy encoded bytes into a pooled OrderMessage and enqueue for the polling thread.
-     */
-    private boolean enqueueOrder(DirectBuffer buffer, int offset, int length) {
-        if (length > ORDER_MSG_BUFFER_SIZE) {
-            System.err.println("Order message too large: " + length + " > " + ORDER_MSG_BUFFER_SIZE);
-            return false;
-        }
-        // Round-robin through pool (wraps around via bitmask — pool size is power of 2)
-        int idx = poolIndex.getAndIncrement() & (ORDER_MSG_POOL_SIZE - 1);
-        OrderMessage msg = orderMessagePool[idx];
-        buffer.getBytes(offset, msg.data, 0, length);
-        msg.length = length;
-        return orderQueue.offer(msg);
     }
 
     // ==================== EgressListener Implementation ====================

@@ -13,8 +13,6 @@ public final class InfrastructureConstants {
     private InfrastructureConstants() {}
 
     // ==================== GATEWAY PORTS ====================
-    /** Order submission HTTP API port */
-    public static final int ORDER_GATEWAY_PORT = 8080;
     /** Market data WebSocket port */
     public static final int MARKET_GATEWAY_PORT = 8081;
     /** Admin API HTTP port */

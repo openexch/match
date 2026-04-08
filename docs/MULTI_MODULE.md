@@ -9,7 +9,7 @@ match/
 ├── pom.xml                    # Parent POM (aggregator)
 ├── match-common/              # Shared code
 ├── match-cluster/             # Cluster nodes
-├── match-gateway/             # Gateways (Order, Market)
+├── match-gateway/             # Market Gateway (WebSocket)
 ├── match-loadtest/            # Load testing tools
 └── admin-gateway/             # Admin Gateway (Go, not Maven)
 ```
@@ -36,11 +36,12 @@ Cluster nodes (Aeron Cluster service):
 **Dependencies:** match-common, aeron-all, disruptor
 
 ### match-gateway
-Gateway processes:
-- Order Gateway (`OrderGatewayMain`) - HTTP API on port 8080
+Market data gateway:
 - Market Gateway (`MarketGatewayMain`) - WebSocket on port 8081
 - Aeron cluster client (`AeronGateway`)
-- HTTP/WebSocket handlers
+- WebSocket handlers and state management
+
+Order submission is handled by OMS (separate repo: `order-management`).
 
 **Produces:** `match-gateway/target/match-gateway.jar` (uber JAR)
 **Dependencies:** match-common, aeron-all, netty-all
@@ -82,7 +83,8 @@ make build-loadtest   # Load test only
 After building, the processes use these artifacts:
 - Cluster nodes (node0, node1, node2): `match-cluster.jar`
 - Backup node: `match-cluster.jar`
-- Order/Market gateways: `match-gateway.jar`
+- Market gateway: `match-gateway.jar`
+- OMS: `oms-app.jar` (from `order-management` repo)
 - Admin gateway: `admin-gateway/admin-gateway` (Go binary)
 
 Only the admin gateway runs as a systemd service. All other processes are managed via the admin gateway's HTTP API:

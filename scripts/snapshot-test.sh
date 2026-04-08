@@ -295,7 +295,7 @@ systemctl --user stop order market 2>/dev/null
 sleep 3
 
 # Verify everything is dead
-remaining=$(ps aux | grep "match-cluster\|OrderGateway\|MarketGateway" | grep -v grep | wc -l)
+remaining=$(ps aux | grep "match-cluster\|MarketGateway\|OmsApplication" | grep -v grep | wc -l)
 log "Remaining processes: $remaining"
 
 # Clean up stale MediaDriver (simulating recovery after crash)
