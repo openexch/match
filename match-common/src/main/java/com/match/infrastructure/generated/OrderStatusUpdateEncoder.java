@@ -10,7 +10,7 @@ import org.agrona.MutableDirectBuffer;
 @SuppressWarnings("all")
 public final class OrderStatusUpdateEncoder
 {
-    public static final int BLOCK_LENGTH = 54;
+    public static final int BLOCK_LENGTH = 62;
     public static final int TEMPLATE_ID = 5;
     public static final int SCHEMA_ID = 1;
     public static final int SCHEMA_VERSION = 2;
@@ -529,6 +529,58 @@ public final class OrderStatusUpdateEncoder
     public OrderStatusUpdateEncoder timestamp(final long value)
     {
         buffer.putLong(offset + 46, value, BYTE_ORDER);
+        return this;
+    }
+
+
+    public static int omsOrderIdId()
+    {
+        return 10;
+    }
+
+    public static int omsOrderIdSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int omsOrderIdEncodingOffset()
+    {
+        return 54;
+    }
+
+    public static int omsOrderIdEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String omsOrderIdMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long omsOrderIdNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long omsOrderIdMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long omsOrderIdMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public OrderStatusUpdateEncoder omsOrderId(final long value)
+    {
+        buffer.putLong(offset + 54, value, BYTE_ORDER);
         return this;
     }
 

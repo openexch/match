@@ -55,6 +55,7 @@
         <field name="marketId" id="5" type="int32"/>
         <field name="orderType" id="6" type="OrderType"/>
         <field name="orderSide" id="7" type="OrderSide"/>
+        <field name="omsOrderId" id="8" type="int64"/>
     </sbe:message>
 
     <sbe:message name="CancelOrder" id="2" description="Cancel order event">
@@ -87,6 +88,8 @@
         <field name="marketId" id="8" type="int32"/>
         <field name="takerSide" id="9" type="OrderSide"/>
         <field name="timestamp" id="10" type="int64"/>
+        <field name="takerOmsOrderId" id="11" type="int64"/>
+        <field name="makerOmsOrderId" id="12" type="int64"/>
     </sbe:message>
 
     <!-- Order Status Update - Published when order state changes -->
@@ -100,6 +103,7 @@
         <field name="orderSide" id="7" type="OrderSide"/>
         <field name="status" id="8" type="OrderStatus"/>
         <field name="timestamp" id="9" type="int64"/>
+        <field name="omsOrderId" id="10" type="int64"/>
     </sbe:message>
 
     <!-- Order Book Update - Published for level changes -->
@@ -166,6 +170,25 @@
             <field name="filledQty" id="6" type="int64"/>
             <field name="side" id="7" type="OrderSide"/>
             <field name="timestamp" id="8" type="int64"/>
+            <field name="omsOrderId" id="9" type="int64"/>
+        </group>
+    </sbe:message>
+
+    <!-- Trade Execution Batch - Full per-trade details for OMS settlement -->
+    <sbe:message name="TradeExecutionBatch" id="26" description="Batch of individual trade executions with full details">
+        <field name="marketId" id="1" type="int32"/>
+        <field name="timestamp" id="2" type="int64"/>
+        <group name="trades" id="10" dimensionType="groupSizeEncoding">
+            <field name="tradeId" id="1" type="int64"/>
+            <field name="takerOrderId" id="2" type="int64"/>
+            <field name="makerOrderId" id="3" type="int64"/>
+            <field name="takerUserId" id="4" type="int64"/>
+            <field name="makerUserId" id="5" type="int64"/>
+            <field name="price" id="6" type="int64"/>
+            <field name="quantity" id="7" type="int64"/>
+            <field name="takerSide" id="8" type="OrderSide"/>
+            <field name="takerOmsOrderId" id="9" type="int64"/>
+            <field name="makerOmsOrderId" id="10" type="int64"/>
         </group>
     </sbe:message>
 

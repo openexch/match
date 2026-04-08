@@ -15,6 +15,7 @@ public class CreateOrderCommand {
     private long quantity;    // Fixed-point quantity
     private OrderSide orderSide;
     private OrderType orderType;
+    private long omsOrderId;  // OMS correlation ID (passed through untouched)
 
     /**
      * Reset for object pool reuse
@@ -26,6 +27,7 @@ public class CreateOrderCommand {
         this.quantity = 0L;
         this.orderSide = null;
         this.orderType = null;
+        this.omsOrderId = 0L;
     }
 
     public long getUserId() {
@@ -74,5 +76,13 @@ public class CreateOrderCommand {
 
     public void setOrderType(OrderType orderType) {
         this.orderType = orderType;
+    }
+
+    public long getOmsOrderId() {
+        return omsOrderId;
+    }
+
+    public void setOmsOrderId(long omsOrderId) {
+        this.omsOrderId = omsOrderId;
     }
 }

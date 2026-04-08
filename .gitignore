@@ -43,3 +43,4 @@ node*/
 
 # Stale local cluster data
 node[0-9]/
+.claude/

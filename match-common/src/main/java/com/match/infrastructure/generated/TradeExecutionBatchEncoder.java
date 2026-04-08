@@ -5,19 +5,19 @@ import org.agrona.MutableDirectBuffer;
 
 
 /**
- * Batch of order status updates
+ * Batch of individual trade executions with full details
  */
 @SuppressWarnings("all")
-public final class OrderStatusBatchEncoder
+public final class TradeExecutionBatchEncoder
 {
     public static final int BLOCK_LENGTH = 12;
-    public static final int TEMPLATE_ID = 24;
+    public static final int TEMPLATE_ID = 26;
     public static final int SCHEMA_ID = 1;
     public static final int SCHEMA_VERSION = 2;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
-    private final OrderStatusBatchEncoder parentMessage = this;
+    private final TradeExecutionBatchEncoder parentMessage = this;
     private MutableDirectBuffer buffer;
     private int offset;
     private int limit;
@@ -57,7 +57,7 @@ public final class OrderStatusBatchEncoder
         return offset;
     }
 
-    public OrderStatusBatchEncoder wrap(final MutableDirectBuffer buffer, final int offset)
+    public TradeExecutionBatchEncoder wrap(final MutableDirectBuffer buffer, final int offset)
     {
         if (buffer != this.buffer)
         {
@@ -69,7 +69,7 @@ public final class OrderStatusBatchEncoder
         return this;
     }
 
-    public OrderStatusBatchEncoder wrapAndApplyHeader(
+    public TradeExecutionBatchEncoder wrapAndApplyHeader(
         final MutableDirectBuffer buffer, final int offset, final MessageHeaderEncoder headerEncoder)
     {
         headerEncoder
@@ -142,7 +142,7 @@ public final class OrderStatusBatchEncoder
         return 2147483647;
     }
 
-    public OrderStatusBatchEncoder marketId(final int value)
+    public TradeExecutionBatchEncoder marketId(final int value)
     {
         buffer.putInt(offset + 0, value, BYTE_ORDER);
         return this;
@@ -194,37 +194,37 @@ public final class OrderStatusBatchEncoder
         return 9223372036854775807L;
     }
 
-    public OrderStatusBatchEncoder timestamp(final long value)
+    public TradeExecutionBatchEncoder timestamp(final long value)
     {
         buffer.putLong(offset + 4, value, BYTE_ORDER);
         return this;
     }
 
 
-    private final OrdersEncoder orders = new OrdersEncoder(this);
+    private final TradesEncoder trades = new TradesEncoder(this);
 
-    public static long ordersId()
+    public static long tradesId()
     {
         return 10;
     }
 
-    public OrdersEncoder ordersCount(final int count)
+    public TradesEncoder tradesCount(final int count)
     {
-        orders.wrap(buffer, count);
-        return orders;
+        trades.wrap(buffer, count);
+        return trades;
     }
 
-    public static final class OrdersEncoder
+    public static final class TradesEncoder
     {
         public static final int HEADER_SIZE = 4;
-        private final OrderStatusBatchEncoder parentMessage;
+        private final TradeExecutionBatchEncoder parentMessage;
         private MutableDirectBuffer buffer;
         private int count;
         private int index;
         private int offset;
         private int initialLimit;
 
-        OrdersEncoder(final OrderStatusBatchEncoder parentMessage)
+        TradesEncoder(final TradeExecutionBatchEncoder parentMessage)
         {
             this.parentMessage = parentMessage;
         }
@@ -246,11 +246,11 @@ public final class OrderStatusBatchEncoder
             final int limit = parentMessage.limit();
             initialLimit = limit;
             parentMessage.limit(limit + HEADER_SIZE);
-            buffer.putShort(limit + 0, (short)58, BYTE_ORDER);
+            buffer.putShort(limit + 0, (short)73, BYTE_ORDER);
             buffer.putShort(limit + 2, (short)count, BYTE_ORDER);
         }
 
-        public OrdersEncoder next()
+        public TradesEncoder next()
         {
             if (index >= count)
             {
@@ -289,30 +289,30 @@ public final class OrderStatusBatchEncoder
 
         public static int sbeBlockLength()
         {
-            return 58;
+            return 73;
         }
 
-        public static int orderIdId()
+        public static int tradeIdId()
         {
             return 1;
         }
 
-        public static int orderIdSinceVersion()
+        public static int tradeIdSinceVersion()
         {
             return 0;
         }
 
-        public static int orderIdEncodingOffset()
+        public static int tradeIdEncodingOffset()
         {
             return 0;
         }
 
-        public static int orderIdEncodingLength()
+        public static int tradeIdEncodingLength()
         {
             return 8;
         }
 
-        public static String orderIdMetaAttribute(final MetaAttribute metaAttribute)
+        public static String tradeIdMetaAttribute(final MetaAttribute metaAttribute)
         {
             if (MetaAttribute.PRESENCE == metaAttribute)
             {
@@ -322,49 +322,49 @@ public final class OrderStatusBatchEncoder
             return "";
         }
 
-        public static long orderIdNullValue()
+        public static long tradeIdNullValue()
         {
             return -9223372036854775808L;
         }
 
-        public static long orderIdMinValue()
+        public static long tradeIdMinValue()
         {
             return -9223372036854775807L;
         }
 
-        public static long orderIdMaxValue()
+        public static long tradeIdMaxValue()
         {
             return 9223372036854775807L;
         }
 
-        public OrdersEncoder orderId(final long value)
+        public TradesEncoder tradeId(final long value)
         {
             buffer.putLong(offset + 0, value, BYTE_ORDER);
             return this;
         }
 
 
-        public static int userIdId()
+        public static int takerOrderIdId()
         {
             return 2;
         }
 
-        public static int userIdSinceVersion()
+        public static int takerOrderIdSinceVersion()
         {
             return 0;
         }
 
-        public static int userIdEncodingOffset()
+        public static int takerOrderIdEncodingOffset()
         {
             return 8;
         }
 
-        public static int userIdEncodingLength()
+        public static int takerOrderIdEncodingLength()
         {
             return 8;
         }
 
-        public static String userIdMetaAttribute(final MetaAttribute metaAttribute)
+        public static String takerOrderIdMetaAttribute(final MetaAttribute metaAttribute)
         {
             if (MetaAttribute.PRESENCE == metaAttribute)
             {
@@ -374,49 +374,49 @@ public final class OrderStatusBatchEncoder
             return "";
         }
 
-        public static long userIdNullValue()
+        public static long takerOrderIdNullValue()
         {
             return -9223372036854775808L;
         }
 
-        public static long userIdMinValue()
+        public static long takerOrderIdMinValue()
         {
             return -9223372036854775807L;
         }
 
-        public static long userIdMaxValue()
+        public static long takerOrderIdMaxValue()
         {
             return 9223372036854775807L;
         }
 
-        public OrdersEncoder userId(final long value)
+        public TradesEncoder takerOrderId(final long value)
         {
             buffer.putLong(offset + 8, value, BYTE_ORDER);
             return this;
         }
 
 
-        public static int statusId()
+        public static int makerOrderIdId()
         {
             return 3;
         }
 
-        public static int statusSinceVersion()
+        public static int makerOrderIdSinceVersion()
         {
             return 0;
         }
 
-        public static int statusEncodingOffset()
+        public static int makerOrderIdEncodingOffset()
         {
             return 16;
         }
 
-        public static int statusEncodingLength()
+        public static int makerOrderIdEncodingLength()
         {
-            return 1;
+            return 8;
         }
 
-        public static String statusMetaAttribute(final MetaAttribute metaAttribute)
+        public static String makerOrderIdMetaAttribute(final MetaAttribute metaAttribute)
         {
             if (MetaAttribute.PRESENCE == metaAttribute)
             {
@@ -426,15 +426,135 @@ public final class OrderStatusBatchEncoder
             return "";
         }
 
-        public OrdersEncoder status(final OrderStatus value)
+        public static long makerOrderIdNullValue()
         {
-            buffer.putByte(offset + 16, (byte)value.value());
+            return -9223372036854775808L;
+        }
+
+        public static long makerOrderIdMinValue()
+        {
+            return -9223372036854775807L;
+        }
+
+        public static long makerOrderIdMaxValue()
+        {
+            return 9223372036854775807L;
+        }
+
+        public TradesEncoder makerOrderId(final long value)
+        {
+            buffer.putLong(offset + 16, value, BYTE_ORDER);
             return this;
         }
 
-        public static int priceId()
+
+        public static int takerUserIdId()
         {
             return 4;
+        }
+
+        public static int takerUserIdSinceVersion()
+        {
+            return 0;
+        }
+
+        public static int takerUserIdEncodingOffset()
+        {
+            return 24;
+        }
+
+        public static int takerUserIdEncodingLength()
+        {
+            return 8;
+        }
+
+        public static String takerUserIdMetaAttribute(final MetaAttribute metaAttribute)
+        {
+            if (MetaAttribute.PRESENCE == metaAttribute)
+            {
+                return "required";
+            }
+
+            return "";
+        }
+
+        public static long takerUserIdNullValue()
+        {
+            return -9223372036854775808L;
+        }
+
+        public static long takerUserIdMinValue()
+        {
+            return -9223372036854775807L;
+        }
+
+        public static long takerUserIdMaxValue()
+        {
+            return 9223372036854775807L;
+        }
+
+        public TradesEncoder takerUserId(final long value)
+        {
+            buffer.putLong(offset + 24, value, BYTE_ORDER);
+            return this;
+        }
+
+
+        public static int makerUserIdId()
+        {
+            return 5;
+        }
+
+        public static int makerUserIdSinceVersion()
+        {
+            return 0;
+        }
+
+        public static int makerUserIdEncodingOffset()
+        {
+            return 32;
+        }
+
+        public static int makerUserIdEncodingLength()
+        {
+            return 8;
+        }
+
+        public static String makerUserIdMetaAttribute(final MetaAttribute metaAttribute)
+        {
+            if (MetaAttribute.PRESENCE == metaAttribute)
+            {
+                return "required";
+            }
+
+            return "";
+        }
+
+        public static long makerUserIdNullValue()
+        {
+            return -9223372036854775808L;
+        }
+
+        public static long makerUserIdMinValue()
+        {
+            return -9223372036854775807L;
+        }
+
+        public static long makerUserIdMaxValue()
+        {
+            return 9223372036854775807L;
+        }
+
+        public TradesEncoder makerUserId(final long value)
+        {
+            buffer.putLong(offset + 32, value, BYTE_ORDER);
+            return this;
+        }
+
+
+        public static int priceId()
+        {
+            return 6;
         }
 
         public static int priceSinceVersion()
@@ -444,7 +564,7 @@ public final class OrderStatusBatchEncoder
 
         public static int priceEncodingOffset()
         {
-            return 17;
+            return 40;
         }
 
         public static int priceEncodingLength()
@@ -477,138 +597,86 @@ public final class OrderStatusBatchEncoder
             return 9223372036854775807L;
         }
 
-        public OrdersEncoder price(final long value)
+        public TradesEncoder price(final long value)
         {
-            buffer.putLong(offset + 17, value, BYTE_ORDER);
+            buffer.putLong(offset + 40, value, BYTE_ORDER);
             return this;
         }
 
 
-        public static int remainingQtyId()
-        {
-            return 5;
-        }
-
-        public static int remainingQtySinceVersion()
-        {
-            return 0;
-        }
-
-        public static int remainingQtyEncodingOffset()
-        {
-            return 25;
-        }
-
-        public static int remainingQtyEncodingLength()
-        {
-            return 8;
-        }
-
-        public static String remainingQtyMetaAttribute(final MetaAttribute metaAttribute)
-        {
-            if (MetaAttribute.PRESENCE == metaAttribute)
-            {
-                return "required";
-            }
-
-            return "";
-        }
-
-        public static long remainingQtyNullValue()
-        {
-            return -9223372036854775808L;
-        }
-
-        public static long remainingQtyMinValue()
-        {
-            return -9223372036854775807L;
-        }
-
-        public static long remainingQtyMaxValue()
-        {
-            return 9223372036854775807L;
-        }
-
-        public OrdersEncoder remainingQty(final long value)
-        {
-            buffer.putLong(offset + 25, value, BYTE_ORDER);
-            return this;
-        }
-
-
-        public static int filledQtyId()
-        {
-            return 6;
-        }
-
-        public static int filledQtySinceVersion()
-        {
-            return 0;
-        }
-
-        public static int filledQtyEncodingOffset()
-        {
-            return 33;
-        }
-
-        public static int filledQtyEncodingLength()
-        {
-            return 8;
-        }
-
-        public static String filledQtyMetaAttribute(final MetaAttribute metaAttribute)
-        {
-            if (MetaAttribute.PRESENCE == metaAttribute)
-            {
-                return "required";
-            }
-
-            return "";
-        }
-
-        public static long filledQtyNullValue()
-        {
-            return -9223372036854775808L;
-        }
-
-        public static long filledQtyMinValue()
-        {
-            return -9223372036854775807L;
-        }
-
-        public static long filledQtyMaxValue()
-        {
-            return 9223372036854775807L;
-        }
-
-        public OrdersEncoder filledQty(final long value)
-        {
-            buffer.putLong(offset + 33, value, BYTE_ORDER);
-            return this;
-        }
-
-
-        public static int sideId()
+        public static int quantityId()
         {
             return 7;
         }
 
-        public static int sideSinceVersion()
+        public static int quantitySinceVersion()
         {
             return 0;
         }
 
-        public static int sideEncodingOffset()
+        public static int quantityEncodingOffset()
         {
-            return 41;
+            return 48;
         }
 
-        public static int sideEncodingLength()
+        public static int quantityEncodingLength()
+        {
+            return 8;
+        }
+
+        public static String quantityMetaAttribute(final MetaAttribute metaAttribute)
+        {
+            if (MetaAttribute.PRESENCE == metaAttribute)
+            {
+                return "required";
+            }
+
+            return "";
+        }
+
+        public static long quantityNullValue()
+        {
+            return -9223372036854775808L;
+        }
+
+        public static long quantityMinValue()
+        {
+            return -9223372036854775807L;
+        }
+
+        public static long quantityMaxValue()
+        {
+            return 9223372036854775807L;
+        }
+
+        public TradesEncoder quantity(final long value)
+        {
+            buffer.putLong(offset + 48, value, BYTE_ORDER);
+            return this;
+        }
+
+
+        public static int takerSideId()
+        {
+            return 8;
+        }
+
+        public static int takerSideSinceVersion()
+        {
+            return 0;
+        }
+
+        public static int takerSideEncodingOffset()
+        {
+            return 56;
+        }
+
+        public static int takerSideEncodingLength()
         {
             return 1;
         }
 
-        public static String sideMetaAttribute(final MetaAttribute metaAttribute)
+        public static String takerSideMetaAttribute(final MetaAttribute metaAttribute)
         {
             if (MetaAttribute.PRESENCE == metaAttribute)
             {
@@ -618,85 +686,33 @@ public final class OrderStatusBatchEncoder
             return "";
         }
 
-        public OrdersEncoder side(final OrderSide value)
+        public TradesEncoder takerSide(final OrderSide value)
         {
-            buffer.putByte(offset + 41, (byte)value.value());
+            buffer.putByte(offset + 56, (byte)value.value());
             return this;
         }
 
-        public static int timestampId()
-        {
-            return 8;
-        }
-
-        public static int timestampSinceVersion()
-        {
-            return 0;
-        }
-
-        public static int timestampEncodingOffset()
-        {
-            return 42;
-        }
-
-        public static int timestampEncodingLength()
-        {
-            return 8;
-        }
-
-        public static String timestampMetaAttribute(final MetaAttribute metaAttribute)
-        {
-            if (MetaAttribute.PRESENCE == metaAttribute)
-            {
-                return "required";
-            }
-
-            return "";
-        }
-
-        public static long timestampNullValue()
-        {
-            return -9223372036854775808L;
-        }
-
-        public static long timestampMinValue()
-        {
-            return -9223372036854775807L;
-        }
-
-        public static long timestampMaxValue()
-        {
-            return 9223372036854775807L;
-        }
-
-        public OrdersEncoder timestamp(final long value)
-        {
-            buffer.putLong(offset + 42, value, BYTE_ORDER);
-            return this;
-        }
-
-
-        public static int omsOrderIdId()
+        public static int takerOmsOrderIdId()
         {
             return 9;
         }
 
-        public static int omsOrderIdSinceVersion()
+        public static int takerOmsOrderIdSinceVersion()
         {
             return 0;
         }
 
-        public static int omsOrderIdEncodingOffset()
+        public static int takerOmsOrderIdEncodingOffset()
         {
-            return 50;
+            return 57;
         }
 
-        public static int omsOrderIdEncodingLength()
+        public static int takerOmsOrderIdEncodingLength()
         {
             return 8;
         }
 
-        public static String omsOrderIdMetaAttribute(final MetaAttribute metaAttribute)
+        public static String takerOmsOrderIdMetaAttribute(final MetaAttribute metaAttribute)
         {
             if (MetaAttribute.PRESENCE == metaAttribute)
             {
@@ -706,24 +722,76 @@ public final class OrderStatusBatchEncoder
             return "";
         }
 
-        public static long omsOrderIdNullValue()
+        public static long takerOmsOrderIdNullValue()
         {
             return -9223372036854775808L;
         }
 
-        public static long omsOrderIdMinValue()
+        public static long takerOmsOrderIdMinValue()
         {
             return -9223372036854775807L;
         }
 
-        public static long omsOrderIdMaxValue()
+        public static long takerOmsOrderIdMaxValue()
         {
             return 9223372036854775807L;
         }
 
-        public OrdersEncoder omsOrderId(final long value)
+        public TradesEncoder takerOmsOrderId(final long value)
         {
-            buffer.putLong(offset + 50, value, BYTE_ORDER);
+            buffer.putLong(offset + 57, value, BYTE_ORDER);
+            return this;
+        }
+
+
+        public static int makerOmsOrderIdId()
+        {
+            return 10;
+        }
+
+        public static int makerOmsOrderIdSinceVersion()
+        {
+            return 0;
+        }
+
+        public static int makerOmsOrderIdEncodingOffset()
+        {
+            return 65;
+        }
+
+        public static int makerOmsOrderIdEncodingLength()
+        {
+            return 8;
+        }
+
+        public static String makerOmsOrderIdMetaAttribute(final MetaAttribute metaAttribute)
+        {
+            if (MetaAttribute.PRESENCE == metaAttribute)
+            {
+                return "required";
+            }
+
+            return "";
+        }
+
+        public static long makerOmsOrderIdNullValue()
+        {
+            return -9223372036854775808L;
+        }
+
+        public static long makerOmsOrderIdMinValue()
+        {
+            return -9223372036854775807L;
+        }
+
+        public static long makerOmsOrderIdMaxValue()
+        {
+            return 9223372036854775807L;
+        }
+
+        public TradesEncoder makerOmsOrderId(final long value)
+        {
+            buffer.putLong(offset + 65, value, BYTE_ORDER);
             return this;
         }
 
@@ -746,7 +814,7 @@ public final class OrderStatusBatchEncoder
             return builder;
         }
 
-        final OrderStatusBatchDecoder decoder = new OrderStatusBatchDecoder();
+        final TradeExecutionBatchDecoder decoder = new TradeExecutionBatchDecoder();
         decoder.wrap(buffer, offset, BLOCK_LENGTH, SCHEMA_VERSION);
 
         return decoder.appendTo(builder);
