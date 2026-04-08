@@ -1,7 +1,24 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch"
+      "WebSearch",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "Bash(for MID in 1 2 3 4 5)",
+      "Bash(do)",
+      "Bash(done)",
+      "Bash(go build:*)",
+      "Bash(java -cp /home/emre/Apps/match/match-cluster/target/match-cluster.jar io.aeron.AeronStat:*)",
+      "Bash(java:*)",
+      "Bash(pkill:*)",
+      "Bash(systemctl --user status:*)",
+      "Bash(journalctl:*)",
+      "WebFetch(domain:aeron.io)",
+      "Bash(find:*)",
+      "WebFetch(domain:theaeronfiles.com)",
+      "WebFetch(domain:javadoc.io)",
+      "WebFetch(domain:github.com)",
+      "Bash(grep:*)"
     ]
   }
 }

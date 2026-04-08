@@ -1,46 +1,34 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-
-# Test binary, built with `go test -c`
-*.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# env file
-.env
-
-target
-
-.idea
-
-.vscode
-
-# Aeron cluster backup/archive files
-backup/
-
-# Generated SBE files (should be generated at build time)
-match/src/main/java/com/match/infrastructure/generated/
-
-# Generated UI build assets
-match/src/main/resources/static/ui/assets/
+# Maven build output
+target/
+*/target/
+dependency-reduced-pom.xml
 
 # SBE intermediate representation files
 *.sbeir
-*/target/
-dependency-reduced-pom.xml
-node*/
 
-# Stale local cluster data
+# Aeron cluster runtime data
+backup/
 node[0-9]/
+
+# Build tool binaries
+binaries/
+
+# Stale test logs
+stability-test-logs/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Environment
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Claude Code
 .claude/
