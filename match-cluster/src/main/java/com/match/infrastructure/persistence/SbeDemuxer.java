@@ -90,6 +90,7 @@ public class SbeDemuxer {
         createCommand.setTotalPrice(createOrderDecoder.totalPrice());
         createCommand.setOrderSide(toDomainOrderSide(createOrderDecoder.orderSide()));
         createCommand.setOrderType(toDomainOrderType(createOrderDecoder.orderType()));
+        createCommand.setOmsOrderId(createOrderDecoder.omsOrderId());
 
         int marketId = createOrderDecoder.marketId();
         engine.acceptOrder(marketId, Engine.CMD_CREATE, createCommand, timestamp);

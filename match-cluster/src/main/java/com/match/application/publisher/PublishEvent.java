@@ -27,6 +27,8 @@ public class PublishEvent {
     private long price;           // Fixed-point (8 decimals)
     private long quantity;        // Fixed-point (8 decimals)
     private boolean takerIsBuy;
+    private long takerOmsOrderId; // OMS correlation ID for taker
+    private long makerOmsOrderId; // OMS correlation ID for maker
 
     // === Order Book Update Fields ===
     // Top 10 levels each side (pre-allocated arrays)
@@ -55,6 +57,7 @@ public class PublishEvent {
     private long filledQty;       // Fixed-point
     private long orderPrice;      // Original order price
     private boolean orderIsBuy;
+    private long omsOrderId;      // OMS correlation ID
 
     // Padding to avoid false sharing (occupy full cache line)
     @SuppressWarnings("unused")
@@ -76,6 +79,8 @@ public class PublishEvent {
         price = 0;
         quantity = 0;
         takerIsBuy = false;
+        takerOmsOrderId = 0;
+        makerOmsOrderId = 0;
         bidLevelCount = 0;
         askLevelCount = 0;
         updatePrice = 0;
@@ -90,6 +95,7 @@ public class PublishEvent {
         filledQty = 0;
         orderPrice = 0;
         orderIsBuy = false;
+        omsOrderId = 0;
     }
 
     // === Setters for Trade Execution ===
@@ -108,7 +114,9 @@ public class PublishEvent {
             long makerUserId,
             long price,
             long quantity,
-            boolean takerIsBuy) {
+            boolean takerIsBuy,
+            long takerOmsOrderId,
+            long makerOmsOrderId) {
         this.eventType = PublishEventType.TRADE_EXECUTION;
         this.marketId = marketId;
         this.timestamp = timestamp;
@@ -120,6 +128,8 @@ public class PublishEvent {
         this.price = price;
         this.quantity = quantity;
         this.takerIsBuy = takerIsBuy;
+        this.takerOmsOrderId = takerOmsOrderId;
+        this.makerOmsOrderId = makerOmsOrderId;
     }
 
     // === Setters for Order Book Update (Incremental) ===
@@ -187,7 +197,8 @@ public class PublishEvent {
             long remainingQty,
             long filledQty,
             long orderPrice,
-            boolean orderIsBuy) {
+            boolean orderIsBuy,
+            long omsOrderId) {
         this.eventType = PublishEventType.ORDER_STATUS_UPDATE;
         this.marketId = marketId;
         this.timestamp = timestamp;
@@ -198,6 +209,7 @@ public class PublishEvent {
         this.filledQty = filledQty;
         this.orderPrice = orderPrice;
         this.orderIsBuy = orderIsBuy;
+        this.omsOrderId = omsOrderId;
     }
 
     // === Getters (all inline for JIT optimization) ===
@@ -215,6 +227,8 @@ public class PublishEvent {
     public long getPrice() { return price; }
     public long getQuantity() { return quantity; }
     public boolean isTakerIsBuy() { return takerIsBuy; }
+    public long getTakerOmsOrderId() { return takerOmsOrderId; }
+    public long getMakerOmsOrderId() { return makerOmsOrderId; }
 
     // Order book update getters
     public boolean isSnapshot() { return isSnapshot; }
@@ -241,4 +255,5 @@ public class PublishEvent {
     public long getFilledQty() { return filledQty; }
     public long getOrderPrice() { return orderPrice; }
     public boolean isOrderIsBuy() { return orderIsBuy; }
+    public long getOmsOrderId() { return omsOrderId; }
 }

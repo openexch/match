@@ -11,6 +11,7 @@ import com.match.domain.enums.OrderSide;
 import com.match.domain.enums.OrderType;
 import com.match.infrastructure.Logger;
 import org.agrona.collections.Int2ObjectHashMap;
+import org.agrona.collections.Long2LongHashMap;
 
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -31,6 +32,10 @@ public class Engine {
 
     // Event publisher (optional - set via setEventPublisher)
     private MatchEventPublisher eventPublisher;
+
+    // Maps cluster orderId → omsOrderId for maker order correlation in trade executions
+    // When a maker order is on the book, we need to look up its omsOrderId when it matches
+    private final Long2LongHashMap orderIdToOmsOrderId = new Long2LongHashMap(-1);
 
     // Market ID constants
     public static final int MARKET_BTC_USD = 1;
@@ -100,6 +105,12 @@ public class Engine {
         long totalPrice = cmd.getTotalPrice();
         OrderSide side = cmd.getOrderSide();
         OrderType type = cmd.getOrderType();
+        long omsOrderId = cmd.getOmsOrderId();
+
+        // Store omsOrderId mapping for maker correlation in trades
+        if (omsOrderId != 0) {
+            orderIdToOmsOrderId.put(orderId, omsOrderId);
+        }
 
         boolean isBuy = (side == OrderSide.BID);
         int matchCount = 0;
@@ -112,35 +123,43 @@ public class Engine {
                 matchCount = engine.processMarketOrder(orderId, userId, false, quantity, 0);
             }
             // Publish trades (order book published at 50ms intervals by MarketPublisher)
-            publishTradeExecutions(engine, marketId, timestamp, orderId, userId, isBuy, matchCount);
+            publishTradeExecutions(engine, marketId, timestamp, orderId, userId, isBuy, matchCount, omsOrderId);
             long filledQty = calculateFilledQuantity(engine, matchCount);
             if (matchCount == 0) {
                 // Market order with no matches — reject (no liquidity)
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
-                    0, 0, price, isBuy);
+                    0, 0, price, isBuy, omsOrderId);
             } else {
                 // Market orders are always fully executed (no remaining quantity on book)
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.FILLED,
-                    0, filledQty, price, isBuy);
+                    0, filledQty, price, isBuy, omsOrderId);
+            }
+            // Clean up mapping for fully consumed market orders
+            if (omsOrderId != 0) {
+                orderIdToOmsOrderId.remove(orderId);
             }
         } else if (type == OrderType.LIMIT) {
             matchCount = engine.processLimitOrder(orderId, userId, isBuy, price, quantity);
-            publishTradeExecutions(engine, marketId, timestamp, orderId, userId, isBuy, matchCount);
+            publishTradeExecutions(engine, marketId, timestamp, orderId, userId, isBuy, matchCount, omsOrderId);
             // Publish order status
             long remainingQty = engine.getTakerRemainingQuantity();
             long filledQty = quantity - remainingQty;
             if (remainingQty == 0 && matchCount > 0) {
                 // Fully filled
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.FILLED,
-                    0, filledQty, price, isBuy);
+                    0, filledQty, price, isBuy, omsOrderId);
+                // Clean up mapping for fully filled orders
+                if (omsOrderId != 0) {
+                    orderIdToOmsOrderId.remove(orderId);
+                }
             } else if (matchCount > 0 && remainingQty > 0) {
-                // Partially filled, rest on book
+                // Partially filled, rest on book — keep mapping for future maker matches
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.PARTIALLY_FILLED,
-                    remainingQty, filledQty, price, isBuy);
+                    remainingQty, filledQty, price, isBuy, omsOrderId);
             } else if (matchCount == 0 && remainingQty > 0) {
-                // No match, order added to book
+                // No match, order added to book — keep mapping for future maker matches
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.NEW,
-                    remainingQty, 0, price, isBuy);
+                    remainingQty, 0, price, isBuy, omsOrderId);
             }
         } else if (type == OrderType.LIMIT_MAKER) {
             // Limit maker - only add if won't match immediately
@@ -151,13 +170,16 @@ public class Engine {
 
             if (!wouldMatch) {
                 engine.addOrderNoMatch(orderId, userId, isBuy, price, quantity);
-                // Order added to book
+                // Order added to book — keep mapping for future maker matches
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.NEW,
-                    quantity, 0, price, isBuy);
+                    quantity, 0, price, isBuy, omsOrderId);
             } else {
                 // Order would cross spread - rejected
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
-                    0, 0, price, isBuy);
+                    0, 0, price, isBuy, omsOrderId);
+                if (omsOrderId != 0) {
+                    orderIdToOmsOrderId.remove(orderId);
+                }
             }
         }
     }
@@ -178,7 +200,7 @@ public class Engine {
      * Order book is published at 50ms intervals by MarketPublisher.
      */
     private void publishTradeExecutions(DirectMatchingEngine engine, int marketId, long timestamp,
-            long takerOrderId, long takerUserId, boolean takerIsBuy, int matchCount) {
+            long takerOrderId, long takerUserId, boolean takerIsBuy, int matchCount, long takerOmsOrderId) {
         if (eventPublisher == null || matchCount == 0) {
             return;
         }
@@ -189,11 +211,18 @@ public class Engine {
             long matchPrice = engine.getMatchPrice(i);
             long matchQty = engine.getMatchQuantity(i);
 
+            // Look up maker's omsOrderId from stored mapping
+            long makerOmsOrderId = orderIdToOmsOrderId.get(makerOrderId);
+            if (makerOmsOrderId == -1) {
+                makerOmsOrderId = 0; // Not found (pre-OMS order)
+            }
+
             eventPublisher.publishTradeExecution(
                 marketId, timestamp,
                 takerOrderId, takerUserId,
                 makerOrderId, makerUserId,
-                matchPrice, matchQty, takerIsBuy
+                matchPrice, matchQty, takerIsBuy,
+                takerOmsOrderId, makerOmsOrderId
             );
         }
     }
@@ -214,8 +243,13 @@ public class Engine {
         }
 
         if (cancelled) {
+            // Look up and clean up omsOrderId mapping
+            long omsOrderId = orderIdToOmsOrderId.remove(orderId);
+            if (omsOrderId == -1) {
+                omsOrderId = 0;
+            }
             publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
-                0, 0, 0, isBuy);
+                0, 0, 0, isBuy, omsOrderId);
         }
     }
 
@@ -223,13 +257,13 @@ public class Engine {
      * Publish order status update.
      */
     private void publishOrderStatus(int marketId, long timestamp, long orderId, long userId,
-            int orderStatus, long remainingQty, long filledQty, long orderPrice, boolean isBuy) {
+            int orderStatus, long remainingQty, long filledQty, long orderPrice, boolean isBuy, long omsOrderId) {
         if (eventPublisher == null) {
             return;
         }
         eventPublisher.publishOrderStatusUpdate(
             marketId, timestamp, orderId, userId,
-            orderStatus, remainingQty, filledQty, orderPrice, isBuy
+            orderStatus, remainingQty, filledQty, orderPrice, isBuy, omsOrderId
         );
     }
 
@@ -280,5 +314,12 @@ public class Engine {
      */
     public Int2ObjectHashMap<DirectMatchingEngine> getEngines() {
         return engines;
+    }
+
+    /**
+     * Get the orderId-to-omsOrderId mapping for snapshot.
+     */
+    public Long2LongHashMap getOrderIdToOmsOrderId() {
+        return orderIdToOmsOrderId;
     }
 }

@@ -46,6 +46,7 @@ public class MarketPublisher implements MarketEventHandler {
     private final BookDeltaEncoder bookDeltaEncoder = new BookDeltaEncoder();
     private final TradesBatchEncoder tradesBatchEncoder = new TradesBatchEncoder();
     private final OrderStatusBatchEncoder orderStatusBatchEncoder = new OrderStatusBatchEncoder();
+    private final TradeExecutionBatchEncoder tradeExecutionBatchEncoder = new TradeExecutionBatchEncoder();
 
     private final int marketId;
     private final String marketName;
@@ -86,6 +87,22 @@ public class MarketPublisher implements MarketEventHandler {
         long filledQty;
         boolean isBuy;
         long timestamp;
+        long omsOrderId;
+    }
+
+    // Trade execution buffer for OMS TradeExecutionBatch
+    private final java.util.List<TradeExecutionEntry> tradeExecutionBuffer = new java.util.ArrayList<>(100);
+    private static class TradeExecutionEntry {
+        long tradeId;
+        long takerOrderId;
+        long makerOrderId;
+        long takerUserId;
+        long makerUserId;
+        long price;
+        long quantity;
+        boolean takerIsBuy;
+        long takerOmsOrderId;
+        long makerOmsOrderId;
     }
 
     // Change detection - use engine version numbers to detect any book change
@@ -258,6 +275,20 @@ public class MarketPublisher implements MarketEventHandler {
 
         agg.add(event.getQuantity(), event.isTakerIsBuy(), event.getTimestamp());
 
+        // Buffer individual trade details for OMS TradeExecutionBatch
+        TradeExecutionEntry tradeEntry = new TradeExecutionEntry();
+        tradeEntry.tradeId = event.getTradeId();
+        tradeEntry.takerOrderId = event.getTakerOrderId();
+        tradeEntry.makerOrderId = event.getMakerOrderId();
+        tradeEntry.takerUserId = event.getTakerUserId();
+        tradeEntry.makerUserId = event.getMakerUserId();
+        tradeEntry.price = event.getPrice();
+        tradeEntry.quantity = event.getQuantity();
+        tradeEntry.takerIsBuy = event.isTakerIsBuy();
+        tradeEntry.takerOmsOrderId = event.getTakerOmsOrderId();
+        tradeEntry.makerOmsOrderId = event.getMakerOmsOrderId();
+        tradeExecutionBuffer.add(tradeEntry);
+
         // Capture book version for correlation (read from both books)
         if (matchingEngine != null) {
             long bidVersion = matchingEngine.getBidBook().getVersion();
@@ -364,6 +395,15 @@ public class MarketPublisher implements MarketEventHandler {
                 clearTradesBuffer();
             }
 
+            // Flush individual trade executions for OMS (TradeExecutionBatch)
+            if (!tradeExecutionBuffer.isEmpty()) {
+                int length = encodeTradeExecutionBatch();
+                if (length > 0) {
+                    localBroadcaster.broadcast(encodeBuffer, 0, length);
+                }
+                tradeExecutionBuffer.clear();
+            }
+
             // Flush buffered order status updates as batch (SBE encoded)
             // Send in chunks if buffer is large to prevent overflow
             while (!orderStatusBuffer.isEmpty()) {
@@ -397,6 +437,7 @@ public class MarketPublisher implements MarketEventHandler {
 
     private void clearBuffersWithoutSending() {
         clearTradesBuffer();
+        tradeExecutionBuffer.clear();
         orderStatusBuffer.clear();
     }
 
@@ -426,6 +467,7 @@ public class MarketPublisher implements MarketEventHandler {
         entry.filledQty = event.getFilledQty();
         entry.isBuy = event.isOrderIsBuy();
         entry.timestamp = event.getTimestamp();
+        entry.omsOrderId = event.getOmsOrderId();
         orderStatusBuffer.add(entry);
     }
 
@@ -761,10 +803,53 @@ public class MarketPublisher implements MarketEventHandler {
                 .remainingQty(entry.remainingQty)
                 .filledQty(entry.filledQty)
                 .side(entry.isBuy ? OrderSide.BID : OrderSide.ASK)
-                .timestamp(entry.timestamp);
+                .timestamp(entry.timestamp)
+                .omsOrderId(entry.omsOrderId);
         }
 
         return MessageHeaderEncoder.ENCODED_LENGTH + orderStatusBatchEncoder.encodedLength();
+    }
+
+    /**
+     * Encode individual trade executions to SBE TradeExecutionBatch format.
+     * Provides full per-trade details for OMS settlement.
+     * @return Encoded length, or 0 if nothing to encode
+     */
+    private int encodeTradeExecutionBatch() {
+        int tradeCount = tradeExecutionBuffer.size();
+        if (tradeCount == 0) {
+            return 0;
+        }
+
+        // Encode header
+        headerEncoder.wrap(encodeBuffer, 0)
+            .blockLength(TradeExecutionBatchEncoder.BLOCK_LENGTH)
+            .templateId(TradeExecutionBatchEncoder.TEMPLATE_ID)
+            .schemaId(TradeExecutionBatchEncoder.SCHEMA_ID)
+            .version(TradeExecutionBatchEncoder.SCHEMA_VERSION);
+
+        // Encode message body
+        tradeExecutionBatchEncoder.wrap(encodeBuffer, MessageHeaderEncoder.ENCODED_LENGTH)
+            .marketId(marketId)
+            .timestamp(System.currentTimeMillis());
+
+        // Encode trades group
+        TradeExecutionBatchEncoder.TradesEncoder tradesGroup = tradeExecutionBatchEncoder.tradesCount(tradeCount);
+        for (TradeExecutionEntry entry : tradeExecutionBuffer) {
+            tradesGroup.next()
+                .tradeId(entry.tradeId)
+                .takerOrderId(entry.takerOrderId)
+                .makerOrderId(entry.makerOrderId)
+                .takerUserId(entry.takerUserId)
+                .makerUserId(entry.makerUserId)
+                .price(entry.price)
+                .quantity(entry.quantity)
+                .takerSide(entry.takerIsBuy ? OrderSide.BID : OrderSide.ASK)
+                .takerOmsOrderId(entry.takerOmsOrderId)
+                .makerOmsOrderId(entry.makerOmsOrderId);
+        }
+
+        return MessageHeaderEncoder.ENCODED_LENGTH + tradeExecutionBatchEncoder.encodedLength();
     }
 
     /**

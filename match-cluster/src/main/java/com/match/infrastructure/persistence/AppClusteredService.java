@@ -184,6 +184,7 @@ public class AppClusteredService implements ClusteredService {
     }
 
     private boolean flushTimerScheduled = false;
+    private boolean timerRestoredFromSnapshot = false;
 
     private static final long MARKET_DATA_FLUSH_INTERVAL_MS = 10;
 
@@ -344,6 +345,7 @@ public class AppClusteredService implements ClusteredService {
             if (timerCorrelationId > 0) {
                 timerManager.restoreTimer(timerCorrelationId, this::onFlushTimer);
                 flushTimerScheduled = true;
+                timerRestoredFromSnapshot = true;
                 System.out.println("[SNAPSHOT] Restored flush timer chain at correlationId=" + timerCorrelationId);
             }
         }
@@ -585,7 +587,14 @@ public class AppClusteredService implements ClusteredService {
         // cluster.scheduleTimer() are no-ops, so the self-rescheduling chain
         // breaks at the replay→live transition. This reset ensures a fresh
         // timer is created once we're processing live messages.
-        flushTimerScheduled = false;
+        //
+        // However, if timer was restored from snapshot, the timer handler is
+        // already registered and will fire correctly - don't reset the flag
+        // or we'll create duplicate timer chains causing cluster instability.
+        if (!timerRestoredFromSnapshot) {
+            flushTimerScheduled = false;
+        }
+        timerRestoredFromSnapshot = false; // Reset for next snapshot cycle
     }
 
     @Override

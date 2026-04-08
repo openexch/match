@@ -142,7 +142,9 @@ public class MatchEventPublisher {
             long makerUserId,
             long price,
             long quantity,
-            boolean takerIsBuy) {
+            boolean takerIsBuy,
+            long takerOmsOrderId,
+            long makerOmsOrderId) {
 
         RingBuffer<PublishEvent> ringBuffer = ringBuffers.get(marketId);
         if (ringBuffer == null) {
@@ -180,7 +182,8 @@ public class MatchEventPublisher {
                 marketId, timestamp, tradeId,
                 takerOrderId, takerUserId,
                 makerOrderId, makerUserId,
-                price, quantity, takerIsBuy
+                price, quantity, takerIsBuy,
+                takerOmsOrderId, makerOmsOrderId
             );
         } finally {
             ringBuffer.publish(sequence);
@@ -269,7 +272,8 @@ public class MatchEventPublisher {
             long remainingQty,
             long filledQty,
             long orderPrice,
-            boolean orderIsBuy) {
+            boolean orderIsBuy,
+            long omsOrderId) {
 
         RingBuffer<PublishEvent> ringBuffer = ringBuffers.get(marketId);
         if (ringBuffer == null) {
@@ -283,7 +287,8 @@ public class MatchEventPublisher {
                 marketId, timestamp,
                 orderId, userId, orderStatus,
                 remainingQty, filledQty,
-                orderPrice, orderIsBuy
+                orderPrice, orderIsBuy,
+                omsOrderId
             );
         } finally {
             ringBuffer.publish(sequence);
