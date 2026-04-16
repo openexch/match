@@ -6,7 +6,7 @@ import com.match.infrastructure.Logger;
 import com.match.infrastructure.gateway.AeronGateway;
 import com.match.infrastructure.generated.BookDeltaDecoder;
 import com.match.infrastructure.generated.BookSnapshotDecoder;
-import com.match.infrastructure.generated.BookUpdateType;
+import com.match.infrastructure.generated.OrderSide;
 import com.match.infrastructure.generated.OrderStatusBatchDecoder;
 import com.match.infrastructure.generated.TradesBatchDecoder;
 import com.match.infrastructure.websocket.MarketDataWebSocket;
@@ -122,7 +122,7 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             orderBook.updateVersions(marketId, marketName, bidVersion, askVersion, timestamp);
 
             // Build JSON and broadcast to WebSocket
-            if (webSocket != null && changesArray.size() > 0) {
+            if (webSocket != null && !changesArray.isEmpty()) {
                 String json = buildBookDeltaJson(marketId, marketName, timestamp, bidVersion, askVersion, changesArray);
                 webSocket.broadcastMarketData(json);
             }
@@ -173,7 +173,7 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             }
 
             // Build JSON and broadcast to WebSocket
-            if (webSocket != null && tradesArray.size() > 0) {
+            if (webSocket != null && !tradesArray.isEmpty()) {
                 String json = buildTradesBatchJson(marketId, marketName, timestamp, tradesArray);
                 webSocket.broadcastMarketData(json);
 
@@ -184,7 +184,7 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
                 // Broadcast current 1m candle update
                 Candle currentCandle = candleProvider.getCurrentCandle(marketId, "1m");
                 if (currentCandle != null) {
-                    String candleJson = buildCandleUpdateJson(marketId, marketName, "1m", currentCandle);
+                    String candleJson = buildCandleUpdateJson(marketId, marketName, currentCandle);
                     webSocket.broadcastMarketData(candleJson);
                 }
             }
@@ -209,7 +209,36 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
 
     @Override
     public void onOrderStatusBatch(OrderStatusBatchDecoder decoder) {
-        // Order status tracking disabled - not broadcasting to WebSocket
+        try {
+            int marketId = decoder.marketId();
+            long timestamp = decoder.timestamp();
+
+            JsonArray ordersArray = new JsonArray();
+            for (OrderStatusBatchDecoder.OrdersDecoder order : decoder.orders()) {
+                JsonObject o = new JsonObject();
+                o.addProperty("orderId", order.orderId());
+                o.addProperty("omsOrderId", order.omsOrderId());
+                o.addProperty("userId", order.userId());
+                o.addProperty("status", order.status().name());
+                o.addProperty("price", (double) order.price() / SCALE_FACTOR);
+                o.addProperty("remainingQuantity", (double) order.remainingQty() / SCALE_FACTOR);
+                o.addProperty("filledQuantity", (double) order.filledQty() / SCALE_FACTOR);
+                o.addProperty("side", order.side() == OrderSide.BID ? "BID" : "ASK");
+                o.addProperty("timestamp", order.timestamp());
+                ordersArray.add(o);
+            }
+
+            if (webSocket != null && ordersArray.size() > 0) {
+                JsonObject msg = new JsonObject();
+                msg.addProperty("type", "ORDER_STATUS_BATCH");
+                msg.addProperty("marketId", marketId);
+                msg.addProperty("timestamp", timestamp);
+                msg.add("orders", ordersArray);
+                webSocket.broadcastMarketData(msg.toString());
+            }
+        } catch (Exception e) {
+            logger.error("Error processing ORDER_STATUS_BATCH: " + e.getMessage());
+        }
     }
 
     @Override
@@ -273,12 +302,12 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
     }
 
     // Build JSON for WebSocket broadcast - candle update
-    private String buildCandleUpdateJson(int marketId, String market, String interval, Candle candle) {
+    private String buildCandleUpdateJson(int marketId, String market, Candle candle) {
         JsonObject obj = new JsonObject();
         obj.addProperty("type", "CANDLE_UPDATE");
         obj.addProperty("marketId", marketId);
         obj.addProperty("market", market);
-        obj.addProperty("interval", interval);
+        obj.addProperty("interval", "1m");
         obj.add("candle", candleToJson(candle));
         return obj.toString();
     }
