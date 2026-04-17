@@ -90,7 +90,9 @@ public class Engine {
             case CMD_CANCEL:
                 processCancel(engine, (CancelOrderCommand) command, marketId, timestamp);
                 break;
-            // Update not implemented for direct engine (would need order lookup)
+            case CMD_UPDATE:
+                processUpdate(engine, (UpdateOrderCommand) command, marketId, timestamp);
+                break;
         }
     }
 
@@ -250,6 +252,67 @@ public class Engine {
             }
             publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
                 0, 0, 0, isBuy, omsOrderId);
+        }
+    }
+
+    /**
+     * Process update order - cancel-and-replace. O(1) cancel + O(1) limit placement.
+     * Atomic within the single-threaded engine — no external matches can occur between cancel and re-place.
+     */
+    private void processUpdate(DirectMatchingEngine engine, UpdateOrderCommand cmd, int marketId, long timestamp) {
+        long oldOrderId = cmd.getOrderId();
+        long userId = cmd.getUserId();
+        long newPrice = cmd.getPrice();
+        long newQuantity = cmd.getQuantity();
+        OrderSide side = cmd.getOrderSide();
+        boolean isBuy = (side == OrderSide.BID);
+
+        // Preserve omsOrderId before cancel removes the mapping
+        long omsOrderId = orderIdToOmsOrderId.get(oldOrderId);
+        if (omsOrderId == -1) {
+            omsOrderId = 0;
+        }
+
+        // 1. Cancel existing order
+        boolean cancelled = engine.cancelOrder(oldOrderId, isBuy);
+        if (!cancelled) {
+            // Order not found on expected side — reject the update
+            publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.REJECTED,
+                0, 0, newPrice, isBuy, omsOrderId);
+            return;
+        }
+
+        // Clean up old mapping
+        orderIdToOmsOrderId.remove(oldOrderId);
+
+        // Publish cancel for old order
+        publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.CANCELLED,
+            0, 0, 0, isBuy, omsOrderId);
+
+        // 2. Place new order with updated price/quantity
+        long newOrderId = orderIdGenerator.getAndIncrement();
+        if (omsOrderId != 0) {
+            orderIdToOmsOrderId.put(newOrderId, omsOrderId);
+        }
+
+        int matchCount = engine.processLimitOrder(newOrderId, userId, isBuy, newPrice, newQuantity);
+        publishTradeExecutions(engine, marketId, timestamp, newOrderId, userId, isBuy, matchCount, omsOrderId);
+
+        long remainingQty = engine.getTakerRemainingQuantity();
+        long filledQty = newQuantity - remainingQty;
+
+        if (remainingQty == 0 && matchCount > 0) {
+            publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.FILLED,
+                0, filledQty, newPrice, isBuy, omsOrderId);
+            if (omsOrderId != 0) {
+                orderIdToOmsOrderId.remove(newOrderId);
+            }
+        } else if (matchCount > 0 && remainingQty > 0) {
+            publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.PARTIALLY_FILLED,
+                remainingQty, filledQty, newPrice, isBuy, omsOrderId);
+        } else {
+            publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.NEW,
+                remainingQty, 0, newPrice, isBuy, omsOrderId);
         }
     }
 

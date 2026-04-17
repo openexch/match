@@ -1,10 +1,11 @@
 package com.match.application.engine;
 
 import com.match.domain.FixedPoint;
+import com.match.domain.MarketInfo;
 
 /**
  * Market configuration for the matching engine.
- * Defines price ranges and tick sizes for each supported market.
+ * Extends {@link MarketInfo} with engine-specific price ranges and tick sizes.
  *
  * Price ranges are based on 52-week historical data with ~30-50% buffer on each side.
  */
@@ -16,9 +17,9 @@ public final class MarketConfig {
     public final long maxPrice;    // Fixed-point (8 decimals)
     public final long tickSize;    // Fixed-point (8 decimals)
 
-    public MarketConfig(int marketId, String symbol, double basePrice, double maxPrice, double tickSize) {
-        this.marketId = marketId;
-        this.symbol = symbol;
+    public MarketConfig(MarketInfo info, double basePrice, double maxPrice, double tickSize) {
+        this.marketId = info.id();
+        this.symbol = info.symbol();
         this.basePrice = FixedPoint.fromDouble(basePrice);
         this.maxPrice = FixedPoint.fromDouble(maxPrice);
         this.tickSize = FixedPoint.fromDouble(tickSize);
@@ -36,23 +37,23 @@ public final class MarketConfig {
 
     // BTC: 52-week range $74,437 - $126,198 -> $50,000 - $150,000
     public static final MarketConfig BTC_USD = new MarketConfig(
-        1, "BTC-USD", 50_000.0, 150_000.0, 1.0);      // 100K levels (~410MB)
+        MarketInfo.BTC_USD, 50_000.0, 150_000.0, 1.0);      // 100K levels (~410MB)
 
     // ETH: 52-week range $1,387 - $4,954 -> $1,000 - $10,000
     public static final MarketConfig ETH_USD = new MarketConfig(
-        2, "ETH-USD", 1_000.0, 10_000.0, 0.50);       // 18K levels (~74MB)
+        MarketInfo.ETH_USD, 1_000.0, 10_000.0, 0.50);       // 18K levels (~74MB)
 
     // SOL: 52-week range $96.59 - $294.33 -> $50 - $500
     public static final MarketConfig SOL_USD = new MarketConfig(
-        3, "SOL-USD", 50.0, 500.0, 0.05);             // 9K levels (~37MB)
+        MarketInfo.SOL_USD, 50.0, 500.0, 0.05);             // 9K levels (~37MB)
 
     // XRP: 52-week range $1.53 - $3.65 -> $0.50 - $10.00
     public static final MarketConfig XRP_USD = new MarketConfig(
-        4, "XRP-USD", 0.50, 10.0, 0.001);             // 9.5K levels (~39MB)
+        MarketInfo.XRP_USD, 0.50, 10.0, 0.001);             // 9.5K levels (~39MB)
 
     // DOGE: 52-week range $0.1148 - $0.4335 -> $0.05 - $1.00
     public static final MarketConfig DOGE_USD = new MarketConfig(
-        5, "DOGE-USD", 0.05, 1.0, 0.0001);            // 9.5K levels (~39MB)
+        MarketInfo.DOGE_USD, 0.05, 1.0, 0.0001);            // 9.5K levels (~39MB)
 
     public static final MarketConfig[] ALL_MARKETS = {
         BTC_USD, ETH_USD, SOL_USD, XRP_USD, DOGE_USD

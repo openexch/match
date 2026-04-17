@@ -9,9 +9,10 @@ Ultra-low latency order matching engine built on a 3-node [Aeron Cluster](https:
 ## Key Features
 
 - **Sub-microsecond matching** — Zero-allocation hot path with O(1) order book operations via direct array indexing
+- **Create, cancel, and modify** — Full order lifecycle including atomic cancel-and-replace for price/quantity updates
 - **Fault-tolerant clustering** — 3-node Raft consensus with automatic leader election, snapshots, and log replay
-- **Real-time market data** — WebSocket streaming of order book updates, trades, and market statistics
-- **5 market pairs** — BTC, ETH, SOL, XRP, DOGE against USD with optimized price-level indexing
+- **Real-time market data** — WebSocket streaming of order book updates, trades, order status, and market statistics
+- **5 market pairs** — BTC, ETH, SOL, XRP, DOGE against USD (canonical definitions in `MarketInfo`)
 - **Fixed-point arithmetic** — 8-decimal precision (10^8 scaling) throughout, no floating-point in the hot path
 - **Rolling updates** — Zero-downtime deployments via Admin API
 - **Chaos engineering** — Built-in failure injection suite for resilience testing
@@ -97,13 +98,18 @@ match/
 ## Order Flow
 
 ```
-1. HTTP POST /order → Order Gateway (port 8080)
+1. REST /api/v1/orders → OMS (port 8080) → Risk + Ledger hold
 2. → Aeron ingress → Cluster consensus (Raft)
-3. → Engine.acceptOrder() → DirectMatchingEngine
-4. → O(1) price lookup → Price-time priority matching
+3. → Engine.acceptOrder() → Dispatch CREATE / CANCEL / UPDATE
+4. → DirectMatchingEngine → O(1) price lookup → Price-time priority matching
 5. → SBE-encoded TradeExecution + OrderStatus via egress
-6. → Market Gateway → WebSocket → clients
+6. → Market Gateway → WebSocket broadcast (order book + order status) → clients
 ```
+
+Supported commands:
+- **CREATE** — New limit, market, or limit-maker order
+- **CANCEL** — Cancel by orderId (tries both book sides)
+- **UPDATE** — Atomic cancel-and-replace with new price/quantity
 
 ## API
 

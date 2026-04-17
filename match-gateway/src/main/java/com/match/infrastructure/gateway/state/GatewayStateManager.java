@@ -6,6 +6,7 @@ import com.match.infrastructure.Logger;
 import com.match.infrastructure.gateway.AeronGateway;
 import com.match.infrastructure.generated.BookDeltaDecoder;
 import com.match.infrastructure.generated.BookSnapshotDecoder;
+import com.match.domain.MarketInfo;
 import com.match.infrastructure.generated.OrderSide;
 import com.match.infrastructure.generated.OrderStatusBatchDecoder;
 import com.match.infrastructure.generated.TradesBatchDecoder;
@@ -248,17 +249,9 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
         logger.info("New leader detected: member=" + leaderMemberId + ", term=" + leadershipTermId);
     }
 
-    // Market ID to name mapping
-    private static final Map<Integer, String> MARKET_NAMES = Map.of(
-        1, "BTC-USD",
-        2, "ETH-USD",
-        3, "SOL-USD",
-        4, "XRP-USD",
-        5, "DOGE-USD"
-    );
-
     private String getMarketName(int marketId) {
-        return MARKET_NAMES.getOrDefault(marketId, "UNKNOWN");
+        MarketInfo info = MarketInfo.fromId(marketId);
+        return info != null ? info.symbol() : "UNKNOWN";
     }
 
     // Build JSON for WebSocket broadcast - book snapshot
