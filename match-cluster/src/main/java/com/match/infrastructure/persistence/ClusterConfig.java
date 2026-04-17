@@ -219,16 +219,14 @@ public final class ClusterConfig
                 .snapshotChannel(snapshotChannel)
                 // Idle strategy for consensus
                 .idleStrategySupplier(org.agrona.concurrent.BusySpinIdleStrategy::new)
-                // Timing for consistent latency (tighter timeouts)
-                .leaderHeartbeatIntervalNs(200_000_000L)   // 200ms heartbeat
-                .leaderHeartbeatTimeoutNs(2_000_000_000L)  // 2s timeout (10x heartbeat)
+                // NOTE: leaderHeartbeatIntervalNs / leaderHeartbeatTimeoutNs / electionTimeoutNs /
+                // startupCanvassTimeoutNs / terminationTimeoutNs / sessionTimeoutNs are set in
+                // AeronCluster.java to keep all cluster timing in one place.
                 // Log buffer size
                 .logFragmentLimit(64)  // Process more fragments per work cycle
                 // Wheel timer tick resolution
                 .wheelTickResolutionNs(1_000_000)  // 1ms tick resolution
                 .ticksPerWheel(1024)  // More ticks for finer granularity
-                // Session timeout - close stale sessions to allow reconnection
-                .sessionTimeoutNs(10_000_000_000L)  // 10s session timeout
                 // Allow more concurrent sessions (default is 10)
                 // Prevents session exhaustion during load tests + gateway reconnections
                 .maxConcurrentSessions(50);

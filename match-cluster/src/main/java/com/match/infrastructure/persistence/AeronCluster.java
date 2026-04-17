@@ -1,20 +1,29 @@
 package com.match.infrastructure.persistence;
 
+import com.match.infrastructure.Logger;
 import io.aeron.cluster.ClusteredMediaDriver;
 import io.aeron.cluster.service.ClusteredServiceContainer;
+import org.agrona.ErrorHandler;
 import org.agrona.concurrent.ShutdownSignalBarrier;
 import org.agrona.concurrent.SystemEpochClock;
 
 import java.io.File;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static com.match.infrastructure.InfrastructureConstants.SESSION_TIMEOUT_NS;
 import static java.lang.Integer.parseInt;
 
 public class AeronCluster {
+    private static final Logger log = Logger.getLogger(AeronCluster.class);
+    /** Counts errors surfaced by the Aeron error handler. Exposed for monitoring. */
+    public static final AtomicLong AERON_ERROR_COUNT = new AtomicLong();
+
     public AeronCluster() {
         final ShutdownSignalBarrier barrier = new ShutdownSignalBarrier();
         final int portBase = getBasePort();
@@ -27,24 +36,41 @@ public class AeronCluster {
 
         clusterConfig.baseDir(getBaseDir(nodeId));
 
+        // Route Aeron driver/archive/consensus/service errors to the application logger so
+        // operators see them in node{N}.log instead of just the cluster mark file. Without
+        // this, a misconfigured channel or back-pressure storm is silent.
+        final ErrorHandler errorHandler = (Throwable t) -> {
+            AERON_ERROR_COUNT.incrementAndGet();
+            final StringWriter sw = new StringWriter();
+            t.printStackTrace(new PrintWriter(sw));
+            log.error("Aeron error #%d: %s", AERON_ERROR_COUNT.get(), sw.toString());
+        };
+        clusterConfig.errorHandler(errorHandler);
+
         // ==================== ULTRA-LOW LATENCY CHANNEL CONFIG ====================
-        // Large term buffers for high throughput without fragmentation
+        // Large term buffers for high throughput without fragmentation.
+        // WARNING: mtu=8k requires path MTU >= 8192. Loopback (lo, 65536) and jumbo-frame
+        // networks (MTU 9000) are fine. Standard Ethernet (MTU 1500) will IP-fragment every
+        // packet > 1408 bytes, dramatically increasing loss and triggering NAK storms. Before
+        // moving cluster nodes off 127.0.0.1, either enable jumbo frames end-to-end or drop
+        // mtu to 1408 (Aeron default). Same warning applies to the MTU set on the MediaDriver
+        // below and to the OMS / market-gateway client ingress channels.
         clusterConfig.consensusModuleContext().ingressChannel("aeron:udp?term-length=16m|mtu=8k");
         clusterConfig.consensusModuleContext().egressChannel("aeron:udp?term-length=16m|mtu=8k");
 
         // ==================== FAST LEADER ELECTION CONFIG ====================
+        // Single source of truth for cluster timing. Aeron defaults are: heartbeat-interval=200ms,
+        // heartbeat-timeout=10s, election-timeout=1s, startup-canvass=60s, termination=10s.
+        // We tighten heartbeat/canvass/termination for sub-second failover; election-timeout stays
+        // at the default 1s. JVM uses ZGC so safepoint pauses fit well under the 1s heartbeat
+        // timeout. systemd force-kills at 5s, so termination must complete in <5s.
         clusterConfig.consensusModuleContext()
-            // Heartbeat: 100ms interval, 1s timeout (10x for stability)
-            .leaderHeartbeatIntervalNs(TimeUnit.MILLISECONDS.toNanos(100))
-            .leaderHeartbeatTimeoutNs(TimeUnit.SECONDS.toNanos(1))
-            // Election timeout: 1s (fast election)
-            .electionTimeoutNs(TimeUnit.SECONDS.toNanos(1))
-            // Termination: 2s (fast graceful shutdown, systemd will force kill at 5s)
-            .terminationTimeoutNs(TimeUnit.SECONDS.toNanos(2))
-            // Session timeout: 10s (matches ClusterConfig and InfrastructureConstants)
-            .sessionTimeoutNs(SESSION_TIMEOUT_NS)
-            // Startup canvass timeout: 2s (must be multiple of heartbeat timeout)
-            .startupCanvassTimeoutNs(TimeUnit.SECONDS.toNanos(2))
+            .leaderHeartbeatIntervalNs(TimeUnit.MILLISECONDS.toNanos(100))   // 100ms
+            .leaderHeartbeatTimeoutNs(TimeUnit.SECONDS.toNanos(1))           // 1s (10x interval)
+            .electionTimeoutNs(TimeUnit.SECONDS.toNanos(1))                  // 1s (Aeron default)
+            .startupCanvassTimeoutNs(TimeUnit.SECONDS.toNanos(2))            // 2s
+            .terminationTimeoutNs(TimeUnit.SECONDS.toNanos(2))               // 2s (systemd kills at 5s)
+            .sessionTimeoutNs(SESSION_TIMEOUT_NS)                            // 10s
             ;
         //await DNS resolution of all the hostnames
         hostAddresses.forEach(AeronCluster::awaitDnsResolution);

@@ -93,6 +93,44 @@ curl -X POST http://localhost:8082/api/admin/rebuild-cluster          # Rebuild 
 curl -X POST http://localhost:8082/api/admin/rebuild-gateway          # Rebuild gateway module
 ```
 
+### Archive Compaction & Cleanup
+```bash
+curl -X POST http://localhost:8082/api/admin/compact                   # Compact archive (single)
+curl -X POST http://localhost:8082/api/admin/compact-archive           # Compact archive variant
+curl -X POST http://localhost:8082/api/admin/rolling-cleanup           # Rolling per-node cleanup
+curl -X POST http://localhost:8082/api/admin/cleanup -d '{"force":true}'  # Wipe Aeron mark/lock files (requires all nodes stopped)
+curl -X POST http://localhost:8082/api/admin/cleanup-node              # Per-node cleanup
+```
+
+### Auto-Snapshot Schedule
+```bash
+curl http://localhost:8082/api/admin/auto-snapshot                                 # Get current schedule
+curl -X POST http://localhost:8082/api/admin/auto-snapshot -d '{"intervalMinutes":30}'  # Enable
+curl -X DELETE http://localhost:8082/api/admin/auto-snapshot                       # Disable
+```
+
+### Backup & Recovery
+```bash
+curl http://localhost:8082/api/admin/backup-info                       # Inspect backup
+curl -X POST http://localhost:8082/api/admin/recover-from-backup       # Restore from backup
+```
+
+### Process Manager (Extended)
+```bash
+curl -X POST http://localhost:8082/api/admin/processes/{name}/restart        # Restart specific process
+curl -X POST http://localhost:8082/api/admin/processes/{name}/force-stop     # SIGKILL specific process
+curl -X POST http://localhost:8082/api/admin/processes/restart-all           # Restart all in dependency order
+curl http://localhost:8082/api/admin/processes/summary                        # Process summary
+```
+
+### Node operations
+```bash
+curl -X POST http://localhost:8082/api/admin/start-node -d '{"nodeId":0}'    # Start single node
+curl -X POST http://localhost:8082/api/admin/stop-node  -d '{"nodeId":0}'    # Stop single node
+curl -X POST http://localhost:8082/api/admin/start-all-nodes                  # Start nodes 0-2
+curl -X POST http://localhost:8082/api/admin/stop-all-nodes                   # Stop nodes 0-2
+```
+
 ## Key Files
 
 | Component | Path |
@@ -102,6 +140,7 @@ curl -X POST http://localhost:8082/api/admin/rebuild-gateway          # Rebuild 
 | Matching Engine | `match-cluster/src/main/java/com/match/application/engine/Engine.java` |
 | Order Book | `match-cluster/src/main/java/com/match/application/orderbook/DirectMatchingEngine.java` |
 | Gateway Base | `match-gateway/src/main/java/com/match/infrastructure/gateway/AeronGateway.java` |
+| Market Identity | `match-common/src/main/java/com/match/domain/MarketInfo.java` |
 | Constants | `match-common/src/main/java/com/match/infrastructure/InfrastructureConstants.java` |
 | SBE Schema | `match-common/src/main/resources/sbe/order-schema.xml` |
 | Admin Gateway | `admin-gateway/` (Go service) |
@@ -137,11 +176,11 @@ Logs at: `~/.local/log/cluster/`
 ## Order Flow
 
 ```
-1. HTTP POST /api/v1/orders → OMS (8080, separate repo: order-management)
+1. HTTP POST/PUT/DELETE /api/v1/orders → OMS (8080, separate repo: order-management)
 2. → Risk checks → Balance holds → ClusterClient.submitOrder()
-3. → SBE CreateOrder → Cluster ingress
+3. → SBE CreateOrder/CancelOrder/UpdateOrder → Cluster ingress
 4. → AppClusteredService.onSessionMessage()
-5. → Engine.acceptOrder() → DirectMatchingEngine.processLimitOrder()
+5. → Engine.acceptOrder() → Dispatch(CREATE|CANCEL|UPDATE) → DirectMatchingEngine
 6. → Publish TradeExecution + OrderStatus via egress
 7. → MarketGateway → WebSocket → UI
 ```

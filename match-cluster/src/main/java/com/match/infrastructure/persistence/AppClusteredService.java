@@ -7,7 +7,9 @@ import com.match.application.publisher.MarketDataBroadcaster;
 import com.match.application.publisher.MatchEventPublisher;
 import com.match.infrastructure.websocket.MarketPublisher;
 import com.match.infrastructure.websocket.SubscriptionManager;
+import io.aeron.Aeron;
 import io.aeron.Publication;
+import io.aeron.archive.client.AeronArchive;
 import io.aeron.cluster.service.ClientSession;
 import io.aeron.cluster.service.Cluster;
 import io.aeron.cluster.service.ClusteredService;
@@ -17,6 +19,7 @@ import io.aeron.logbuffer.Header;
 // FragmentHandler replaced with FragmentAssembler for proper multi-fragment reassembly
 import io.aeron.ExclusivePublication;
 import io.aeron.Image;
+import org.agrona.CloseHelper;
 import org.agrona.DirectBuffer;
 import org.agrona.ExpandableArrayBuffer;
 // UnsafeBuffer removed — using ExpandableDirectByteBuffer for broadcast to handle large messages
@@ -58,6 +61,10 @@ public class AppClusteredService implements ClusteredService {
 
     // Store cluster reference for snapshot idle strategy and broadcasting
     private Cluster cluster;
+
+    // Lazy-initialized AeronArchive client used to confirm snapshot recordings are durable
+    // before onTakeSnapshot returns. See awaitSnapshotRecorded() for the full reasoning.
+    private AeronArchive snapshotArchive;
 
     // Buffer for broadcasting market data via Aeron egress
     // Uses ExpandableDirectByteBuffer to handle large book snapshots (can exceed 32KB with many orders)
@@ -258,8 +265,10 @@ public class AppClusteredService implements ClusteredService {
             }
         );
 
+        // Higher fragment limit shortens replay time on restart. Snapshots are one-shot at
+        // startup so spending more time inside one poll() call is fine.
         int fragmentCount = 0;
-        while (snapshotImage.poll(assembler, 10) > 0) {
+        while (snapshotImage.poll(assembler, 64) > 0) {
             fragmentCount++;
         }
         System.out.println("[SNAPSHOT] Total fragments polled: " + fragmentCount);
@@ -571,11 +580,77 @@ public class AppClusteredService implements ClusteredService {
 
         System.out.println("[SNAPSHOT] Total buffer size: " + pos + " bytes");
 
+        // Bounded retry — a wedged snapshot publication used to spin forever, masking the
+        // problem. 30s wall-clock is generous (cluster timeouts are seconds, not minutes).
         long result;
+        long startMs = System.currentTimeMillis();
+        long deadlineMs = startMs + 30_000;
+        long attempts = 0;
         while ((result = snapshotPublication.offer(buffer, 0, pos)) < 0) {
+            attempts++;
+            if (System.currentTimeMillis() > deadlineMs) {
+                throw new IllegalStateException("Snapshot offer stuck after 30s: lastResult=" + result
+                        + ", attempts=" + attempts + ", payloadBytes=" + pos);
+            }
             cluster.idleStrategy().idle();
         }
-        System.out.println("[SNAPSHOT] Publication result: " + result + " (success)");
+        System.out.println("[SNAPSHOT] Publication result: " + result
+                + " (success after " + attempts + " retries, "
+                + (System.currentTimeMillis() - startMs) + "ms)");
+
+        // Block until the Aeron Archive has read all the bytes we offered into its on-disk
+        // recording file. Without this, onTakeSnapshot returns while the recording is still in
+        // flight; if the node is killed before Archive flushes the catalog stopPosition, the
+        // recording is pruned on restart and recovery fails with `unknown recording id`. See
+        // /tmp/cluster-forensic2-033046/ROOT-CAUSE-V2.md for the full repro.
+        awaitSnapshotRecorded(snapshotPublication);
+    }
+
+    /**
+     * Wait for the Archive's recording subscription to ingest the snapshot we just published.
+     * Blocks until {@code recordingPosition >= snapshotPublication.position()} or 10s elapses.
+     */
+    private void awaitSnapshotRecorded(final ExclusivePublication snapshotPublication) {
+        final long writtenPosition = snapshotPublication.position();
+        if (writtenPosition <= 0) {
+            return;
+        }
+
+        if (snapshotArchive == null) {
+            // Clone so we don't share lock state with the cluster's own archive client.
+            snapshotArchive = AeronArchive.connect(cluster.context().archiveContext().clone());
+        }
+
+        final String channel = snapshotPublication.channel();
+        final int streamId = snapshotPublication.streamId();
+        final int sessionId = snapshotPublication.sessionId();
+        final long startMs = System.currentTimeMillis();
+        final long deadlineMs = startMs + 10_000;
+
+        // 1) Wait for the Archive to register the recording for this publication's session.
+        long recordingId;
+        while ((recordingId = snapshotArchive.findLastMatchingRecording(0L, channel, streamId, sessionId))
+                == Aeron.NULL_VALUE) {
+            if (System.currentTimeMillis() > deadlineMs) {
+                throw new IllegalStateException("Snapshot recording not registered within 10s "
+                        + "(channel=" + channel + " stream=" + streamId + " session=" + sessionId + ")");
+            }
+            cluster.idleStrategy().idle();
+        }
+
+        // 2) Wait for the Archive to ingest every byte we offered.
+        long observedPosition;
+        while ((observedPosition = snapshotArchive.getRecordingPosition(recordingId)) < writtenPosition) {
+            if (System.currentTimeMillis() > deadlineMs) {
+                throw new IllegalStateException("Archive ingestion stalled: recordingId=" + recordingId
+                        + " written=" + writtenPosition + " recorded=" + observedPosition);
+            }
+            cluster.idleStrategy().idle();
+        }
+
+        System.out.println("[SNAPSHOT] Archive ingested recordingId=" + recordingId
+                + " position=" + observedPosition + " in "
+                + (System.currentTimeMillis() - startMs) + "ms");
     }
 
     @Override
@@ -599,7 +674,11 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onTerminate(final Cluster cluster) {
+        if (snapshotArchive != null) {
+            CloseHelper.quietClose(snapshotArchive);
+            snapshotArchive = null;
+        }
         eventPublisher.shutdown();
         engine.close();
     }
-} 
+}

@@ -98,6 +98,10 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     private volatile long lastEgressMessageMs = System.currentTimeMillis();
     private static final long STALE_EGRESS_TIMEOUT_MS = 30_000; // 30s with no egress = stale
 
+    /** Counter incremented every time the Aeron error handler fires. */
+    private final java.util.concurrent.atomic.AtomicLong aeronErrorCount = new java.util.concurrent.atomic.AtomicLong();
+    public long getAeronErrorCount() { return aeronErrorCount.get(); }
+
     public AeronGateway() {
         // Use environment variable or default to 127.0.0.1 for development (avoids IPv6 issues)
         final String clusterAddresses = System.getenv().getOrDefault("CLUSTER_ADDRESSES", "127.0.0.1,127.0.0.1,127.0.0.1");
@@ -164,7 +168,13 @@ public class AeronGateway implements EgressListener, AutoCloseable {
             .threadingMode(ThreadingMode.SHARED)
             .aeronDirectoryName(dir)
             .dirDeleteOnStart(true)
-            .dirDeleteOnShutdown(true));
+            .dirDeleteOnShutdown(true)
+            // Surface driver errors instead of swallowing them in the cnc file.
+            .errorHandler(t -> {
+                aeronErrorCount.incrementAndGet();
+                System.err.println("Aeron driver error #" + aeronErrorCount.get() + ": " + t);
+                t.printStackTrace(System.err);
+            }));
 
         System.out.println("MediaDriver created: " + mediaDriver.aeronDirectoryName());
     }
@@ -235,10 +245,17 @@ public class AeronGateway implements EgressListener, AutoCloseable {
         final AeronCluster.Context clusterCtx = new AeronCluster.Context()
             .egressListener(this)
             .egressChannel(egressChannel)
+            // mtu=8k requires loopback or jumbo-frame path (MTU >= 8192). Drop to 1408
+            // (Aeron default) before deploying cluster nodes off 127.0.0.1 without jumbo frames.
             .ingressChannel("aeron:udp?term-length=16m|mtu=8k")
             .aeronDirectoryName(mediaDriver.aeronDirectoryName())
             .ingressEndpoints(ingressEndpoints)
-            .messageTimeoutNs(TimeUnit.SECONDS.toNanos(5));
+            .messageTimeoutNs(TimeUnit.SECONDS.toNanos(5))
+            .errorHandler(t -> {
+                aeronErrorCount.incrementAndGet();
+                System.err.println("AeronCluster error #" + aeronErrorCount.get() + ": " + t);
+                t.printStackTrace(System.err);
+            });
 
         this.cluster = AeronCluster.connect(clusterCtx);
         System.out.println("AeronCluster.connect() completed, sessionId=" + cluster.clusterSessionId() +
@@ -391,6 +408,16 @@ public class AeronGateway implements EgressListener, AutoCloseable {
                             .timestamp(System.currentTimeMillis());
                         int heartbeatLength = MessageHeaderEncoder.ENCODED_LENGTH + heartbeatEncoder.encodedLength();
                         long result = currentCluster.offer(heartbeatBuffer, 0, heartbeatLength);
+                        // Bounded retry on transient back-pressure — losing too many heartbeats
+                        // makes the cluster declare us dead and tear the session down.
+                        for (int attempt = 0; result < 0 && attempt < 10; attempt++) {
+                            if (result == Publication.NOT_CONNECTED || result == Publication.CLOSED
+                                    || result == Publication.MAX_POSITION_EXCEEDED) {
+                                break;
+                            }
+                            java.util.concurrent.locks.LockSupport.parkNanos(10_000); // 10us
+                            result = currentCluster.offer(heartbeatBuffer, 0, heartbeatLength);
+                        }
                         if (result < 0 && heartbeatCount % 100 == 0) {
                             System.err.println("Heartbeat offer failed: " + getOfferResultName(result));
                         }
