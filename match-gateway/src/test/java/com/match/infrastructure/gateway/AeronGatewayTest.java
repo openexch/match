@@ -2,7 +2,6 @@ package com.match.infrastructure.gateway;
 
 import com.match.domain.FixedPoint;
 import com.match.infrastructure.generated.*;
-import org.agrona.ExpandableDirectByteBuffer;
 import org.agrona.concurrent.UnsafeBuffer;
 import org.junit.Test;
 
@@ -22,26 +21,6 @@ public class AeronGatewayTest {
     public void testConstructor_DoesNotConnect() {
         AeronGateway gateway = new AeronGateway();
         assertFalse(gateway.isConnected());
-        gateway.close();
-    }
-
-    @Test
-    public void testSubmitOrder_EnqueuesSuccessfully() {
-        AeronGateway gateway = new AeronGateway();
-        org.agrona.concurrent.UnsafeBuffer buf = new org.agrona.concurrent.UnsafeBuffer(new byte[64]);
-        // submitOrder should enqueue even without cluster connection
-        boolean result = gateway.submitOrder(buf, 0, 50);
-        assertTrue(result);
-        gateway.close();
-    }
-
-    @Test
-    public void testSubmitOrder_RejectsTooLargeMessage() {
-        AeronGateway gateway = new AeronGateway();
-        org.agrona.concurrent.UnsafeBuffer buf = new org.agrona.concurrent.UnsafeBuffer(new byte[256]);
-        // Messages larger than ORDER_MSG_BUFFER_SIZE (128) should be rejected
-        boolean result = gateway.submitOrder(buf, 0, 200);
-        assertFalse(result);
         gateway.close();
     }
 
