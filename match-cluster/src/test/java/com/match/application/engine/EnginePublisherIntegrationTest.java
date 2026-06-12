@@ -282,6 +282,119 @@ public class EnginePublisherIntegrationTest {
             OrderStatusType.REJECTED, statuses.get(0).orderStatus);
     }
 
+    // ==================== Loud Limits: no phantom NEW statuses ====================
+
+    @Test
+    public void limitOrderOutOfRangePublishesRejected() throws Exception {
+        // BTC range is $50K-$150K; $200K is out of range.
+        // Must publish REJECTED — not a phantom NEW for an order that never rested.
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(100L, OrderSide.BID, 200_000.0, 1.0), System.nanoTime());
+        waitForEvents();
+
+        List<CapturedEvent> statuses = findByType(PublishEventType.ORDER_STATUS_UPDATE);
+        assertFalse("Should have order status", statuses.isEmpty());
+        assertEquals("Out-of-range limit must be REJECTED",
+            OrderStatusType.REJECTED, statuses.get(0).orderStatus);
+        assertTrue("Book must not contain the order",
+            engine.getEngine(MARKET_ID).isBidEmpty());
+    }
+
+    @Test
+    public void limitOrderOffTickPublishesRejected() throws Exception {
+        // BTC tick is $1; $60,000.50 is off-tick.
+        // Must be rejected — not silently rounded down to $60,000.
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(100L, OrderSide.BID, 60_000.50, 1.0), System.nanoTime());
+        waitForEvents();
+
+        List<CapturedEvent> statuses = findByType(PublishEventType.ORDER_STATUS_UPDATE);
+        assertFalse("Should have order status", statuses.isEmpty());
+        assertEquals("Off-tick limit must be REJECTED",
+            OrderStatusType.REJECTED, statuses.get(0).orderStatus);
+        assertTrue("Book must not contain the order",
+            engine.getEngine(MARKET_ID).isBidEmpty());
+    }
+
+    @Test
+    public void limitOrderLevelFullPublishesRejected() throws Exception {
+        // Fill the $60,000 bid level to capacity (64 orders)
+        for (int i = 0; i < 64; i++) {
+            engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(100L + i, OrderSide.BID, 60_000.0, 1.0), System.nanoTime());
+        }
+        waitForEvents();
+        handler.events.clear();
+
+        // 65th order at the same level must be REJECTED, not phantom NEW
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(200L, OrderSide.BID, 60_000.0, 1.0), System.nanoTime());
+        waitForEvents();
+
+        List<CapturedEvent> statuses = findByType(PublishEventType.ORDER_STATUS_UPDATE);
+        assertFalse("Should have order status", statuses.isEmpty());
+        assertEquals("Order beyond level capacity must be REJECTED",
+            OrderStatusType.REJECTED, statuses.get(0).orderStatus);
+    }
+
+    @Test
+    public void limitMakerOutOfRangePublishesRejected() throws Exception {
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitMakerCmd(100L, OrderSide.BID, 200_000.0, 1.0), System.nanoTime());
+        waitForEvents();
+
+        List<CapturedEvent> statuses = findByType(PublishEventType.ORDER_STATUS_UPDATE);
+        assertFalse("Should have order status", statuses.isEmpty());
+        assertEquals("Out-of-range LIMIT_MAKER must be REJECTED",
+            OrderStatusType.REJECTED, statuses.get(0).orderStatus);
+        assertTrue("Book must not contain the order",
+            engine.getEngine(MARKET_ID).isBidEmpty());
+    }
+
+    @Test
+    public void partialFillThenLevelFullPublishesCancelled() throws Exception {
+        // Construct the edge state directly: a resting ask at $61,000 AND a full
+        // bid level at $61,000 (reachable in production via snapshot restore).
+        var market = engine.getEngine(MARKET_ID);
+        market.addOrderNoMatch(900L, 900L, false, FixedPoint.fromDouble(61_000.0), FixedPoint.fromDouble(0.5));
+        for (int i = 0; i < 64; i++) {
+            market.addOrderNoMatch(1000L + i, 1000L + i, true,
+                FixedPoint.fromDouble(61_000.0), FixedPoint.fromDouble(1.0));
+        }
+        handler.events.clear();
+
+        // Taker buy 1.0 at $61,000: fills 0.5 against the ask, remainder cannot
+        // rest (level full). Must be terminal CANCELLED with the fill reported —
+        // not PARTIALLY_FILLED implying an open order that doesn't exist.
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(200L, OrderSide.BID, 61_000.0, 1.0), System.nanoTime());
+        waitForEvents();
+
+        List<CapturedEvent> statuses = findByType(PublishEventType.ORDER_STATUS_UPDATE);
+        assertFalse("Should have order status", statuses.isEmpty());
+        assertEquals("Partial fill with failed rest must be terminal CANCELLED",
+            OrderStatusType.CANCELLED, statuses.get(0).orderStatus);
+    }
+
+    @Test
+    public void updateToInvalidPriceRejectedAndKeepsOriginalOrder() throws Exception {
+        // Place a valid bid
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(100L, OrderSide.BID, 60_000.0, 1.0), System.nanoTime());
+        waitForEvents();
+        long orderId = engine.getOrderIdGenerator() - 1;
+        handler.events.clear();
+
+        // Update to an off-tick price — must reject the UPDATE and keep the original
+        com.match.domain.commands.UpdateOrderCommand cmd = new com.match.domain.commands.UpdateOrderCommand();
+        cmd.setUserId(100L);
+        cmd.setOrderId(orderId);
+        cmd.setOrderSide(OrderSide.BID);
+        cmd.setPrice(FixedPoint.fromDouble(60_000.50));
+        cmd.setQuantity(FixedPoint.fromDouble(2.0));
+        engine.acceptOrder(MARKET_ID, Engine.CMD_UPDATE, cmd, System.nanoTime());
+        waitForEvents();
+
+        List<CapturedEvent> statuses = findByType(PublishEventType.ORDER_STATUS_UPDATE);
+        assertFalse("Should have order status", statuses.isEmpty());
+        assertEquals("Invalid update must be REJECTED", OrderStatusType.REJECTED, statuses.get(0).orderStatus);
+        assertFalse("Original order must survive a rejected update",
+            engine.getEngine(MARKET_ID).isBidEmpty());
+    }
+
     @Test
     public void engineWithoutPublisherDoesNotCrash() {
         // Create a fresh engine without publisher
