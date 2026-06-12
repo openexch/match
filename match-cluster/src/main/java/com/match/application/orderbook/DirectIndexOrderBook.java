@@ -125,14 +125,32 @@ public class DirectIndexOrderBook {
     }
 
     /**
-     * Add order to book. O(1) amortized.
+     * Validate a price against this book's geometry without modifying state.
+     *
+     * @return OrderRejectReason.NONE if the price is on-tick and in range
      */
-    public void addOrder(long orderId, long userId, long price, long quantity) {
+    public int validatePrice(long price) {
+        long offset = price - basePrice;
+        if (offset < 0) return OrderRejectReason.PRICE_OUT_OF_RANGE;
+        if (offset % tickSize != 0) return OrderRejectReason.PRICE_OFF_TICK;
+        if (offset / tickSize >= maxPriceLevels) return OrderRejectReason.PRICE_OUT_OF_RANGE;
+        return OrderRejectReason.NONE;
+    }
+
+    /**
+     * Add order to book. O(1) amortized.
+     *
+     * @return OrderRejectReason.NONE on success, otherwise the reject reason.
+     *         Loud-limits principle: callers must check this and reject visibly.
+     */
+    public int addOrder(long orderId, long userId, long price, long quantity) {
+        int validity = validatePrice(price);
+        if (validity != OrderRejectReason.NONE) return validity;
+
         int priceIdx = priceToIndex(price);
-        if (priceIdx < 0 || priceIdx >= maxPriceLevels) return;
 
         // Get free slot at this price level
-        if (freeSlotCounts[priceIdx] == 0) return; // Level full
+        if (freeSlotCounts[priceIdx] == 0) return OrderRejectReason.LEVEL_FULL;
 
         int slotStackBase = priceIdx * MAX_ORDERS_PER_LEVEL;
         int slot = freeSlots[slotStackBase + --freeSlotCounts[priceIdx]];
@@ -176,13 +194,16 @@ public class DirectIndexOrderBook {
 
         // Memory barrier - increment version AFTER all writes complete
         version++;
+        return OrderRejectReason.NONE;
     }
 
     /**
      * Add order from Order object. O(1)
+     *
+     * @return OrderRejectReason.NONE on success, otherwise the reject reason
      */
-    public void addOrder(Order order) {
-        addOrder(order.getId(), order.getUserId(), order.getPrice(), order.getRemainingQuantity());
+    public int addOrder(Order order) {
+        return addOrder(order.getId(), order.getUserId(), order.getPrice(), order.getRemainingQuantity());
     }
 
     /**

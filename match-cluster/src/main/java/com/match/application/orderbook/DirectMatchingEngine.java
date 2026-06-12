@@ -22,6 +22,10 @@ public class DirectMatchingEngine {
     private long takerRemainingQty;
     private long takerRemainingBudget; // For market buy orders
 
+    // Loud-limits: reason the taker remainder failed to rest on the book
+    // (OrderRejectReason.NONE when rested successfully or fully filled)
+    private int lastRestRejectReason = OrderRejectReason.NONE;
+
     // Order books (bid and ask sides)
     private final DirectIndexOrderBook askBook;
     private final DirectIndexOrderBook bidBook;
@@ -50,9 +54,28 @@ public class DirectMatchingEngine {
      * @param quantity   Order quantity (fixed-point)
      * @return Number of matches (access via getMatch* methods)
      */
+    /**
+     * Validate a limit price against this engine's book geometry.
+     * Both books share geometry, so one check covers both sides.
+     *
+     * @return OrderRejectReason.NONE if valid, otherwise the reject reason
+     */
+    public int validateLimitPrice(long price) {
+        return askBook.validatePrice(price);
+    }
+
+    /**
+     * Reason the most recent processLimitOrder failed to rest its remainder
+     * on the book. OrderRejectReason.NONE means rested or fully filled.
+     */
+    public int getLastRestRejectReason() {
+        return lastRestRejectReason;
+    }
+
     public int processLimitOrder(long orderId, long userId, boolean isBuy, long price, long quantity) {
         matchCount = 0;
         takerRemainingQty = quantity;
+        lastRestRejectReason = OrderRejectReason.NONE;
 
         DirectIndexOrderBook makerBook = isBuy ? askBook : bidBook;
         DirectIndexOrderBook takerBook = isBuy ? bidBook : askBook;
@@ -78,7 +101,7 @@ public class DirectMatchingEngine {
         }
 
         if (takerRemainingQty > 0) {
-            takerBook.addOrder(orderId, userId, price, takerRemainingQty);
+            lastRestRejectReason = takerBook.addOrder(orderId, userId, price, takerRemainingQty);
         }
 
         return matchCount;
@@ -219,10 +242,12 @@ public class DirectMatchingEngine {
 
     /**
      * Add order directly (no matching). O(1)
+     *
+     * @return OrderRejectReason.NONE on success, otherwise the reject reason
      */
-    public void addOrderNoMatch(long orderId, long userId, boolean isBuy, long price, long quantity) {
+    public int addOrderNoMatch(long orderId, long userId, boolean isBuy, long price, long quantity) {
         DirectIndexOrderBook book = isBuy ? bidBook : askBook;
-        book.addOrder(orderId, userId, price, quantity);
+        return book.addOrder(orderId, userId, price, quantity);
     }
 
     // ==================== Match Result Access ====================
@@ -390,21 +415,39 @@ public class DirectMatchingEngine {
     }
 
     /**
-     * Clear and restore state from snapshot
+     * Clear and restore state from snapshot.
+     *
+     * @return number of orders that could not be restored (e.g. geometry
+     *         changed between snapshot and restore). Loud-limits principle:
+     *         callers must check and report this — dropped orders are state loss.
      */
-    public void restoreFromSnapshot(long[] bidOrders, long[] askOrders) {
+    public int restoreFromSnapshot(long[] bidOrders, long[] askOrders) {
         bidBook.clear();
         askBook.clear();
 
+        int rejected = 0;
+
         // Restore bid orders (4 fields each: orderId, userId, price, qty)
         for (int i = 0; i < bidOrders.length; i += 4) {
-            bidBook.addOrder(bidOrders[i], bidOrders[i + 1], bidOrders[i + 2], bidOrders[i + 3]);
+            int result = bidBook.addOrder(bidOrders[i], bidOrders[i + 1], bidOrders[i + 2], bidOrders[i + 3]);
+            if (result != OrderRejectReason.NONE) {
+                rejected++;
+                System.err.println("ERROR: Snapshot restore dropped bid order " + bidOrders[i]
+                    + " price=" + bidOrders[i + 2] + " reason=" + OrderRejectReason.describe(result));
+            }
         }
 
         // Restore ask orders
         for (int i = 0; i < askOrders.length; i += 4) {
-            askBook.addOrder(askOrders[i], askOrders[i + 1], askOrders[i + 2], askOrders[i + 3]);
+            int result = askBook.addOrder(askOrders[i], askOrders[i + 1], askOrders[i + 2], askOrders[i + 3]);
+            if (result != OrderRejectReason.NONE) {
+                rejected++;
+                System.err.println("ERROR: Snapshot restore dropped ask order " + askOrders[i]
+                    + " price=" + askOrders[i + 2] + " reason=" + OrderRejectReason.describe(result));
+            }
         }
+
+        return rejected;
     }
 
     /**

@@ -21,6 +21,90 @@ public class DirectMatchingEngineTest {
         engine = new DirectMatchingEngine(BASE_PRICE, MAX_PRICE, TICK_SIZE);
     }
 
+    // ==================== Loud Limits: validation & rest rejection ====================
+
+    @Test
+    public void testValidateLimitPrice_Valid() {
+        assertEquals(OrderRejectReason.NONE,
+            engine.validateLimitPrice(FixedPoint.fromDouble(100.0)));
+    }
+
+    @Test
+    public void testValidateLimitPrice_OffTick() {
+        long offTick = FixedPoint.fromDouble(100.0) + TICK_SIZE / 2;
+        assertEquals(OrderRejectReason.PRICE_OFF_TICK, engine.validateLimitPrice(offTick));
+    }
+
+    @Test
+    public void testValidateLimitPrice_OutOfRange() {
+        assertEquals(OrderRejectReason.PRICE_OUT_OF_RANGE,
+            engine.validateLimitPrice(FixedPoint.fromDouble(2000.0)));
+        assertEquals(OrderRejectReason.PRICE_OUT_OF_RANGE,
+            engine.validateLimitPrice(FixedPoint.fromDouble(1.0)));
+    }
+
+    @Test
+    public void testProcessLimitOrder_RestSucceeds_NoRejectReason() {
+        long price = FixedPoint.fromDouble(100.0);
+        engine.processLimitOrder(1L, 100L, true, price, FixedPoint.fromDouble(10.0));
+        assertEquals("Successful rest should report NONE",
+            OrderRejectReason.NONE, engine.getLastRestRejectReason());
+    }
+
+    @Test
+    public void testProcessLimitOrder_LevelFull_RejectReasonExposed() {
+        long price = FixedPoint.fromDouble(100.0);
+        long qty = FixedPoint.fromDouble(1.0);
+
+        // Fill the bid level to capacity (64 orders)
+        for (long i = 1; i <= 64; i++) {
+            engine.processLimitOrder(i, 100L, true, price, qty);
+        }
+        assertEquals(OrderRejectReason.NONE, engine.getLastRestRejectReason());
+
+        // 65th bid: no asks to match, level full — rest must fail LOUDLY
+        int matches = engine.processLimitOrder(65L, 100L, true, price, qty);
+
+        assertEquals(0, matches);
+        assertEquals("Failed rest must expose LEVEL_FULL",
+            OrderRejectReason.LEVEL_FULL, engine.getLastRestRejectReason());
+        assertEquals("Taker quantity must remain unfilled", qty, engine.getTakerRemainingQuantity());
+    }
+
+    @Test
+    public void testAddOrderNoMatch_LevelFull_Rejected() {
+        long price = FixedPoint.fromDouble(100.0);
+        long qty = FixedPoint.fromDouble(1.0);
+
+        for (long i = 1; i <= 64; i++) {
+            assertEquals(OrderRejectReason.NONE,
+                engine.addOrderNoMatch(i, 100L, true, price, qty));
+        }
+
+        assertEquals("Order beyond level capacity must be rejected loudly",
+            OrderRejectReason.LEVEL_FULL, engine.addOrderNoMatch(65L, 100L, true, price, qty));
+    }
+
+    @Test
+    public void testRestoreFromSnapshot_ReportsRejectedOrders() {
+        // Snapshot containing one valid order and one out-of-range order
+        // (simulates geometry change between snapshot and restore)
+        long validPrice = FixedPoint.fromDouble(100.0);
+        long invalidPrice = FixedPoint.fromDouble(5000.0); // above MAX_PRICE
+        long qty = FixedPoint.fromDouble(1.0);
+
+        long[] bidOrders = {
+            1L, 100L, validPrice, qty,
+            2L, 101L, invalidPrice, qty
+        };
+        long[] askOrders = new long[0];
+
+        int rejected = engine.restoreFromSnapshot(bidOrders, askOrders);
+
+        assertEquals("Restore must report dropped orders, not hide them", 1, rejected);
+        assertFalse("Valid order should be restored", engine.isBidEmpty());
+    }
+
     // ==================== Limit Order Matching ====================
 
     @Test

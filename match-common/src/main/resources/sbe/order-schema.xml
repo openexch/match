@@ -119,9 +119,13 @@
 
     <!-- ========== CONTROL MESSAGES ========== -->
 
-    <!-- Gateway Heartbeat - Sent by gateway every 250ms to maintain connection -->
-    <sbe:message name="GatewayHeartbeat" id="21" description="Gateway heartbeat for connection tracking">
-        <field name="gatewayId" id="1" type="int64"/>
+    <!-- Cluster Heartbeat - Egress keep-warm sent by the leader to all sessions
+         when no market data has flowed for ~1s. Keeps gateway stale-egress
+         detection healthy during idle periods. Session liveness itself is
+         handled by Aeron's protocol-level keep-alive (AeronCluster.sendKeepAlive),
+         which never enters the Raft log. -->
+    <sbe:message name="ClusterHeartbeat" id="21" description="Cluster egress keep-warm heartbeat">
+        <field name="nodeId" id="1" type="int64"/>
         <field name="timestamp" id="2" type="int64"/>
     </sbe:message>
 

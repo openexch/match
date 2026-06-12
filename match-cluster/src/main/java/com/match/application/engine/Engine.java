@@ -1,6 +1,7 @@
 package com.match.application.engine;
 
 import com.match.application.orderbook.DirectMatchingEngine;
+import com.match.application.orderbook.OrderRejectReason;
 import com.match.application.publisher.MatchEventPublisher;
 import com.match.application.publisher.OrderStatusType;
 import com.match.domain.FixedPoint;
@@ -141,16 +142,47 @@ public class Engine {
                 orderIdToOmsOrderId.remove(orderId);
             }
         } else if (type == OrderType.LIMIT) {
+            // Loud-limits: validate price before matching — reject the whole
+            // order upfront rather than partially matching an invalid price
+            int validity = engine.validateLimitPrice(price);
+            if (validity != OrderRejectReason.NONE) {
+                logger.warn("Order rejected: market={} userId={} price={} reason={}",
+                    marketId, userId, price, OrderRejectReason.describe(validity));
+                publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
+                    quantity, 0, price, isBuy, omsOrderId);
+                if (omsOrderId != 0) {
+                    orderIdToOmsOrderId.remove(orderId);
+                }
+                return;
+            }
+
             matchCount = engine.processLimitOrder(orderId, userId, isBuy, price, quantity);
             publishTradeExecutions(engine, marketId, timestamp, orderId, userId, isBuy, matchCount, omsOrderId);
             // Publish order status
             long remainingQty = engine.getTakerRemainingQuantity();
             long filledQty = quantity - remainingQty;
+            int restReason = engine.getLastRestRejectReason();
             if (remainingQty == 0 && matchCount > 0) {
                 // Fully filled
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.FILLED,
                     0, filledQty, price, isBuy, omsOrderId);
                 // Clean up mapping for fully filled orders
+                if (omsOrderId != 0) {
+                    orderIdToOmsOrderId.remove(orderId);
+                }
+            } else if (restReason != OrderRejectReason.NONE) {
+                // Remainder could not rest on the book — loud terminal status,
+                // never a phantom NEW/PARTIALLY_FILLED for an order that isn't resting
+                logger.warn("Order remainder could not rest: market={} orderId={} userId={} price={} reason={}",
+                    marketId, orderId, userId, price, OrderRejectReason.describe(restReason));
+                if (matchCount == 0) {
+                    publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
+                        remainingQty, 0, price, isBuy, omsOrderId);
+                } else {
+                    // Filled what it could; remainder cancelled (terminal)
+                    publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
+                        0, filledQty, price, isBuy, omsOrderId);
+                }
                 if (omsOrderId != 0) {
                     orderIdToOmsOrderId.remove(orderId);
                 }
@@ -164,6 +196,19 @@ public class Engine {
                     remainingQty, 0, price, isBuy, omsOrderId);
             }
         } else if (type == OrderType.LIMIT_MAKER) {
+            // Loud-limits: validate price before book checks
+            int validity = engine.validateLimitPrice(price);
+            if (validity != OrderRejectReason.NONE) {
+                logger.warn("LIMIT_MAKER rejected: market={} userId={} price={} reason={}",
+                    marketId, userId, price, OrderRejectReason.describe(validity));
+                publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
+                    quantity, 0, price, isBuy, omsOrderId);
+                if (omsOrderId != 0) {
+                    orderIdToOmsOrderId.remove(orderId);
+                }
+                return;
+            }
+
             // Limit maker - only add if won't match immediately
             long bestOpposite = isBuy ? engine.getBestAsk() : engine.getBestBid();
             boolean wouldMatch = isBuy
@@ -171,7 +216,18 @@ public class Engine {
                 : (!engine.isBidEmpty() && price <= bestOpposite);
 
             if (!wouldMatch) {
-                engine.addOrderNoMatch(orderId, userId, isBuy, price, quantity);
+                int addResult = engine.addOrderNoMatch(orderId, userId, isBuy, price, quantity);
+                if (addResult != OrderRejectReason.NONE) {
+                    // Could not rest (e.g. level full) — loud rejection, not phantom NEW
+                    logger.warn("LIMIT_MAKER could not rest: market={} orderId={} userId={} price={} reason={}",
+                        marketId, orderId, userId, price, OrderRejectReason.describe(addResult));
+                    publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
+                        quantity, 0, price, isBuy, omsOrderId);
+                    if (omsOrderId != 0) {
+                        orderIdToOmsOrderId.remove(orderId);
+                    }
+                    return;
+                }
                 // Order added to book — keep mapping for future maker matches
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.NEW,
                     quantity, 0, price, isBuy, omsOrderId);
@@ -273,6 +329,17 @@ public class Engine {
             omsOrderId = 0;
         }
 
+        // Loud-limits: validate the NEW price BEFORE cancelling the old order.
+        // An invalid update must reject the update and leave the resting order intact.
+        int validity = engine.validateLimitPrice(newPrice);
+        if (validity != OrderRejectReason.NONE) {
+            logger.warn("Update rejected: market={} orderId={} userId={} newPrice={} reason={}",
+                marketId, oldOrderId, userId, newPrice, OrderRejectReason.describe(validity));
+            publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.REJECTED,
+                0, 0, newPrice, isBuy, omsOrderId);
+            return;
+        }
+
         // 1. Cancel existing order
         boolean cancelled = engine.cancelOrder(oldOrderId, isBuy);
         if (!cancelled) {
@@ -300,10 +367,25 @@ public class Engine {
 
         long remainingQty = engine.getTakerRemainingQuantity();
         long filledQty = newQuantity - remainingQty;
+        int restReason = engine.getLastRestRejectReason();
 
         if (remainingQty == 0 && matchCount > 0) {
             publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.FILLED,
                 0, filledQty, newPrice, isBuy, omsOrderId);
+            if (omsOrderId != 0) {
+                orderIdToOmsOrderId.remove(newOrderId);
+            }
+        } else if (restReason != OrderRejectReason.NONE) {
+            // Remainder could not rest — loud terminal status (see processCreate)
+            logger.warn("Updated order could not rest: market={} orderId={} userId={} price={} reason={}",
+                marketId, newOrderId, userId, newPrice, OrderRejectReason.describe(restReason));
+            if (matchCount == 0) {
+                publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.REJECTED,
+                    remainingQty, 0, newPrice, isBuy, omsOrderId);
+            } else {
+                publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.CANCELLED,
+                    0, filledQty, newPrice, isBuy, omsOrderId);
+            }
             if (omsOrderId != 0) {
                 orderIdToOmsOrderId.remove(newOrderId);
             }

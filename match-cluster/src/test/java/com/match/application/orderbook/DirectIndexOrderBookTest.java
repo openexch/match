@@ -127,22 +127,63 @@ public class DirectIndexOrderBookTest {
         assertTrue(bidBook.isEmpty());
     }
 
-    // ==================== C2: Bounds Safety ====================
+    // ==================== Loud Limits: addOrder reject reasons ====================
 
     @Test
-    public void testOutOfRangePrice_Ignored() {
-        // Price below base — should be silently ignored (not crash)
-        long tooLow = FixedPoint.fromDouble(1.0);
-        bidBook.addOrder(1L, 100L, tooLow, FixedPoint.fromDouble(10.0));
-        assertTrue("Out-of-range price should be ignored", bidBook.isEmpty());
+    public void testAddOrderSuccess_ReturnsNone() {
+        int result = bidBook.addOrder(1L, 100L, FixedPoint.fromDouble(100.0), FixedPoint.fromDouble(10.0));
+        assertEquals("Successful add should return NONE", OrderRejectReason.NONE, result);
+        assertFalse(bidBook.isEmpty());
     }
 
     @Test
-    public void testOutOfRangePrice_TooHigh() {
-        // Price above max — should be silently ignored
+    public void testOutOfRangePrice_TooLow_Rejected() {
+        long tooLow = FixedPoint.fromDouble(1.0);
+        int result = bidBook.addOrder(1L, 100L, tooLow, FixedPoint.fromDouble(10.0));
+        assertEquals("Below-range price must be rejected loudly",
+            OrderRejectReason.PRICE_OUT_OF_RANGE, result);
+        assertTrue(bidBook.isEmpty());
+    }
+
+    @Test
+    public void testOutOfRangePrice_TooHigh_Rejected() {
         long tooHigh = FixedPoint.fromDouble(2000.0);
-        bidBook.addOrder(1L, 100L, tooHigh, FixedPoint.fromDouble(10.0));
-        assertTrue("Out-of-range price should be ignored", bidBook.isEmpty());
+        int result = bidBook.addOrder(1L, 100L, tooHigh, FixedPoint.fromDouble(10.0));
+        assertEquals("Above-range price must be rejected loudly",
+            OrderRejectReason.PRICE_OUT_OF_RANGE, result);
+        assertTrue(bidBook.isEmpty());
+    }
+
+    @Test
+    public void testOffTickPrice_Rejected() {
+        // Tick is $0.01; $100.005 falls between ticks and must be rejected,
+        // not silently rounded down to $100.00
+        long offTick = FixedPoint.fromDouble(100.0) + TICK_SIZE / 2;
+        int result = bidBook.addOrder(1L, 100L, offTick, FixedPoint.fromDouble(10.0));
+        assertEquals("Off-tick price must be rejected, not rounded",
+            OrderRejectReason.PRICE_OFF_TICK, result);
+        assertTrue(bidBook.isEmpty());
+    }
+
+    @Test
+    public void testLevelFull_Rejected() {
+        long price = FixedPoint.fromDouble(100.0);
+        long qty = FixedPoint.fromDouble(1.0);
+
+        // Fill the level to capacity (MAX_ORDERS_PER_LEVEL = 64)
+        for (long i = 1; i <= 64; i++) {
+            assertEquals("Order " + i + " should be accepted",
+                OrderRejectReason.NONE, bidBook.addOrder(i, 100L, price, qty));
+        }
+
+        // Order 65 must be rejected loudly, not silently dropped
+        int result = bidBook.addOrder(65L, 100L, price, qty);
+        assertEquals("Order beyond level capacity must be rejected loudly",
+            OrderRejectReason.LEVEL_FULL, result);
+
+        // Book state unchanged: still 64 orders at the level
+        int priceIdx = bidBook.getBestPriceIndex();
+        assertEquals(64, bidBook.getOrderCount(priceIdx));
     }
 
     @Test

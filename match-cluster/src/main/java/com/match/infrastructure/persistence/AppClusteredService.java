@@ -22,11 +22,12 @@ import io.aeron.Image;
 import org.agrona.CloseHelper;
 import org.agrona.DirectBuffer;
 import org.agrona.ExpandableArrayBuffer;
-// UnsafeBuffer removed — using ExpandableDirectByteBuffer for broadcast to handle large messages
+import org.agrona.concurrent.UnsafeBuffer;
 import org.agrona.collections.Int2ObjectHashMap;
 import com.match.infrastructure.Logger;
 import com.match.infrastructure.generated.MessageHeaderDecoder;
-import com.match.infrastructure.generated.GatewayHeartbeatDecoder;
+import com.match.infrastructure.generated.MessageHeaderEncoder;
+import com.match.infrastructure.generated.ClusterHeartbeatEncoder;
 
 import static com.match.infrastructure.InfrastructureConstants.*;
 
@@ -46,14 +47,18 @@ public class AppClusteredService implements ClusteredService {
     private final TimerManager timerManager = new TimerManager(context);
     private final SbeDemuxer sbeDemuxer = new SbeDemuxer(engine);
 
-    // Gateway heartbeat tracking - only broadcast to active gateways
-    // Both fields updated atomically via gatewayLock to prevent stale reads
-    private long gatewaySessionId = -1;  // most-recent heartbeat session (for flush target)
-    private long gatewayLastHeartbeatMs = 0;
-    private final java.util.Set<Long> knownGatewaySessions = new java.util.HashSet<>();
-    private final Object gatewayLock = new Object();
     private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
-    private final GatewayHeartbeatDecoder heartbeatDecoder = new GatewayHeartbeatDecoder();
+
+    // Egress keep-warm: when the leader has sent no egress for this long,
+    // broadcast a ClusterHeartbeat so gateway stale-egress detection stays
+    // healthy during idle markets. Session liveness is handled by Aeron's
+    // protocol-level keep-alive (never enters the Raft log) — NOT by this.
+    private static final long EGRESS_KEEP_WARM_INTERVAL_MS = 1_000;
+    private volatile long lastEgressSendMs = 0;
+    private final MessageHeaderEncoder keepWarmHeaderEncoder = new MessageHeaderEncoder();
+    private final ClusterHeartbeatEncoder keepWarmEncoder = new ClusterHeartbeatEncoder();
+    private final UnsafeBuffer keepWarmBuffer = new UnsafeBuffer(
+            new byte[MessageHeaderEncoder.ENCODED_LENGTH + ClusterHeartbeatEncoder.BLOCK_LENGTH]);
 
     // Event publishing infrastructure
     private final MatchEventPublisher eventPublisher = new MatchEventPublisher();
@@ -134,8 +139,10 @@ public class AppClusteredService implements ClusteredService {
             }
 
             QueuedMessage msg;
+            boolean sentAny = false;
             while ((msg = marketDataQueue.poll()) != null) {
                 broadcastBuffer.putBytes(0, msg.data, 0, msg.length);
+                sentAny = true;
 
                 // Send to all connected sessions
                 for (ClientSession session : sessions) {
@@ -155,6 +162,9 @@ public class AppClusteredService implements ClusteredService {
                         }
                     }
                 }
+            }
+            if (sentAny) {
+                lastEgressSendMs = System.currentTimeMillis();
             }
         }
 
@@ -203,6 +213,15 @@ public class AppClusteredService implements ClusteredService {
     private void onFlushTimer() {
         if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
             aeronBroadcaster.flush();
+
+            // Egress keep-warm: idle markets produce no market data, but the
+            // gateway's stale-egress detection needs periodic egress traffic
+            long now = System.currentTimeMillis();
+            if (now - lastEgressSendMs >= EGRESS_KEEP_WARM_INTERVAL_MS
+                    && !clientSessions.getAllSessions().isEmpty()) {
+                sendEgressKeepWarm();
+                lastEgressSendMs = now;
+            }
         }
         // Reschedule
         scheduleMarketDataFlush();
@@ -337,8 +356,12 @@ public class AppClusteredService implements ClusteredService {
                 pos += 8;
             }
 
-            matchingEngine.restoreFromSnapshot(bidOrders, askOrders);
+            int rejected = matchingEngine.restoreFromSnapshot(bidOrders, askOrders);
             System.out.println("[SNAPSHOT] Market " + marketId + ": restored " + numBidOrders + " bids, " + numAskOrders + " asks");
+            if (rejected > 0) {
+                System.err.println("[SNAPSHOT] ERROR: Market " + marketId + ": " + rejected
+                    + " orders DROPPED during restore (geometry mismatch?) — state loss!");
+            }
         }
 
         // Restore timer correlation ID if present (backward-compatible: old snapshots won't have this)
@@ -366,15 +389,28 @@ public class AppClusteredService implements ClusteredService {
     public void onSessionOpen(final ClientSession session, final long timestamp) {
         context.setClusterTime(timestamp);
         clientSessions.addSession(session);
+        System.out.println("New client session connected: " + session.id());
+
+        // A new session (gateway/OMS) needs full book state — trigger resnapshot.
+        // Session open is a logged cluster event, so this is deterministic across
+        // replicas (unlike the previous heartbeat-driven detection).
+        aeronBroadcaster.requestResnapshot();
+
+        // Arm the market data flush timer chain. Same lazy pattern as
+        // onSessionMessage: timers scheduled during replay are no-ops and the
+        // flag is reset in onRoleChange, so live events must (re-)arm it.
+        if (!flushTimerScheduled) {
+            scheduleMarketDataFlush();
+            flushTimerScheduled = true;
+            System.out.println("SERVICE: Market data flush timer scheduled (session open)");
+        }
     }
 
     @Override
     public void onSessionClose(final ClientSession session, final long timestamp, final CloseReason closeReason) {
         context.setClusterTime(timestamp);
         clientSessions.removeSession(session);
-        synchronized (gatewayLock) {
-            knownGatewaySessions.remove(session.id());
-        }
+        System.out.println("Client session closed: " + session.id() + " reason=" + closeReason);
     }
 
     @Override
@@ -387,16 +423,6 @@ public class AppClusteredService implements ClusteredService {
         final Header header) {
 
         context.setSessionContext(session, timestamp);
-
-        if (length >= MessageHeaderDecoder.ENCODED_LENGTH) {
-            headerDecoder.wrap(buffer, offset);
-            int templateId = headerDecoder.templateId();
-
-            if (templateId == GatewayHeartbeatDecoder.TEMPLATE_ID) {
-                handleGatewayHeartbeat(session, buffer, offset, timestamp);
-                return;
-            }
-        }
 
         try {
             sbeDemuxer.dispatch(buffer, offset, length, timestamp);
@@ -414,96 +440,22 @@ public class AppClusteredService implements ClusteredService {
         }
     }
 
-    // Heartbeat ACK message format (simple JSON)
-    private static final String HEARTBEAT_ACK_PREFIX = "{\"type\":\"HEARTBEAT_ACK\",\"ts\":";
-    private static final String HEARTBEAT_ACK_SUFFIX = "}";
-
-    // Heartbeat counter for debugging
-    private long heartbeatReceivedCount = 0;
-    private long lastHeartbeatLogMs = 0;
-
     /**
-     * Handle gateway heartbeat - update gateway session tracking, flush market data, and send ACK.
-     * The ACK keeps the gateway's egress liveness tracker happy even during idle periods.
+     * Send a ClusterHeartbeat keep-warm to all sessions. Called from the flush
+     * timer when no egress has been sent for EGRESS_KEEP_WARM_INTERVAL_MS.
+     * Egress-only side effect — does not touch replicated state.
      */
-    private void handleGatewayHeartbeat(ClientSession session, DirectBuffer buffer, int offset, long timestamp) {
-        heartbeatDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
-        boolean isNewSession;
-        synchronized (gatewayLock) {
-            isNewSession = knownGatewaySessions.add(session.id());
-            gatewaySessionId = session.id();
-            gatewayLastHeartbeatMs = System.currentTimeMillis();
-        }
-        heartbeatReceivedCount++;
+    private void sendEgressKeepWarm() {
+        keepWarmEncoder.wrapAndApplyHeader(keepWarmBuffer, 0, keepWarmHeaderEncoder);
+        keepWarmEncoder
+            .nodeId(cluster.memberId())
+            .timestamp(System.currentTimeMillis());
+        int length = MessageHeaderEncoder.ENCODED_LENGTH + keepWarmEncoder.encodedLength();
 
-        // Trigger resnapshot only for genuinely new gateway connections
-        if (isNewSession) {
-            System.out.println("New gateway session connected: " + session.id());
-            aeronBroadcaster.requestResnapshot();
-        }
-
-        // Periodic heartbeat stats (every 10 seconds)
-        long now = System.currentTimeMillis();
-        if (now - lastHeartbeatLogMs > 10_000) {
-            System.out.println("CLUSTER: heartbeatsReceived=" + heartbeatReceivedCount + ", session=" + gatewaySessionId);
-            System.out.flush();
-            lastHeartbeatLogMs = now;
-        }
-
-        if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
-            // Flush any pending market data
-            aeronBroadcaster.flush();
-
-            // Send heartbeat ACK to keep gateway egress alive during idle periods
-            sendHeartbeatAck(session);
-        }
-    }
-
-    /**
-     * Send heartbeat acknowledgment to gateway.
-     * This ensures egress traffic even when there's no market data to send.
-     */
-    private void sendHeartbeatAck(ClientSession session) {
-        String ack = HEARTBEAT_ACK_PREFIX + System.currentTimeMillis() + HEARTBEAT_ACK_SUFFIX;
-        byte[] bytes = ack.getBytes(StandardCharsets.UTF_8);
-        broadcastBuffer.putBytes(0, bytes);
-
-        // Best-effort send - don't block or retry, just attempt once
-        long result = session.offer(broadcastBuffer, 0, bytes.length);
-        if (result < 0) {
-            System.err.println("Heartbeat ACK failed: result=" + result + ", session=" + session.id());
-        }
-    }
-
-    /**
-     * Check if gateway is alive (received heartbeat within timeout).
-     */
-    private boolean isGatewayAlive() {
-        synchronized (gatewayLock) {
-            if (gatewaySessionId < 0) return false;
-            long age = System.currentTimeMillis() - gatewayLastHeartbeatMs;
-            return age < GATEWAY_TIMEOUT_MS;
-        }
-    }
-
-    /**
-     * Get the gateway session for broadcasting.
-     * Returns null if gateway is dead or not connected.
-     */
-    private ClientSession getGatewaySession() {
-        long sessionId;
-        synchronized (gatewayLock) {
-            if (gatewaySessionId < 0) return null;
-            long age = System.currentTimeMillis() - gatewayLastHeartbeatMs;
-            if (age >= GATEWAY_TIMEOUT_MS) return null;
-            sessionId = gatewaySessionId;
-        }
         for (ClientSession session : clientSessions.getAllSessions()) {
-            if (session.id() == sessionId) {
-                return session;
-            }
+            // Best-effort send - don't block or retry
+            session.offer(keepWarmBuffer, 0, length);
         }
-        return null;
     }
 
     @Override

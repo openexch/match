@@ -35,12 +35,12 @@ public final class InfrastructureConstants {
     public static final long SESSION_TIMEOUT_NS = 10_000_000_000L;
 
     // ==================== GATEWAY TIMING ====================
-    /** Heartbeat interval from gateway to cluster - matches leader interval (100ms) */
-    public static final long HEARTBEAT_INTERVAL_MS = 100;
+    /**
+     * Protocol-level session keep-alive interval (AeronCluster.sendKeepAlive).
+     * Handled by the consensus module — never enters the Raft log.
+     * Must be well under SESSION_TIMEOUT_NS (10s); 1s gives 10x margin.
+     */
+    public static final long SESSION_KEEPALIVE_INTERVAL_MS = 1_000;
     /** Minimum delay between reconnection attempts (ms) */
     public static final long RECONNECT_COOLDOWN_MS = 500;
-
-    // ==================== CLUSTER TIMING ====================
-    /** Time without gateway heartbeat before considering it dead (ms) */
-    public static final long GATEWAY_TIMEOUT_MS = 30_000;
 }
