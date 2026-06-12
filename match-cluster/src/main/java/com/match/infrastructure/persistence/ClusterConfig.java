@@ -193,7 +193,11 @@ public final class ClusterConfig
                 .threadingMode(ArchiveThreadingMode.DEDICATED)
                 // Catalog and segment sizes
                 .catalogCapacity(1024 * 1024)  // 1MB catalog for more recordings
-                .segmentFileLength(1024 * 1024 * 1024)  // 1GB segments for sustained high throughput
+                // Segment length sets archive RECLAMATION granularity, not throughput:
+                // purgeSegments can only delete whole inactive segment files. 1GB
+                // segments meant nothing was reclaimable until the log passed 1GB.
+                // 64MB = multiple of the 16MB term buffer, reclaimable in usable units.
+                .segmentFileLength(64 * 1024 * 1024)
                 // Max concurrent recordings/replays
                 .maxConcurrentRecordings(10)
                 .maxConcurrentReplays(10);
