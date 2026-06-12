@@ -52,11 +52,15 @@ public class EmbeddedClusterTest {
     // Egress message collector
     private static final List<byte[]> egressMessages = new CopyOnWriteArrayList<>();
 
+    // ClusterHeartbeat egress keep-warm counter (kept out of egressMessages so
+    // periodic heartbeats don't inflate pollEgress counts in other tests)
+    private static final java.util.concurrent.atomic.AtomicLong clusterHeartbeatCount =
+            new java.util.concurrent.atomic.AtomicLong(0);
+
     // SBE encoders (reused)
     private static final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
     private static final CreateOrderEncoder createOrderEncoder = new CreateOrderEncoder();
     private static final CancelOrderEncoder cancelOrderEncoder = new CancelOrderEncoder();
-    private static final GatewayHeartbeatEncoder gatewayHeartbeatEncoder = new GatewayHeartbeatEncoder();
 
     // SBE decoders for egress verification
     private static final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
@@ -132,11 +136,23 @@ public class EmbeddedClusterTest {
 
         // Egress listener that collects all messages
         EgressListener egressListener = new EgressListener() {
+            private final MessageHeaderDecoder listenerHeaderDecoder = new MessageHeaderDecoder();
+
             @Override
             public void onMessage(
                     long clusterSessionId, long timestamp,
                     DirectBuffer buffer, int offset, int length,
                     Header header) {
+                // Count keep-warm heartbeats separately so they don't inflate
+                // message counts that other tests wait on
+                if (length >= MessageHeaderDecoder.ENCODED_LENGTH) {
+                    listenerHeaderDecoder.wrap(buffer, offset);
+                    if (listenerHeaderDecoder.schemaId() == 1
+                            && listenerHeaderDecoder.templateId() == ClusterHeartbeatDecoder.TEMPLATE_ID) {
+                        clusterHeartbeatCount.incrementAndGet();
+                        return;
+                    }
+                }
                 byte[] data = new byte[length];
                 buffer.getBytes(offset, data, 0, length);
                 egressMessages.add(data);
@@ -175,28 +191,6 @@ public class EmbeddedClusterTest {
         System.out.println("Connected with session ID: " + client.clusterSessionId());
     }
 
-    @Test
-    public void test2_GatewayHeartbeatAck() throws Exception {
-        egressMessages.clear();
-
-        // Send a gateway heartbeat
-        sendGatewayHeartbeat();
-
-        // Poll for ACK
-        pollEgress(1, 3000);
-
-        // Should receive at least a heartbeat ACK (JSON)
-        boolean foundAck = false;
-        for (byte[] msg : egressMessages) {
-            String text = tryDecodeAsText(msg);
-            if (text != null && text.contains("HEARTBEAT_ACK")) {
-                foundAck = true;
-            }
-        }
-
-        assertTrue("Should receive HEARTBEAT_ACK after sending heartbeat", foundAck);
-        System.out.println("Gateway heartbeat ACK test passed.");
-    }
 
     @Test
     public void test3_LimitOrderPlacement() throws Exception {
@@ -210,26 +204,11 @@ public class EmbeddedClusterTest {
         UnsafeBuffer buffer = encodeCreateOrder(1001L, BTC_MARKET, true, "LIMIT", price, quantity, 0);
         offerToCluster(buffer, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
 
-        // Send gateway heartbeat to trigger flush of market data
-        // The order goes through: SbeDemuxer -> Engine -> EventPublisher -> Disruptor -> MarketPublisher
-        // MarketPublisher has a 20ms flush timer that broadcasts via aeronBroadcaster
-        // After onSessionMessage, AppClusteredService calls aeronBroadcaster.flush() directly
-        sendGatewayHeartbeat();
-
-        // Wait for Disruptor pipeline + flush cycle
-        Thread.sleep(300);
-
-        // Send another heartbeat to pick up anything buffered
-        sendGatewayHeartbeat();
-        Thread.sleep(100);
-        sendGatewayHeartbeat();
-
-        // Poll egress messages
-        pollEgress(2, 5000);
-
-        // Verify we received at least one egress message
-        assertFalse("Should receive egress messages after order placement",
-                egressMessages.isEmpty());
+        // The order flows: SbeDemuxer -> Engine -> EventPublisher -> Disruptor
+        // -> MarketPublisher (50ms buffer flush) -> broadcaster queue
+        // -> cluster flush timer (10ms) -> egress. No heartbeat needed.
+        assertTrue("Should receive NEW status for the placed order",
+                awaitEgress(() -> findOrderId(BTC_MARKET, 1001L, OrderStatus.NEW) > 0, 5000));
 
         // Look for an OrderStatusBatch for BTC_MARKET with NEW status
         boolean foundNewStatus = false;
@@ -280,11 +259,10 @@ public class EmbeddedClusterTest {
                 2001L, ETH_MARKET, false, "LIMIT", askPrice, quantity, 0);
         offerToCluster(askBuffer, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
 
-        // Flush — the ask order will be placed on the book (no match yet)
-        sendGatewayHeartbeat();
-        Thread.sleep(300);
-        sendGatewayHeartbeat();
-        pollEgress(1, 3000);
+        // The ask order will be placed on the book (no match yet);
+        // the cluster flush timer broadcasts the status update
+        assertTrue("Should receive NEW status for the resting ask",
+                awaitEgress(() -> findOrderId(ETH_MARKET, 2001L, OrderStatus.NEW) > 0, 5000));
 
         // Now place a matching BID at $3000 (same price = match)
         egressMessages.clear();
@@ -293,19 +271,11 @@ public class EmbeddedClusterTest {
                 2002L, ETH_MARKET, true, "LIMIT", askPrice, quantity, 0);
         offerToCluster(bidBuffer, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
 
-        // The match happens synchronously in Engine.processCreate -> engine.processLimitOrder
-        // Trade execution is published via Disruptor -> MarketPublisher
-        // onSessionMessage calls aeronBroadcaster.flush() afterwards
-        // BUT: the flush happens BEFORE Disruptor has processed the trade event
-        // So we need to: heartbeat -> wait for Disruptor -> heartbeat to pick up buffered trades
-        sendGatewayHeartbeat();
-        Thread.sleep(300);  // Wait for Disruptor to process and MarketPublisher to buffer
-        sendGatewayHeartbeat();  // Trigger another flush to pick up the buffered trades
-        Thread.sleep(100);
-        sendGatewayHeartbeat();
-
-        // Poll for trade + order status messages
-        pollEgress(2, 5000);
+        // The match happens synchronously in Engine.processCreate; trade events
+        // flow through the Disruptor to MarketPublisher and out via the cluster
+        // flush timer. Wait on CONTENT, not counts: book data flows continuously.
+        awaitEgress(() -> findOrderId(ETH_MARKET, 2002L, OrderStatus.FILLED) > 0
+                && hasTradesBatch(ETH_MARKET), 5000);
 
         // Verify we got order status messages for the matching orders
         boolean foundFilledStatus = false;
@@ -364,36 +334,10 @@ public class EmbeddedClusterTest {
                 3001L, BTC_MARKET, true, "LIMIT", price, quantity, 0);
         offerToCluster(createBuffer, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
 
-        // Flush to get order status
-        sendGatewayHeartbeat();
-        Thread.sleep(300);
-        sendGatewayHeartbeat();
-        Thread.sleep(100);
-        sendGatewayHeartbeat();
-        pollEgress(1, 5000);
-
-        // Find the order ID from the NEW status response
-        long orderId = -1;
-        for (byte[] msg : egressMessages) {
-            int templateId = getTemplateId(msg);
-            if (templateId == OrderStatusBatchDecoder.TEMPLATE_ID) {
-                UnsafeBuffer buf = new UnsafeBuffer(msg);
-                MessageHeaderDecoder hdr = new MessageHeaderDecoder();
-                hdr.wrap(buf, 0);
-                OrderStatusBatchDecoder decoder = new OrderStatusBatchDecoder();
-                decoder.wrapAndApplyHeader(buf, 0, hdr);
-                if (decoder.marketId() == BTC_MARKET) {
-                    for (OrderStatusBatchDecoder.OrdersDecoder order : decoder.orders()) {
-                        if (order.status() == OrderStatus.NEW && order.userId() == 3001L) {
-                            orderId = order.orderId();
-                        }
-                    }
-                }
-            }
-        }
-
-        assertTrue("Should have received order ID from NEW status (got " +
-                egressMessages.size() + " messages)", orderId > 0);
+        // Wait for the NEW status, then capture the engine-assigned order ID
+        assertTrue("Should receive NEW status for the placed order",
+                awaitEgress(() -> findOrderId(BTC_MARKET, 3001L, OrderStatus.NEW) > 0, 5000));
+        long orderId = findOrderId(BTC_MARKET, 3001L, OrderStatus.NEW);
 
         // Now cancel the order
         egressMessages.clear();
@@ -401,37 +345,11 @@ public class EmbeddedClusterTest {
         UnsafeBuffer cancelBuffer = encodeCancelOrder(3001L, orderId, BTC_MARKET);
         offerToCluster(cancelBuffer, MessageHeaderEncoder.ENCODED_LENGTH + CancelOrderEncoder.BLOCK_LENGTH);
 
-        // Flush
-        sendGatewayHeartbeat();
-        Thread.sleep(300);
-        sendGatewayHeartbeat();
-        Thread.sleep(100);
-        sendGatewayHeartbeat();
-        pollEgress(1, 5000);
+        assertTrue("Should receive CANCELLED OrderStatus after cancel",
+                awaitEgress(() -> findOrderId(BTC_MARKET, 3001L, OrderStatus.CANCELLED) > 0, 5000));
+        assertEquals("Cancelled order should match our order ID",
+                orderId, findOrderId(BTC_MARKET, 3001L, OrderStatus.CANCELLED));
 
-        // Verify cancel confirmation
-        boolean foundCancelled = false;
-        for (byte[] msg : egressMessages) {
-            int templateId = getTemplateId(msg);
-            if (templateId == OrderStatusBatchDecoder.TEMPLATE_ID) {
-                UnsafeBuffer buf = new UnsafeBuffer(msg);
-                MessageHeaderDecoder hdr = new MessageHeaderDecoder();
-                hdr.wrap(buf, 0);
-                OrderStatusBatchDecoder decoder = new OrderStatusBatchDecoder();
-                decoder.wrapAndApplyHeader(buf, 0, hdr);
-                if (decoder.marketId() == BTC_MARKET) {
-                    for (OrderStatusBatchDecoder.OrdersDecoder order : decoder.orders()) {
-                        if (order.status() == OrderStatus.CANCELLED) {
-                            foundCancelled = true;
-                            assertEquals("Cancelled order should match our order ID",
-                                    orderId, order.orderId());
-                        }
-                    }
-                }
-            }
-        }
-
-        assertTrue("Should receive CANCELLED OrderStatus after cancel", foundCancelled);
         System.out.println("Cancel order test passed. OrderId=" + orderId);
     }
 
@@ -455,42 +373,91 @@ public class EmbeddedClusterTest {
                 4002L, SOL_MARKET, false, "LIMIT", solPrice, solQty, 0);
         offerToCluster(solOrder, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
 
-        // Flush
-        sendGatewayHeartbeat();
-        Thread.sleep(300);
-        sendGatewayHeartbeat();
-        Thread.sleep(100);
-        sendGatewayHeartbeat();
-        pollEgress(2, 5000);
+        // Wait for status updates from BOTH markets (content, not counts)
+        awaitEgress(() -> findOrderId(BTC_MARKET, 4001L, OrderStatus.NEW) > 0
+                && findOrderId(SOL_MARKET, 4002L, OrderStatus.NEW) > 0, 5000);
 
-        // Verify we got status updates for BOTH markets
-        boolean foundBtcStatus = false;
-        boolean foundSolStatus = false;
-
-        for (byte[] msg : egressMessages) {
-            int templateId = getTemplateId(msg);
-            if (templateId == OrderStatusBatchDecoder.TEMPLATE_ID) {
-                UnsafeBuffer buf = new UnsafeBuffer(msg);
-                MessageHeaderDecoder hdr = new MessageHeaderDecoder();
-                hdr.wrap(buf, 0);
-                OrderStatusBatchDecoder decoder = new OrderStatusBatchDecoder();
-                decoder.wrapAndApplyHeader(buf, 0, hdr);
-                int marketId = decoder.marketId();
-                for (OrderStatusBatchDecoder.OrdersDecoder order : decoder.orders()) {
-                    if (marketId == BTC_MARKET && order.userId() == 4001L) {
-                        foundBtcStatus = true;
-                    } else if (marketId == SOL_MARKET && order.userId() == 4002L) {
-                        foundSolStatus = true;
-                    }
-                }
-            }
-        }
-
-        assertTrue("Should receive status for BTC market", foundBtcStatus);
-        assertTrue("Should receive status for SOL market", foundSolStatus);
+        assertTrue("Should receive status for BTC market",
+                findOrderId(BTC_MARKET, 4001L, OrderStatus.NEW) > 0);
+        assertTrue("Should receive status for SOL market",
+                findOrderId(SOL_MARKET, 4002L, OrderStatus.NEW) > 0);
 
         System.out.println("Multiple markets test passed. " +
                 "Received " + egressMessages.size() + " egress messages.");
+    }
+
+    @Test
+    public void test8_SilentSecondClientReceivesFullSnapshotOnConnect() throws Exception {
+        // Ensure the BTC book has a resting order (far from market, won't cross)
+        long price = FixedPoint.fromDouble(120_000.0);
+        long qty = FixedPoint.fromDouble(0.5);
+        UnsafeBuffer order = encodeCreateOrder(8001L, BTC_MARKET, false, "LIMIT", price, qty, 0);
+        offerToCluster(order, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
+
+        // Let the resulting delta flush to the existing session first
+        pollEgress(1, 3000);
+
+        // Connect a SECOND client that sends NOTHING — no heartbeat, no orders.
+        // Cluster heartbeat principle: session open alone must trigger a full
+        // book resnapshot so a new gateway can build state without ingress traffic.
+        List<byte[]> client2Messages = new CopyOnWriteArrayList<>();
+        EgressListener listener2 = (clusterSessionId, timestamp, buffer, offset, length, header) -> {
+            byte[] data = new byte[length];
+            buffer.getBytes(offset, data, 0, length);
+            client2Messages.add(data);
+        };
+
+        try (AeronCluster client2 = AeronCluster.connect(
+                new AeronCluster.Context()
+                        .egressListener(listener2)
+                        .egressChannel("aeron:udp?endpoint=localhost:0")
+                        .ingressChannel("aeron:udp")
+                        .ingressEndpoints(ClusterConfig.ingressEndpoints(
+                                List.of("localhost"), PORT_BASE, ClusterConfig.CLIENT_FACING_PORT_OFFSET))
+                        .aeronDirectoryName(clientMediaDriver.aeronDirectoryName()))) {
+
+            // Poll client2 egress WITHOUT sending anything from it
+            boolean foundFullSnapshot = false;
+            long deadline = System.currentTimeMillis() + 5000;
+            while (!foundFullSnapshot && System.currentTimeMillis() < deadline) {
+                client2.pollEgress();
+                client.pollEgress(); // keep main session draining too
+                for (byte[] msg : client2Messages) {
+                    if (getTemplateId(msg) == BookSnapshotDecoder.TEMPLATE_ID) {
+                        foundFullSnapshot = true;
+                        break;
+                    }
+                }
+                Thread.sleep(10);
+            }
+
+            assertTrue("Silent client must receive a FULL book snapshot triggered by session open alone "
+                    + "(got " + client2Messages.size() + " messages)", foundFullSnapshot);
+        }
+
+        System.out.println("Silent second client snapshot test passed.");
+    }
+
+    @Test
+    public void test9_IdleClientReceivesClusterHeartbeatKeepWarm() throws Exception {
+        // With no trading activity the book is unchanged, so no market data
+        // flows. The cluster must keep egress warm with periodic
+        // ClusterHeartbeat messages (~1s) so the gateway's stale-egress
+        // detector doesn't force reconnect loops during idle periods.
+        long before = clusterHeartbeatCount.get();
+
+        long deadline = System.currentTimeMillis() + 5000;
+        while (clusterHeartbeatCount.get() < before + 2 && System.currentTimeMillis() < deadline) {
+            client.pollEgress();
+            Thread.sleep(10);
+        }
+
+        assertTrue("Idle client must receive periodic ClusterHeartbeat egress keep-warm "
+                        + "(got " + (clusterHeartbeatCount.get() - before) + " in 5s, expected >= 2)",
+                clusterHeartbeatCount.get() >= before + 2);
+
+        System.out.println("Egress keep-warm test passed: "
+                + (clusterHeartbeatCount.get() - before) + " heartbeats in idle period.");
     }
 
     // ==================== Helper Methods ====================
@@ -528,18 +495,6 @@ public class EmbeddedClusterTest {
     }
 
     /**
-     * Send a gateway heartbeat to trigger market data flush.
-     */
-    private static void sendGatewayHeartbeat() {
-        UnsafeBuffer buffer = new UnsafeBuffer(new byte[64]);
-        gatewayHeartbeatEncoder.wrapAndApplyHeader(buffer, 0, headerEncoder);
-        gatewayHeartbeatEncoder.gatewayId(1L);
-        gatewayHeartbeatEncoder.timestamp(System.currentTimeMillis());
-        int len = MessageHeaderEncoder.ENCODED_LENGTH + GatewayHeartbeatEncoder.BLOCK_LENGTH;
-        offerToCluster(buffer, len);
-    }
-
-    /**
      * Offer a message to the cluster, retrying on backpressure.
      */
     private static void offerToCluster(UnsafeBuffer buffer, int length) {
@@ -565,6 +520,61 @@ public class EmbeddedClusterTest {
     }
 
     /**
+     * Poll egress until the condition over collected messages holds, or timeout.
+     * Market data now flows continuously on the cluster flush timer, so message
+     * COUNTS are meaningless for synchronization — always wait on content.
+     */
+    private static boolean awaitEgress(java.util.function.BooleanSupplier condition, long timeoutMs)
+            throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (!condition.getAsBoolean() && System.currentTimeMillis() < deadline) {
+            client.pollEgress();
+            Thread.sleep(10);
+        }
+        return condition.getAsBoolean();
+    }
+
+    /**
+     * Scan collected egress for an OrderStatusBatch entry matching
+     * market/user/status; return its orderId, or -1 if not seen yet.
+     */
+    private static long findOrderId(int marketId, long userId, OrderStatus status) {
+        for (byte[] msg : egressMessages) {
+            if (getTemplateId(msg) != OrderStatusBatchDecoder.TEMPLATE_ID) continue;
+            UnsafeBuffer buf = new UnsafeBuffer(msg);
+            MessageHeaderDecoder hdr = new MessageHeaderDecoder();
+            hdr.wrap(buf, 0);
+            OrderStatusBatchDecoder decoder = new OrderStatusBatchDecoder();
+            decoder.wrapAndApplyHeader(buf, 0, hdr);
+            if (decoder.marketId() != marketId) continue;
+            for (OrderStatusBatchDecoder.OrdersDecoder order : decoder.orders()) {
+                if (order.userId() == userId && order.status() == status) {
+                    return order.orderId();
+                }
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Check whether a TradesBatch for the market has been collected.
+     */
+    private static boolean hasTradesBatch(int marketId) {
+        for (byte[] msg : egressMessages) {
+            if (getTemplateId(msg) != TradesBatchDecoder.TEMPLATE_ID) continue;
+            UnsafeBuffer buf = new UnsafeBuffer(msg);
+            MessageHeaderDecoder hdr = new MessageHeaderDecoder();
+            hdr.wrap(buf, 0);
+            TradesBatchDecoder decoder = new TradesBatchDecoder();
+            decoder.wrapAndApplyHeader(buf, 0, hdr);
+            if (decoder.marketId() == marketId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Get the SBE template ID from a raw egress message.
      * Returns -1 if the message is too short or not SBE.
      */
@@ -581,18 +591,4 @@ public class EmbeddedClusterTest {
         return headerDecoder.templateId();
     }
 
-    /**
-     * Try to decode egress bytes as UTF-8 text (for JSON messages like heartbeat ACK).
-     */
-    private static String tryDecodeAsText(byte[] msg) {
-        try {
-            String text = new String(msg, StandardCharsets.UTF_8);
-            if (text.startsWith("{")) {
-                return text;
-            }
-        } catch (Exception e) {
-            // Not text
-        }
-        return null;
-    }
 }

@@ -5,10 +5,10 @@ import org.agrona.DirectBuffer;
 
 
 /**
- * Gateway heartbeat for connection tracking
+ * Cluster egress keep-warm heartbeat
  */
 @SuppressWarnings("all")
-public final class GatewayHeartbeatDecoder
+public final class ClusterHeartbeatDecoder
 {
     public static final int BLOCK_LENGTH = 16;
     public static final int TEMPLATE_ID = 21;
@@ -17,7 +17,7 @@ public final class GatewayHeartbeatDecoder
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
-    private final GatewayHeartbeatDecoder parentMessage = this;
+    private final ClusterHeartbeatDecoder parentMessage = this;
     private DirectBuffer buffer;
     private int offset;
     private int limit;
@@ -59,7 +59,7 @@ public final class GatewayHeartbeatDecoder
         return offset;
     }
 
-    public GatewayHeartbeatDecoder wrap(
+    public ClusterHeartbeatDecoder wrap(
         final DirectBuffer buffer,
         final int offset,
         final int actingBlockLength,
@@ -77,7 +77,7 @@ public final class GatewayHeartbeatDecoder
         return this;
     }
 
-    public GatewayHeartbeatDecoder wrapAndApplyHeader(
+    public ClusterHeartbeatDecoder wrapAndApplyHeader(
         final DirectBuffer buffer,
         final int offset,
         final MessageHeaderDecoder headerDecoder)
@@ -97,7 +97,7 @@ public final class GatewayHeartbeatDecoder
             headerDecoder.version());
     }
 
-    public GatewayHeartbeatDecoder sbeRewind()
+    public ClusterHeartbeatDecoder sbeRewind()
     {
         return wrap(buffer, offset, actingBlockLength, actingVersion);
     }
@@ -132,27 +132,27 @@ public final class GatewayHeartbeatDecoder
         this.limit = limit;
     }
 
-    public static int gatewayIdId()
+    public static int nodeIdId()
     {
         return 1;
     }
 
-    public static int gatewayIdSinceVersion()
+    public static int nodeIdSinceVersion()
     {
         return 0;
     }
 
-    public static int gatewayIdEncodingOffset()
+    public static int nodeIdEncodingOffset()
     {
         return 0;
     }
 
-    public static int gatewayIdEncodingLength()
+    public static int nodeIdEncodingLength()
     {
         return 8;
     }
 
-    public static String gatewayIdMetaAttribute(final MetaAttribute metaAttribute)
+    public static String nodeIdMetaAttribute(final MetaAttribute metaAttribute)
     {
         if (MetaAttribute.PRESENCE == metaAttribute)
         {
@@ -162,22 +162,22 @@ public final class GatewayHeartbeatDecoder
         return "";
     }
 
-    public static long gatewayIdNullValue()
+    public static long nodeIdNullValue()
     {
         return -9223372036854775808L;
     }
 
-    public static long gatewayIdMinValue()
+    public static long nodeIdMinValue()
     {
         return -9223372036854775807L;
     }
 
-    public static long gatewayIdMaxValue()
+    public static long nodeIdMaxValue()
     {
         return 9223372036854775807L;
     }
 
-    public long gatewayId()
+    public long nodeId()
     {
         return buffer.getLong(offset + 0, BYTE_ORDER);
     }
@@ -241,7 +241,7 @@ public final class GatewayHeartbeatDecoder
             return "";
         }
 
-        final GatewayHeartbeatDecoder decoder = new GatewayHeartbeatDecoder();
+        final ClusterHeartbeatDecoder decoder = new ClusterHeartbeatDecoder();
         decoder.wrap(buffer, offset, actingBlockLength, actingVersion);
 
         return decoder.appendTo(new StringBuilder()).toString();
@@ -256,7 +256,7 @@ public final class GatewayHeartbeatDecoder
 
         final int originalLimit = limit();
         limit(offset + actingBlockLength);
-        builder.append("[GatewayHeartbeat](sbeTemplateId=");
+        builder.append("[ClusterHeartbeat](sbeTemplateId=");
         builder.append(TEMPLATE_ID);
         builder.append("|sbeSchemaId=");
         builder.append(SCHEMA_ID);
@@ -275,8 +275,8 @@ public final class GatewayHeartbeatDecoder
         }
         builder.append(BLOCK_LENGTH);
         builder.append("):");
-        builder.append("gatewayId=");
-        builder.append(this.gatewayId());
+        builder.append("nodeId=");
+        builder.append(this.nodeId());
         builder.append('|');
         builder.append("timestamp=");
         builder.append(this.timestamp());
@@ -286,7 +286,7 @@ public final class GatewayHeartbeatDecoder
         return builder;
     }
     
-    public GatewayHeartbeatDecoder sbeSkip()
+    public ClusterHeartbeatDecoder sbeSkip()
     {
         sbeRewind();
 

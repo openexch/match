@@ -171,7 +171,8 @@ Logs at: `~/.local/log/cluster/`
 | Term Buffer | 16MB | InfrastructureConstants |
 | Socket Buffer | 4MB | InfrastructureConstants |
 | Session Timeout | 10s | InfrastructureConstants |
-| Gateway Heartbeat | 100ms | InfrastructureConstants |
+| Session Keep-Alive | 1s (protocol-level, not logged) | InfrastructureConstants |
+| Egress Keep-Warm | 1s (ClusterHeartbeat, leader only) | AppClusteredService |
 
 ## Order Flow
 

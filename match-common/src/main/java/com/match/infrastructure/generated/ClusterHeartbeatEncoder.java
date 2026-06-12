@@ -5,10 +5,10 @@ import org.agrona.MutableDirectBuffer;
 
 
 /**
- * Gateway heartbeat for connection tracking
+ * Cluster egress keep-warm heartbeat
  */
 @SuppressWarnings("all")
-public final class GatewayHeartbeatEncoder
+public final class ClusterHeartbeatEncoder
 {
     public static final int BLOCK_LENGTH = 16;
     public static final int TEMPLATE_ID = 21;
@@ -17,7 +17,7 @@ public final class GatewayHeartbeatEncoder
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
-    private final GatewayHeartbeatEncoder parentMessage = this;
+    private final ClusterHeartbeatEncoder parentMessage = this;
     private MutableDirectBuffer buffer;
     private int offset;
     private int limit;
@@ -57,7 +57,7 @@ public final class GatewayHeartbeatEncoder
         return offset;
     }
 
-    public GatewayHeartbeatEncoder wrap(final MutableDirectBuffer buffer, final int offset)
+    public ClusterHeartbeatEncoder wrap(final MutableDirectBuffer buffer, final int offset)
     {
         if (buffer != this.buffer)
         {
@@ -69,7 +69,7 @@ public final class GatewayHeartbeatEncoder
         return this;
     }
 
-    public GatewayHeartbeatEncoder wrapAndApplyHeader(
+    public ClusterHeartbeatEncoder wrapAndApplyHeader(
         final MutableDirectBuffer buffer, final int offset, final MessageHeaderEncoder headerEncoder)
     {
         headerEncoder
@@ -97,27 +97,27 @@ public final class GatewayHeartbeatEncoder
         this.limit = limit;
     }
 
-    public static int gatewayIdId()
+    public static int nodeIdId()
     {
         return 1;
     }
 
-    public static int gatewayIdSinceVersion()
+    public static int nodeIdSinceVersion()
     {
         return 0;
     }
 
-    public static int gatewayIdEncodingOffset()
+    public static int nodeIdEncodingOffset()
     {
         return 0;
     }
 
-    public static int gatewayIdEncodingLength()
+    public static int nodeIdEncodingLength()
     {
         return 8;
     }
 
-    public static String gatewayIdMetaAttribute(final MetaAttribute metaAttribute)
+    public static String nodeIdMetaAttribute(final MetaAttribute metaAttribute)
     {
         if (MetaAttribute.PRESENCE == metaAttribute)
         {
@@ -127,22 +127,22 @@ public final class GatewayHeartbeatEncoder
         return "";
     }
 
-    public static long gatewayIdNullValue()
+    public static long nodeIdNullValue()
     {
         return -9223372036854775808L;
     }
 
-    public static long gatewayIdMinValue()
+    public static long nodeIdMinValue()
     {
         return -9223372036854775807L;
     }
 
-    public static long gatewayIdMaxValue()
+    public static long nodeIdMaxValue()
     {
         return 9223372036854775807L;
     }
 
-    public GatewayHeartbeatEncoder gatewayId(final long value)
+    public ClusterHeartbeatEncoder nodeId(final long value)
     {
         buffer.putLong(offset + 0, value, BYTE_ORDER);
         return this;
@@ -194,7 +194,7 @@ public final class GatewayHeartbeatEncoder
         return 9223372036854775807L;
     }
 
-    public GatewayHeartbeatEncoder timestamp(final long value)
+    public ClusterHeartbeatEncoder timestamp(final long value)
     {
         buffer.putLong(offset + 8, value, BYTE_ORDER);
         return this;
@@ -218,7 +218,7 @@ public final class GatewayHeartbeatEncoder
             return builder;
         }
 
-        final GatewayHeartbeatDecoder decoder = new GatewayHeartbeatDecoder();
+        final ClusterHeartbeatDecoder decoder = new ClusterHeartbeatDecoder();
         decoder.wrap(buffer, offset, BLOCK_LENGTH, SCHEMA_VERSION);
 
         return decoder.appendTo(builder);
