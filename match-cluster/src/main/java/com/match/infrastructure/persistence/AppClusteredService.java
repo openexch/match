@@ -203,7 +203,23 @@ public class AppClusteredService implements ClusteredService {
     private boolean flushTimerScheduled = false;
     private boolean timerRestoredFromSnapshot = false;
 
-    private static final long MARKET_DATA_FLUSH_INTERVAL_MS = 10;
+    // Idle/trailing market-data flush + egress keep-warm cadence. Relaxed from 10ms
+    // (100 Hz) to 250ms (4 Hz): every flush-timer reschedule is a replicated cluster
+    // timer that enters the Raft log even when idle. This removes the timer's share of
+    // idle churn (~2.8 KB/s of the old ~3.9 KB/s; measured idle growth 3.9 -> ~1.2 KB/s).
+    // The remaining ~1.1 KB/s is a separate source (OMS still offers a logged
+    // GatewayHeartbeat ~10/s — fixed separately in the OMS repo, mirroring loud-limits).
+    // Active-trading latency is kept low by an opportunistic flush in onSessionMessage
+    // (see ACTIVE_FLUSH_INTERVAL_MS) — egress is only legal from log-driven callbacks,
+    // so a periodic timer is still required to cover idle markets, the trailing batch
+    // after trading stops, and resnapshot delivery to a client on a quiet market.
+    private static final long MARKET_DATA_FLUSH_INTERVAL_MS = 250;
+
+    // Opportunistic active-trading flush cadence. Wall-clock gated and leader-only;
+    // pure egress output (ClientSession.offer), so it mutates no replicated state and
+    // adds no log entries — unlike the replicated flush timer above.
+    private static final long ACTIVE_FLUSH_INTERVAL_MS = 10;
+    private long lastActiveFlushMs = 0;
 
     private void scheduleMarketDataFlush() {
         long deadline = System.currentTimeMillis() + MARKET_DATA_FLUSH_INTERVAL_MS;
@@ -431,12 +447,24 @@ public class AppClusteredService implements ClusteredService {
             throw new RuntimeException(e);
         }
 
-        // Schedule flush timer lazily (can't schedule from onStart — cluster not ready)
+        // Schedule the idle/keep-warm flush timer lazily (can't schedule from onStart —
+        // cluster not ready).
         if (!flushTimerScheduled) {
             scheduleMarketDataFlush();
             flushTimerScheduled = true;
-            System.out.println("SERVICE: Market data flush timer scheduled (10ms)");
+            System.out.println("SERVICE: Market data flush timer scheduled (" + MARKET_DATA_FLUSH_INTERVAL_MS + "ms)");
             System.out.flush();
+        }
+
+        // Drain queued market data promptly while orders are flowing so the relaxed
+        // flush-timer cadence doesn't add latency during active trading. Wall-clock
+        // gated and leader-only — pure egress output, mutates no replicated state.
+        if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
+            final long nowMs = System.currentTimeMillis();
+            if (nowMs - lastActiveFlushMs >= ACTIVE_FLUSH_INTERVAL_MS) {
+                lastActiveFlushMs = nowMs;
+                aeronBroadcaster.flush();
+            }
         }
     }
 
