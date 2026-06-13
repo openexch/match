@@ -201,9 +201,24 @@ public class AppClusteredService implements ClusteredService {
     }
 
     private boolean flushTimerScheduled = false;
-    private boolean timerRestoredFromSnapshot = false;
 
-    private static final long MARKET_DATA_FLUSH_INTERVAL_MS = 10;
+    // Idle/trailing market-data flush + egress keep-warm cadence. Relaxed from 10ms
+    // (100 Hz) to 250ms (4 Hz): every flush-timer reschedule is a replicated cluster
+    // timer that enters the Raft log even when idle. This removes the timer's share of
+    // idle churn (~2.8 KB/s of the old ~3.9 KB/s; measured idle growth 3.9 -> ~1.2 KB/s).
+    // The remaining ~1.1 KB/s is a separate source (OMS still offers a logged
+    // GatewayHeartbeat ~10/s — fixed separately in the OMS repo, mirroring loud-limits).
+    // Active-trading latency is kept low by an opportunistic flush in onSessionMessage
+    // (see ACTIVE_FLUSH_INTERVAL_MS) — egress is only legal from log-driven callbacks,
+    // so a periodic timer is still required to cover idle markets, the trailing batch
+    // after trading stops, and resnapshot delivery to a client on a quiet market.
+    private static final long MARKET_DATA_FLUSH_INTERVAL_MS = 250;
+
+    // Opportunistic active-trading flush cadence. Wall-clock gated and leader-only;
+    // pure egress output (ClientSession.offer), so it mutates no replicated state and
+    // adds no log entries — unlike the replicated flush timer above.
+    private static final long ACTIVE_FLUSH_INTERVAL_MS = 10;
+    private long lastActiveFlushMs = 0;
 
     private void scheduleMarketDataFlush() {
         long deadline = System.currentTimeMillis() + MARKET_DATA_FLUSH_INTERVAL_MS;
@@ -364,22 +379,19 @@ public class AppClusteredService implements ClusteredService {
             }
         }
 
-        // Restore timer correlation ID if present (backward-compatible: old snapshots won't have this)
+        // Restore ONLY the timer correlation counter (so newly-armed timer ids stay
+        // monotonic); backward-compatible: old snapshots won't have this. Deliberately do
+        // NOT re-arm/restore the flush timer here. The flush timer is armed fresh once this
+        // node becomes LEADER (onRoleChange resets the flag; onSessionOpen/onSessionMessage
+        // arm it). Restoring it here used to leave flushTimerScheduled=true with a chain that
+        // never fired after a recover-into-leader, silently killing the egress keep-warm and
+        // causing gateway/OMS stale-egress reconnect loops. A stale pending timer that Aeron
+        // re-delivers simply logs one harmless "unknown timer" and does not reschedule.
         if (pos + 8 <= length) {
             long timerCorrelationId = buffer.getLong(pos);
             pos += 8;
             timerManager.setCorrelationId(timerCorrelationId);
-            System.out.println("[SNAPSHOT] Restored TimerCorrelationId: " + timerCorrelationId);
-
-            // Re-register the flush timer runnable for the pending timer so that
-            // replayed timer events find a matching runnable (avoids "unknown timer" spam).
-            // The pending timer at snapshot time has ID = timerCorrelationId.
-            if (timerCorrelationId > 0) {
-                timerManager.restoreTimer(timerCorrelationId, this::onFlushTimer);
-                flushTimerScheduled = true;
-                timerRestoredFromSnapshot = true;
-                System.out.println("[SNAPSHOT] Restored flush timer chain at correlationId=" + timerCorrelationId);
-            }
+            System.out.println("[SNAPSHOT] Restored TimerCorrelationId (counter only): " + timerCorrelationId);
         }
 
         System.out.println("[SNAPSHOT] Snapshot load complete. Processed " + pos + " bytes of " + length);
@@ -431,12 +443,24 @@ public class AppClusteredService implements ClusteredService {
             throw new RuntimeException(e);
         }
 
-        // Schedule flush timer lazily (can't schedule from onStart — cluster not ready)
+        // Schedule the idle/keep-warm flush timer lazily (can't schedule from onStart —
+        // cluster not ready).
         if (!flushTimerScheduled) {
             scheduleMarketDataFlush();
             flushTimerScheduled = true;
-            System.out.println("SERVICE: Market data flush timer scheduled (10ms)");
+            System.out.println("SERVICE: Market data flush timer scheduled (" + MARKET_DATA_FLUSH_INTERVAL_MS + "ms)");
             System.out.flush();
+        }
+
+        // Drain queued market data promptly while orders are flowing so the relaxed
+        // flush-timer cadence doesn't add latency during active trading. Wall-clock
+        // gated and leader-only — pure egress output, mutates no replicated state.
+        if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
+            final long nowMs = System.currentTimeMillis();
+            if (nowMs - lastActiveFlushMs >= ACTIVE_FLUSH_INTERVAL_MS) {
+                lastActiveFlushMs = nowMs;
+                aeronBroadcaster.flush();
+            }
         }
     }
 
@@ -609,19 +633,14 @@ public class AppClusteredService implements ClusteredService {
     public void onRoleChange(final Role newRole) {
         System.out.println("SERVICE onRoleChange: " + newRole);
         System.out.flush();
-        // Reset flush timer flag so the timer chain is re-established on the
-        // first live onSessionMessage. During log replay, timers scheduled via
-        // cluster.scheduleTimer() are no-ops, so the self-rescheduling chain
-        // breaks at the replay→live transition. This reset ensures a fresh
-        // timer is created once we're processing live messages.
-        //
-        // However, if timer was restored from snapshot, the timer handler is
-        // already registered and will fire correctly - don't reset the flag
-        // or we'll create duplicate timer chains causing cluster instability.
-        if (!timerRestoredFromSnapshot) {
-            flushTimerScheduled = false;
-        }
-        timerRestoredFromSnapshot = false; // Reset for next snapshot cycle
+        // Always re-arm the flush timer chain on a role change. The chain is a
+        // self-rescheduling cluster timer that only the LEADER schedules (a follower's
+        // scheduleTimer is a no-op) and that does NOT survive a snapshot recover-into-leader
+        // transition. Resetting the flag guarantees the next live onSessionOpen/
+        // onSessionMessage arms exactly ONE fresh chain. Since loadSnapshot no longer
+        // restores a timer, there is no duplicate-chain risk. If this is missed, the leader
+        // sends no idle egress keep-warm and clients fall into stale-egress reconnect loops.
+        flushTimerScheduled = false;
     }
 
     @Override
