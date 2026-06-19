@@ -99,9 +99,9 @@ public class AeronCluster {
                             // MTU for reduced system calls
                             .mtuLength(8192),  // 8KB MTU
                         clusterConfig.archiveContext(),
-                        clusterConfig.consensusModuleContext().shutdownSignalBarrier(barrier));
+                        clusterConfig.consensusModuleContext().terminationHook(barrier::signal));
                 ClusteredServiceContainer ignored1 = ClusteredServiceContainer.launch(
-                        clusterConfig.clusteredServiceContext().shutdownSignalBarrier(barrier)))
+                        clusterConfig.clusteredServiceContext().terminationHook(barrier::signal)))
         {
             barrier.await();
         } catch (Exception e) {
