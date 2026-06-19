@@ -95,18 +95,22 @@ curl -X POST http://localhost:8082/api/admin/rebuild-gateway          # Rebuild 
 
 ### Archive Compaction & Cleanup
 ```bash
-curl -X POST http://localhost:8082/api/admin/housekeeping              # Reclaim archive disk on LIVE cluster: purge log segments below latest snapshot + prune old snapshots (also runs automatically after /snapshot)
-curl -X POST http://localhost:8082/api/admin/compact                   # Compact archive (single)
-curl -X POST http://localhost:8082/api/admin/compact-archive           # Compact archive variant
-curl -X POST http://localhost:8082/api/admin/rolling-cleanup           # Rolling per-node cleanup
+curl -X POST http://localhost:8082/api/admin/housekeeping              # Reclaim archive disk on LIVE cluster: purge log segments below latest snapshot (also runs automatically after /snapshot)
 curl -X POST http://localhost:8082/api/admin/cleanup -d '{"force":true}'  # Wipe Aeron mark/lock files (requires all nodes stopped)
 curl -X POST http://localhost:8082/api/admin/cleanup-node              # Per-node cleanup
 ```
 
 **Note:** Aeron snapshots do NOT truncate the log — they only add recordings. `ArchiveHousekeeping`
 (match-cluster) is what reclaims disk: it purges whole log segment files below the latest snapshot
-position and prunes superseded snapshot recordings (keeps 2). Members offline during a snapshot
-cannot log-catch-up across purged segments and must be reseeded.
+position. It runs LIVE (no downtime) and is invoked automatically after every snapshot.
+
+**REMOVED (2026-06-13):** `/api/admin/compact`, `/compact-archive`, and `/rolling-cleanup` — they ran
+Aeron's **offline** `ArchiveTool compact`/`delete-orphaned-segments` against **live** node archives,
+which corrupts the latest snapshot recording and breaks recover-from-snapshot (nodes crash on restart
+with `unknown recording id` and the cluster comes up unable to serve ingress → frozen UI order book).
+Auto-snapshot used to call `compact` every cycle, silently corrupting recoverability. The auto-snapshot
+cycle now takes **only** a snapshot; disk is reclaimed by the live-safe `ArchiveHousekeeping`. For offline
+compaction, stop all nodes first (there is no live-safe ArchiveTool compaction).
 
 ### Auto-Snapshot Schedule
 ```bash

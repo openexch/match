@@ -6,9 +6,7 @@ import io.aeron.cluster.RecordingLog;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Reclaims archive disk space after cluster snapshots.
@@ -20,9 +18,12 @@ import java.util.Set;
  * 1. Purge whole log segment files below the latest valid snapshot position
  *    (recovery = latest snapshot + log replay from its position, so the log
  *    below that point is never needed by this node again).
- * 2. Purge recordings of superseded snapshots, keeping the most recent
- *    {@code snapshotsToKeep} (never fewer than 2: recovery falls back to the
- *    previous snapshot if the latest is invalidated).
+ * Snapshot recordings themselves are deliberately NOT purged: Aeron recovery
+ * selects the snapshot to replay by the recording.log {@code isValid} flag without
+ * checking the archive, so purging a recording while its recording.log entry remains
+ * valid breaks recover-from-snapshot ("unknown recording id"). Snapshot recordings are
+ * tiny (serialized state); the reclaimable disk is the log segments. A post-run check
+ * verifies every referenced snapshot recording still resolves in the archive.
  *
  * Must run against each node's own archive. Operational caveats (document,
  * don't discover): a member that was offline during the snapshot cannot
@@ -70,22 +71,20 @@ public final class ArchiveHousekeeping {
     private ArchiveHousekeeping() {}
 
     /**
-     * Purge log segments below the latest valid snapshot and prune superseded
-     * snapshot recordings.
+     * Purge whole log segments below the latest valid snapshot. Snapshot recordings are
+     * never purged (doing so breaks recover-from-snapshot — see class javadoc); this run
+     * also verifies that every snapshot recording referenced by recording.log still resolves.
      *
      * @param clusterDir      the node's cluster directory (contains recording.log)
      * @param archive         connected client to this node's archive
-     * @param snapshotsToKeep how many most-recent snapshots to retain (min 2 enforced)
-     * @return what was reclaimed
+     * @param snapshotsToKeep retained for call-site/CLI compatibility; no longer used
+     * @return what was reclaimed (snapshotRecordingsPurged is always 0)
      */
     public static Result purgeBelowLatestSnapshot(
             final File clusterDir, final AeronArchive archive, final int snapshotsToKeep) {
 
-        final int keep = Math.max(2, snapshotsToKeep);
-        if (keep != snapshotsToKeep) {
-            System.out.println("[HOUSEKEEPING] snapshotsToKeep=" + snapshotsToKeep
-                    + " raised to 2: recovery needs a fallback if the latest snapshot is invalidated");
-        }
+        // snapshotsToKeep is retained for call-site/CLI compatibility but is no longer used:
+        // we never purge snapshot recordings (see step 2 below).
 
         final List<RecordingLog.Entry> snapshotEntries = new ArrayList<>();
         final long logRecordingId;
@@ -151,47 +150,38 @@ public final class ArchiveHousekeeping {
                     + "Smaller segmentFileLength reclaims sooner.");
         }
 
-        // 2. Prune superseded snapshot recordings, keeping the most recent `keep` groups.
-        // Entries of purged recordings remain in recording.log (it belongs to the
-        // consensus module), so a recording may already be gone on a re-run —
-        // recognise that as done, not as an error, to keep housekeeping idempotent.
-        int snapshotRecordingsPurged = 0;
+        // 2. Snapshot recordings are deliberately NOT purged. Aeron recovery selects the snapshot to
+        // replay purely by the recording.log `isValid` flag and does NOT check the archive
+        // (RecordingLog.getLatestSnapshot / ConsensusModuleAgent.loadSnapshot -> archive.startReplay has
+        // no existence check and no fallback). Purging a snapshot recording here orphaned its still-valid
+        // recording.log entry, so recover-from-snapshot crashed with "unknown recording id" and the node
+        // came up unable to serve clients. There is NO supported way to invalidate a recording.log entry
+        // (invalidateEntry/removeEntry are package-private) and recording.log is owned by the live,
+        // unlocked ConsensusModule — we must not mutate it from this separate process. Snapshot recordings
+        // are tiny (serialized cluster state, not the log); the reclaimable disk is the log segments above.
+
+        // 3. Safety net: every valid snapshot recording the recording.log still references MUST resolve in
+        // the archive, or recover-from-snapshot will crash. Verify and report loudly — this is the exact
+        // invariant whose violation == the recovery bug, and it catches an already-corrupted node.
         int errors = 0;
-        if (groupPositions.size() > keep) {
-            final Set<Long> keepPositions = new HashSet<>(groupPositions.subList(0, keep));
-            for (final RecordingLog.Entry entry : snapshotEntries) {
-                if (keepPositions.contains(entry.logPosition)) {
-                    continue;
-                }
-                final int exists = archive.listRecording(entry.recordingId,
-                        (controlSessionId, correlationId, recordingId, startTimestamp, stopTimestamp,
-                         startPos, stopPosition, initialTermId, segmentFileLength, termBufferLength,
-                         mtuLength, sessionId, streamId, strippedChannel, originalChannel,
-                         sourceIdentity) -> { });
-                if (exists == 0) {
-                    System.out.println("[HOUSEKEEPING] Snapshot recording " + entry.recordingId
-                            + " already purged (stale recording.log entry) — skipping");
-                    continue;
-                }
-                try {
-                    archive.purgeRecording(entry.recordingId);
-                    snapshotRecordingsPurged++;
-                    System.out.println("[HOUSEKEEPING] Purged superseded snapshot recording "
-                            + entry.recordingId + " (serviceId=" + entry.serviceId
-                            + ", logPosition=" + entry.logPosition + ")");
-                } catch (final Exception e) {
-                    errors++;
-                    System.err.println("[HOUSEKEEPING] ERROR: failed to purge snapshot recording "
-                            + entry.recordingId + ": " + e.getMessage());
-                }
+        for (final RecordingLog.Entry entry : snapshotEntries) {
+            final int exists = archive.listRecording(entry.recordingId,
+                    (controlSessionId, correlationId, recordingId, startTimestamp, stopTimestamp,
+                     startPos, stopPosition, initialTermId, segmentFileLength, termBufferLength,
+                     mtuLength, sessionId, streamId, strippedChannel, originalChannel,
+                     sourceIdentity) -> { });
+            if (exists == 0) {
+                errors++;
+                System.err.println("[HOUSEKEEPING] CRITICAL: recording.log references snapshot recordingId "
+                        + entry.recordingId + " (serviceId=" + entry.serviceId
+                        + ", logPosition=" + entry.logPosition + ") that is NOT in the archive — "
+                        + "recover-from-snapshot will fail on this node; it must be reseeded.");
             }
-        } else {
-            System.out.println("[HOUSEKEEPING] " + groupPositions.size()
-                    + " snapshot(s) present, keeping " + keep + " — no snapshot pruning needed.");
         }
 
+        // snapshotRecordingsPurged is always 0 now (we no longer purge snapshot recordings).
         return new Result(logRecordingId, startPosition, newStartPosition,
-                segmentsPurged, snapshotRecordingsPurged, errors);
+                segmentsPurged, 0, errors);
     }
 
     /**
