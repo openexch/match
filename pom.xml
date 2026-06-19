@@ -32,8 +32,8 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
-        <aeron.version>1.48.1</aeron.version>
-        <agrona.version>2.2.2</agrona.version>
+        <aeron.version>1.51.0</aeron.version>
+        <agrona.version>2.4.1</agrona.version>
         <sbe.version>1.38.1</sbe.version>
         <disruptor.version>4.0.0</disruptor.version>
         <netty.version>4.2.15.Final</netty.version>
