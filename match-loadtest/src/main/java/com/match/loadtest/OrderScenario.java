@@ -229,7 +229,11 @@ public enum OrderScenario {
         public OrderParams(String orderType, String orderSide, double price, double quantity, String market) {
             this.orderType = orderType;
             this.orderSide = orderSide;
-            this.price = price;
+            // Round limit price to the BTC-USD tick ($1). The engine rejects any
+            // off-tick price (PRICE_OFF_TICK), and the scenarios compute
+            // midPrice*(1±spread) which is almost always fractional — so without
+            // this rounding every limit order is rejected and the book never builds.
+            this.price = Math.rint(price);
             this.quantity = quantity;
             this.market = market;
             // For market orders, estimate budget based on high side of price range (~$120k)
