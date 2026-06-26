@@ -23,6 +23,20 @@ public interface MarketDataBroadcaster {
     void broadcast(DirectBuffer buffer, int offset, int length);
 
     /**
+     * Queue an OMS-bound settlement message (OrderStatus / TradeExecution) for RELIABLE broadcast.
+     * Unlike {@link #broadcast}, these must NOT be silently dropped under market-data load: a
+     * dropped terminal OrderStatus (CANCELLED/REJECTED) leaves an OMS balance hold stuck forever,
+     * and a dropped TradeExecution loses a fill. Cluster impls route these through a separate,
+     * large, priority-drained queue. Refreshable UI market data (book snapshots/deltas, UI trades)
+     * should use {@link #broadcast} instead.
+     *
+     * Default impl (non-cluster) delegates to {@link #broadcast}.
+     */
+    default void broadcastReliable(DirectBuffer buffer, int offset, int length) {
+        broadcast(buffer, offset, length);
+    }
+
+    /**
      * Flush queued messages (cluster mode only).
      * Must be called from the cluster service's main thread (during onTimerEvent).
      */
