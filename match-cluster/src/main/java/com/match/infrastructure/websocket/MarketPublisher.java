@@ -396,21 +396,24 @@ public class MarketPublisher implements MarketEventHandler {
             }
 
             // Flush individual trade executions for OMS (TradeExecutionBatch)
+            // Reliable path: OMS-bound settlement, must not be dropped under market-data load.
             if (!tradeExecutionBuffer.isEmpty()) {
                 int length = encodeTradeExecutionBatch();
                 if (length > 0) {
-                    localBroadcaster.broadcast(encodeBuffer, 0, length);
+                    localBroadcaster.broadcastReliable(encodeBuffer, 0, length);
                 }
                 tradeExecutionBuffer.clear();
             }
 
             // Flush buffered order status updates as batch (SBE encoded)
+            // Reliable path: OMS-bound settlement (incl. terminal CANCELLED/REJECTED) must not be
+            // dropped under market-data load — a dropped terminal leaves an OMS hold stuck (oms#21).
             // Send in chunks if buffer is large to prevent overflow
             while (!orderStatusBuffer.isEmpty()) {
                 int batchSize = Math.min(orderStatusBuffer.size(), MAX_ORDER_STATUS_PER_BATCH);
                 int length = encodeOrderStatusBatch(batchSize);
                 if (length > 0) {
-                    localBroadcaster.broadcast(encodeBuffer, 0, length);
+                    localBroadcaster.broadcastReliable(encodeBuffer, 0, length);
                 }
                 // Remove encoded entries
                 if (batchSize >= orderStatusBuffer.size()) {

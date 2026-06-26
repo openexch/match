@@ -81,6 +81,15 @@ public class AppClusteredService implements ClusteredService {
     private final Queue<QueuedMessage> marketDataQueue = new ArrayBlockingQueue<>(MARKET_DATA_QUEUE_CAPACITY);
     private final AtomicLong droppedMessages = new AtomicLong(0);
 
+    // OMS-bound settlement egress (OrderStatus + TradeExecution) uses a SEPARATE, much larger
+    // queue so it is never evicted by a flood of refreshable UI market data (book snapshots/
+    // deltas/trades). The shared marketDataQueue silently drops on overflow (fine for UI book
+    // data), but dropping an OrderStatus terminal (CANCELLED/REJECTED) leaves an OMS hold stuck
+    // forever (oms#21) and dropping a TradeExecution loses a fill. Drained with priority in flush().
+    private static final int OMS_EGRESS_QUEUE_CAPACITY = 1 << 18; // 262144
+    private final Queue<QueuedMessage> omsEgressQueue = new ArrayBlockingQueue<>(OMS_EGRESS_QUEUE_CAPACITY);
+    private final AtomicLong droppedOmsEgress = new AtomicLong(0);
+
     // Simple wrapper for queued SBE messages (holds copy of buffer content)
     private static final class QueuedMessage {
         final byte[] data;
@@ -127,20 +136,48 @@ public class AppClusteredService implements ClusteredService {
         }
 
         @Override
+        public void broadcastReliable(org.agrona.DirectBuffer buffer, int offset, int length) {
+            // OMS-bound settlement egress (OrderStatus / TradeExecution). MUST NOT be silently
+            // dropped under market-data load: uses the separate, large omsEgressQueue, drained
+            // with priority in flush(). See OMS_EGRESS_QUEUE_CAPACITY for the never-drop rationale.
+            byte[] copy = new byte[length];
+            buffer.getBytes(offset, copy, 0, length);
+
+            if (!omsEgressQueue.offer(new QueuedMessage(copy, length))) {
+                long dropped = droppedOmsEgress.incrementAndGet();
+                // Should be unreachable in practice (large queue, drained before market data). If
+                // it ever fires, OMS may miss a fill/terminal status — alarm loudly (1st + every 1000th).
+                if (dropped == 1 || dropped % 1000 == 0) {
+                    System.err.println("CRITICAL: OMS egress queue full! Dropped " + dropped +
+                        " OMS-bound settlement message(s) (OrderStatus/TradeExecution). Capacity: " +
+                        OMS_EGRESS_QUEUE_CAPACITY + ". Holds/fills may be missed.");
+                }
+            }
+        }
+
+        @Override
         public void flush() {
             // Broadcast to ALL sessions - each client filters what it needs
             List<ClientSession> sessions = clientSessions.getAllSessions();
             if (sessions.isEmpty()) {
-                // Don't clear the queue — initial book snapshots may be waiting for
-                // a gateway to connect. The queue is bounded (10K entries) so this
-                // won't grow unbounded. Stale data is fine since the gateway always
-                // uses the latest snapshot.
+                // Don't clear the queues — initial book snapshots / OMS settlement egress may be
+                // waiting for a gateway to connect. Both queues are bounded so this won't grow
+                // unbounded; the gateway uses the latest snapshot and re-reads egress on (re)connect.
                 return;
             }
 
+            // Drain OMS-bound settlement egress FIRST (reliable, priority), then lossy UI market data.
+            boolean sentAny = drainQueue(omsEgressQueue, sessions);
+            sentAny |= drainQueue(marketDataQueue, sessions);
+            if (sentAny) {
+                lastEgressSendMs = System.currentTimeMillis();
+            }
+        }
+
+        private boolean drainQueue(Queue<QueuedMessage> queue, List<ClientSession> sessions) {
             QueuedMessage msg;
             boolean sentAny = false;
-            while ((msg = marketDataQueue.poll()) != null) {
+            while ((msg = queue.poll()) != null) {
                 broadcastBuffer.putBytes(0, msg.data, 0, msg.length);
                 sentAny = true;
 
@@ -163,9 +200,7 @@ public class AppClusteredService implements ClusteredService {
                     }
                 }
             }
-            if (sentAny) {
-                lastEgressSendMs = System.currentTimeMillis();
-            }
+            return sentAny;
         }
 
         @Override
