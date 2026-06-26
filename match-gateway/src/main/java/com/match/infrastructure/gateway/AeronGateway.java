@@ -91,9 +91,14 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     private volatile long lastStatsLogMs = 0;
     private static final long STATS_LOG_INTERVAL_MS = 10_000;
 
-    // Stale egress detection — force reconnect if connected but no egress for too long
+    // Stale egress detection — force reconnect if connected but no egress for too long.
+    // The leader sends a ~1s keep-warm ClusterHeartbeat, so a healthy connection never exceeds ~1-2s.
+    // A multi-second gap means the egress image is stale (e.g. still bound to the OLD leader after a
+    // switchover) — recover (M6). Checked every poll tick (was: only in the 10s stats block). 10s gives
+    // a just-elected leader / freshly-reconnected session time to start egress before we reconnect,
+    // avoiding reconnect churn during the election window, while still recovering far faster than 30s.
     private volatile long lastEgressMessageMs = System.currentTimeMillis();
-    private static final long STALE_EGRESS_TIMEOUT_MS = 30_000; // 30s with no egress = stale
+    private static final long STALE_EGRESS_TIMEOUT_MS = 10_000; // no egress (incl. 1s keep-warm) for 10s = stale
 
     /** Counter incremented every time the Aeron error handler fires. */
     private final java.util.concurrent.atomic.AtomicLong aeronErrorCount = new java.util.concurrent.atomic.AtomicLong();
@@ -408,10 +413,36 @@ public class AeronGateway implements EgressListener, AutoCloseable {
                     work++;
                 }
 
-                // Periodic stats logging
                 long nowMs = System.currentTimeMillis();
+                long egressAgeMs = nowMs - lastEgressMessageMs;
+
+                // STALE EGRESS DETECTION (every poll tick): connected but no data flowing — the egress
+                // subscription image can stay bound to the OLD leader after a switchover, so AeronCluster
+                // reports connected=true yet no egress (not even the ~1s keep-warm) arrives. Recover fast
+                // by forcing a reconnect, which rebinds egress to the current leader (M6). Previously this
+                // ran only in the 10s stats block with a 30s threshold → up to ~40s to recover.
+                //
+                // The egressMessageCount > 0 guard is REQUIRED: a freshly-(re)connected session resets
+                // egressAge, and the cluster needs a moment to send its first egress (resnapshot + keep-
+                // warm) to the new session. Without the guard, a session that hasn't yet received ANY
+                // egress reconnects every STALE_EGRESS_TIMEOUT_MS forever — a loop that prevents it from
+                // ever stabilizing. We only force-reconnect a session that WAS receiving and went silent.
+                if (egressAgeMs > STALE_EGRESS_TIMEOUT_MS && egressMessageCount > 0) {
+                    System.err.println("STALE EGRESS DETECTED: no egress for " + egressAgeMs +
+                        "ms while connected (likely leader switchover) — forcing reconnect.");
+                    CloseHelper.quietClose(currentCluster);
+                    cluster = null;
+                    if (clusterStatus != null) {
+                        clusterStatus.setGatewayConnected(false);
+                    }
+                    lastReconnectAttempt = 0;                 // reconnect on the very next iteration
+                    reconnectBackoffMs = RECONNECT_COOLDOWN_MS;
+                    idleStrategy.idle(0);
+                    continue;
+                }
+
+                // Periodic stats logging
                 if (nowMs - lastStatsLogMs > STATS_LOG_INTERVAL_MS) {
-                    long egressAgeMs = nowMs - lastEgressMessageMs;
                     var sub = currentCluster.egressSubscription();
                     System.out.println("GATEWAY STATS: egress=" + egressMessageCount +
                                       ", keepAlives=" + keepAliveCount +
@@ -421,23 +452,6 @@ public class AeronGateway implements EgressListener, AutoCloseable {
                                       ", sessionId=" + currentCluster.clusterSessionId() +
                                       ", egressAge=" + egressAgeMs + "ms");
                     lastStatsLogMs = nowMs;
-
-                    // STALE EGRESS DETECTION: connected but no data flowing
-                    // This catches the case where the cluster client reports connected
-                    // but the egress subscription image is stale (e.g., after leader change)
-                    if (egressAgeMs > STALE_EGRESS_TIMEOUT_MS && egressMessageCount > 0) {
-                        System.err.println("STALE EGRESS DETECTED: no egress messages for " +
-                            egressAgeMs + "ms while connected. Forcing reconnect.");
-                        // Force cluster close to trigger reconnection
-                        CloseHelper.quietClose(currentCluster);
-                        cluster = null;
-                        if (clusterStatus != null) {
-                            clusterStatus.setGatewayConnected(false);
-                        }
-                        // Reset backoff for fast recovery
-                        lastReconnectAttempt = 0;
-                        reconnectBackoffMs = RECONNECT_COOLDOWN_MS;
-                    }
                 }
 
                 idleStrategy.idle(work);

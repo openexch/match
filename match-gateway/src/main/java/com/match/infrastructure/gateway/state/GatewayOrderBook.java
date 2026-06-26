@@ -110,6 +110,17 @@ public class GatewayOrderBook {
     }
 
     /**
+     * True if an incoming BookDelta is stale or a duplicate — it advances NEITHER side beyond what
+     * has already been applied (bidVersion/askVersion are strictly monotonic per side, sourced from
+     * the engine's order-book version). Used to drop old-leader / re-delivered deltas at a leader-
+     * switchover seam so the displayed book isn't corrupted (match#19). Snapshots are always applied
+     * (they reset the baseline via update()), so this guards deltas only.
+     */
+    public boolean isStaleUpdate(long incomingBidVersion, long incomingAskVersion) {
+        return incomingBidVersion <= this.bidVersion && incomingAskVersion <= this.askVersion;
+    }
+
+    /**
      * Build JSON representation (called under write lock).
      */
     private String buildJson() {
