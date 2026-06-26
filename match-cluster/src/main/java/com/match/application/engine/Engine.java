@@ -308,6 +308,18 @@ public class Engine {
             }
             publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
                 0, 0, 0, isBuy, omsOrderId);
+        } else {
+            // Order not in book (already cancelled/filled, or unknown). Emit a CANCELLED ack anyway
+            // so a reconciling OMS (re-cancelling after a leader-switchover seam where the original
+            // cancel or its terminal egress was lost) gets definitive closure and releases the
+            // now-unencumbered hold. The OMS releases only the UNFILLED remainder (hold minus
+            // trade-derived consumed), so acking an already-filled order is a safe no-op there. (oms#21)
+            long omsOrderId = orderIdToOmsOrderId.remove(orderId);
+            if (omsOrderId == -1) {
+                omsOrderId = 0;
+            }
+            publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
+                0, 0, 0, isBuy, omsOrderId);
         }
     }
 
