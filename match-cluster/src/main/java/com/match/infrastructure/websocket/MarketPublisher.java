@@ -41,6 +41,32 @@ public class MarketPublisher implements MarketEventHandler {
     // Cap trades per encoded batch so a large burst (e.g. egress re-emission on a leader takeover)
     // cannot overflow the fixed-size encodeBuffer. Mirrors MAX_ORDER_STATUS_PER_BATCH.
     private static final int MAX_TRADE_EXEC_PER_BATCH = 2000;
+
+    // Hard cap on the OMS-bound egress buffers (individual trades + order statuses). These are the
+    // only UNBOUNDED stage in the egress pipeline: the disruptor ring and the AppClusteredService
+    // omsEgressQueue/marketDataQueue are both bounded, but these ArrayLists are only cleared by the
+    // 50ms flush. If that flush falls behind (CPU starvation, a GC pause, or a slow/stalled egress
+    // consumer) they grow without bound and OOM the matching node. On overflow we drop with a loud,
+    // rate-limited log — dropped settlement events are recoverable from the authoritative cluster
+    // log via OMS reconciliation. Same bounded + drop policy the egress queues already use.
+    // Tunable via -Dmatch.egress.buffer.max.
+    private static final int DEFAULT_MAX_EGRESS_BUFFER = 200_000;
+    private final int maxEgressBuffer = resolveMaxEgressBuffer();
+    private long droppedTradeEvents = 0;
+    private long droppedStatusEvents = 0;
+
+    private static int resolveMaxEgressBuffer() {
+        String p = System.getProperty("match.egress.buffer.max");
+        if (p != null && !p.isEmpty()) {
+            try {
+                int v = Integer.parseInt(p.trim());
+                if (v > 0) return v;
+            } catch (NumberFormatException ignore) {
+                // fall through to default
+            }
+        }
+        return DEFAULT_MAX_EGRESS_BUFFER;
+    }
     private final UnsafeBuffer encodeBuffer = new UnsafeBuffer(new byte[ENCODE_BUFFER_SIZE]);
 
     // Pre-allocated SBE encoders (reused, zero allocation)
@@ -207,6 +233,16 @@ public class MarketPublisher implements MarketEventHandler {
         this.broadcaster = broadcaster;
     }
 
+    /** Trade-egress events dropped because the bounded buffer was full (flush fell behind). 0 in healthy operation. */
+    public long getDroppedTradeEvents() {
+        return droppedTradeEvents;
+    }
+
+    /** Order-status-egress events dropped because the bounded buffer was full. 0 in healthy operation. */
+    public long getDroppedStatusEvents() {
+        return droppedStatusEvents;
+    }
+
     @Override
     public void onStart() {
         // Prevent duplicate starts (can happen if Disruptor calls lifecycle methods)
@@ -263,6 +299,19 @@ public class MarketPublisher implements MarketEventHandler {
      * Also captures the current order book version for correlation.
      */
     private synchronized void bufferTrade(PublishEvent event) {
+        // Bounded egress: drop (don't grow into OOM) if the flush has fallen behind. Recoverable
+        // via OMS reconciliation against the authoritative cluster log. Skips market-data
+        // aggregation for this trade too — acceptable (the trade feed is best-effort).
+        if (tradeExecutionBuffer.size() >= maxEgressBuffer) {
+            droppedTradeEvents++;
+            if (droppedTradeEvents == 1 || droppedTradeEvents % 100_000 == 0) {
+                logger.error("EGRESS BUFFER FULL: market=" + marketId + " dropping trade egress (buffer="
+                    + tradeExecutionBuffer.size() + "/" + maxEgressBuffer + ", totalDropped=" + droppedTradeEvents
+                    + ") — flush is behind; settlement recoverable via OMS reconciliation");
+            }
+            return;
+        }
+
         long price = event.getPrice();
         AggregatedTrade agg = tradesByPrice.get(price);
 
@@ -468,6 +517,18 @@ public class MarketPublisher implements MarketEventHandler {
      * Reduces message count by bundling multiple status updates together.
      */
     private synchronized void bufferOrderStatus(PublishEvent event) {
+        // Bounded egress: drop rather than grow into OOM if the flush has fallen behind.
+        // Terminal statuses are recoverable via OMS reconciliation against the cluster log.
+        if (orderStatusBuffer.size() >= maxEgressBuffer) {
+            droppedStatusEvents++;
+            if (droppedStatusEvents == 1 || droppedStatusEvents % 100_000 == 0) {
+                logger.error("EGRESS BUFFER FULL: market=" + marketId + " dropping order-status egress (buffer="
+                    + orderStatusBuffer.size() + "/" + maxEgressBuffer + ", totalDropped=" + droppedStatusEvents
+                    + ") — flush is behind; recoverable via OMS reconciliation");
+            }
+            return;
+        }
+
         OrderStatusEntry entry = new OrderStatusEntry();
         entry.marketId = event.getMarketId();
         entry.market = marketName;

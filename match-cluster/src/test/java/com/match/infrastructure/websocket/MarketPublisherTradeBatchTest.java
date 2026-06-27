@@ -48,6 +48,41 @@ public class MarketPublisherTradeBatchTest {
         assertEquals("every trade must be encoded across the chunks", n, bc.totalTradesDecoded);
     }
 
+    @Test
+    public void egressBufferIsBoundedAndDropsUnderOverload() throws Exception {
+        // The OOM root cause: the OMS-bound egress buffers were unbounded and only cleared by the
+        // 50ms flush. If the flush falls behind, they must DROP (bounded), not grow into OOM.
+        String prev = System.getProperty("match.egress.buffer.max");
+        System.setProperty("match.egress.buffer.max", "1000");
+        try {
+            MarketPublisher pub = new MarketPublisher(1, "BTC-USD", null);
+            CountingBroadcaster bc = new CountingBroadcaster();
+            pub.setBroadcaster(bc);
+
+            final int cap = 1000;
+            final int pushed = 1500; // exceed the cap with no flush in between
+            for (int i = 0; i < pushed; i++) {
+                PublishEvent e = new PublishEvent();
+                e.setTradeExecution(1, 1000L, i + 1, 100, 7, 200 + i, 8,
+                        FixedPoint.fromDouble(60_000.0 + (i % 50)), FixedPoint.fromDouble(1.0), true, 0, 0);
+                pub.onEvent(e, i, true);
+            }
+
+            // Bounded: the excess is dropped, not accumulated into OOM.
+            assertEquals("excess trades must be dropped once the buffer is full",
+                    pushed - cap, pub.getDroppedTradeEvents());
+
+            pub.onShutdown(); // final flush
+            assertEquals("only the bounded buffer is broadcast", cap, bc.totalTradesDecoded);
+        } finally {
+            if (prev == null) {
+                System.clearProperty("match.egress.buffer.max");
+            } else {
+                System.setProperty("match.egress.buffer.max", prev);
+            }
+        }
+    }
+
     /** Captures reliable broadcasts and decodes each TradeExecutionBatch's trade count immediately. */
     private static final class CountingBroadcaster implements MarketDataBroadcaster {
         final MessageHeaderDecoder header = new MessageHeaderDecoder();
