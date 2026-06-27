@@ -2,7 +2,6 @@ package com.match.infrastructure.persistence;
 
 import com.match.application.engine.Engine;
 import com.match.application.engine.MarketConfig;
-import com.match.application.orderbook.DirectMatchingEngine;
 import com.match.application.publisher.MarketDataBroadcaster;
 import com.match.application.publisher.MatchEventPublisher;
 import com.match.infrastructure.websocket.MarketPublisher;

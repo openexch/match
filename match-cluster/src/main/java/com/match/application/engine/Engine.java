@@ -1,6 +1,8 @@
 package com.match.application.engine;
 
+import com.match.application.orderbook.ArrayMatchingEngine;
 import com.match.application.orderbook.DirectMatchingEngine;
+import com.match.application.orderbook.MatchingEngine;
 import com.match.application.orderbook.OrderRejectReason;
 import com.match.application.publisher.MatchEventSink;
 import com.match.application.publisher.OrderStatusType;
@@ -25,8 +27,9 @@ import java.util.concurrent.atomic.AtomicLong;
 public class Engine {
     private static final Logger logger = Logger.getLogger(Engine.class);
 
-    // Direct matching engines per market (zero allocation matching)
-    private final Int2ObjectHashMap<DirectMatchingEngine> engines;
+    // Matching engines per market (zero allocation matching). Concrete implementation
+    // selected by the match.engine.impl / MATCH_ENGINE_IMPL flag (see createMatchingEngine).
+    private final Int2ObjectHashMap<MatchingEngine> engines;
 
     // Atomic order ID generator
     private final AtomicLong orderIdGenerator = new AtomicLong(1);
@@ -52,21 +55,80 @@ public class Engine {
     public static final int CMD_UPDATE = 2;
 
     public Engine() {
+        this(resolveEngineImpl());
+    }
+
+    /**
+     * Construct with an explicit matching implementation ("array" | "direct"), bypassing the flag.
+     * Used by the A/B determinism test to run the same corpus through both implementations in one
+     * process; production uses the no-arg constructor (flag-resolved).
+     */
+    public Engine(String impl) {
         this.engines = new Int2ObjectHashMap<>();
+
+        logger.info("Engine matching implementation: {}", impl);
 
         // Initialize all markets from MarketConfig
         for (MarketConfig config : MarketConfig.ALL_MARKETS) {
-            DirectMatchingEngine engine = new DirectMatchingEngine(
-                config.basePrice,
-                config.maxPrice,
-                config.tickSize
-            );
+            MatchingEngine engine = createMatchingEngine(impl, config);
             engines.put(config.marketId, engine);
             logger.info("Initialized {} engine: {} price levels",
                 config.symbol, config.getPriceLevels());
         }
 
         logger.info("Engine started with {} markets.", MarketConfig.ALL_MARKETS.length);
+    }
+
+    /**
+     * Resolve the matching-engine implementation flag.
+     * Precedence: -Dmatch.engine.impl, then MATCH_ENGINE_IMPL env var, default "direct".
+     */
+    private static String resolveEngineImpl() {
+        String p = System.getProperty("match.engine.impl");
+        if (p == null || p.isEmpty()) {
+            p = System.getenv("MATCH_ENGINE_IMPL");
+        }
+        // Default is the array-backed engine (geometry-free, memory ∝ orders, no 64-cap);
+        // set match.engine.impl=direct / MATCH_ENGINE_IMPL=direct to fall back to the
+        // preallocated direct-index engine.
+        return (p == null || p.isEmpty()) ? "array" : p.toLowerCase();
+    }
+
+    /**
+     * Construct the per-market matching engine for the selected implementation.
+     * "array" = array-backed {@link ArrayMatchingEngine} (geometry-free, memory ∝ orders);
+     * "direct" = preallocated {@link DirectMatchingEngine}.
+     */
+    private static MatchingEngine createMatchingEngine(String impl, MarketConfig config) {
+        switch (impl) {
+            case "array":
+                return new ArrayMatchingEngine(config.basePrice, config.maxPrice, config.tickSize,
+                    resolveBookCapacity());
+            case "direct":
+            default:
+                return new DirectMatchingEngine(config.basePrice, config.maxPrice, config.tickSize);
+        }
+    }
+
+    /**
+     * Max simultaneous resting orders per book side for the array-backed engine (its single,
+     * adjustable capacity bound — replaces the direct-index book's per-level 64-cap and
+     * memory-∝-price-range footprint). Override with -Dmatch.engine.book.capacity / env.
+     */
+    private static int resolveBookCapacity() {
+        String p = System.getProperty("match.engine.book.capacity");
+        if (p == null || p.isEmpty()) {
+            p = System.getenv("MATCH_ENGINE_BOOK_CAPACITY");
+        }
+        if (p != null && !p.isEmpty()) {
+            try {
+                int v = Integer.parseInt(p.trim());
+                if (v > 0) return v;
+            } catch (NumberFormatException ignore) {
+                // fall through to default
+            }
+        }
+        return 1 << 17; // 131072
     }
 
     /**
@@ -79,7 +141,7 @@ public class Engine {
      * @param timestamp   the cluster timestamp in nanoseconds
      */
     public void acceptOrder(int marketId, int commandType, Object command, long timestamp) {
-        DirectMatchingEngine engine = engines.get(marketId);
+        MatchingEngine engine = engines.get(marketId);
         if (engine == null) {
             return; // Silently ignore unknown markets in hot path
         }
@@ -96,12 +158,16 @@ public class Engine {
                 processUpdate(engine, (UpdateOrderCommand) command, marketId, timestamp);
                 break;
         }
+
+        // Refresh the writer-published top-of-book snapshot for the market-data flush thread.
+        // No-op for the direct-index engine; cheap dirty-gated refresh for the array engine.
+        engine.publishTopOfBook();
     }
 
     /**
      * Process create order - ZERO allocations in matching path
      */
-    private void processCreate(DirectMatchingEngine engine, CreateOrderCommand cmd, int marketId, long timestamp) {
+    private void processCreate(MatchingEngine engine, CreateOrderCommand cmd, int marketId, long timestamp) {
         long orderId = orderIdGenerator.getAndIncrement();
         long userId = cmd.getUserId();
         long price = cmd.getPrice();
@@ -246,7 +312,7 @@ public class Engine {
     /**
      * Calculate total filled quantity from match results.
      */
-    private long calculateFilledQuantity(DirectMatchingEngine engine, int matchCount) {
+    private long calculateFilledQuantity(MatchingEngine engine, int matchCount) {
         long total = 0;
         for (int i = 0; i < matchCount; i++) {
             total += engine.getMatchQuantity(i);
@@ -258,7 +324,7 @@ public class Engine {
      * Publish trade executions only.
      * Order book is published at 50ms intervals by MarketPublisher.
      */
-    private void publishTradeExecutions(DirectMatchingEngine engine, int marketId, long timestamp,
+    private void publishTradeExecutions(MatchingEngine engine, int marketId, long timestamp,
             long takerOrderId, long takerUserId, boolean takerIsBuy, int matchCount, long takerOmsOrderId) {
         if (eventPublisher == null || matchCount == 0) {
             return;
@@ -289,7 +355,7 @@ public class Engine {
     /**
      * Process cancel order - O(1)
      */
-    private void processCancel(DirectMatchingEngine engine, CancelOrderCommand cmd, int marketId, long timestamp) {
+    private void processCancel(MatchingEngine engine, CancelOrderCommand cmd, int marketId, long timestamp) {
         long orderId = cmd.getOrderId();
         long userId = cmd.getUserId();
 
@@ -328,7 +394,7 @@ public class Engine {
      * Process update order - cancel-and-replace. O(1) cancel + O(1) limit placement.
      * Atomic within the single-threaded engine — no external matches can occur between cancel and re-place.
      */
-    private void processUpdate(DirectMatchingEngine engine, UpdateOrderCommand cmd, int marketId, long timestamp) {
+    private void processUpdate(MatchingEngine engine, UpdateOrderCommand cmd, int marketId, long timestamp) {
         long oldOrderId = cmd.getOrderId();
         long userId = cmd.getUserId();
         long newPrice = cmd.getPrice();
@@ -428,7 +494,7 @@ public class Engine {
     /**
      * Get matching engine for a market
      */
-    public DirectMatchingEngine getEngine(int marketId) {
+    public MatchingEngine getEngine(int marketId) {
         return engines.get(marketId);
     }
 
@@ -470,7 +536,7 @@ public class Engine {
     /**
      * Get all engines for snapshot
      */
-    public Int2ObjectHashMap<DirectMatchingEngine> getEngines() {
+    public Int2ObjectHashMap<MatchingEngine> getEngines() {
         return engines;
     }
 

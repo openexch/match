@@ -40,24 +40,42 @@ import java.util.Map;
  */
 public final class ScenarioRunner {
 
-    private Engine engine = new Engine();
+    private Engine engine;
     private final RecordingEventSink sink = new RecordingEventSink();
     private final LogicalClock clock = new LogicalClock();
     private int market = Engine.MARKET_BTC_USD;
     private long timerCorrelationId = 0L;
+    // Matching implementation to use; null = the flag-resolved default (production behavior).
+    private final String impl;
 
-    private ScenarioRunner() {
+    private ScenarioRunner(String impl) {
+        this.impl = impl;
+        this.engine = newEngine();
         engine.setEventPublisher(sink);
     }
 
-    /** Run a scenario file and return its canonical rendered output. */
-    public static String run(Path scenarioFile) throws IOException {
-        return runLines(Files.readAllLines(scenarioFile, StandardCharsets.UTF_8));
+    private Engine newEngine() {
+        return impl == null ? new Engine() : new Engine(impl);
     }
 
-    /** Run a scenario given as raw lines and return its canonical rendered output. */
+    /** Run a scenario file and return its canonical rendered output (flag-resolved impl). */
+    public static String run(Path scenarioFile) throws IOException {
+        return run(scenarioFile, null);
+    }
+
+    /** Run a scenario file through an explicit matching implementation ("array" | "direct"). */
+    public static String run(Path scenarioFile, String impl) throws IOException {
+        return runLines(Files.readAllLines(scenarioFile, StandardCharsets.UTF_8), impl);
+    }
+
+    /** Run a scenario given as raw lines and return its canonical rendered output (flag-resolved impl). */
     public static String runLines(List<String> lines) {
-        ScenarioRunner runner = new ScenarioRunner();
+        return runLines(lines, null);
+    }
+
+    /** Run a scenario given as raw lines through an explicit matching implementation. */
+    public static String runLines(List<String> lines, String impl) {
+        ScenarioRunner runner = new ScenarioRunner(impl);
         int lineNo = 0;
         for (String raw : lines) {
             lineNo++;
@@ -163,7 +181,7 @@ public final class ScenarioRunner {
         ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();
         int length = SnapshotCodec.serialize(engine, sink.getTradeIdGenerator(), timerCorrelationId, buffer);
 
-        Engine fresh = new Engine();
+        Engine fresh = newEngine();
         SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(buffer, 0, length, fresh);
         fresh.setEventPublisher(sink);
         sink.setTradeIdGenerator(decoded.tradeIdGenerator);

@@ -62,4 +62,4 @@ STATUS m=1 ts=1000 order=61 user=160 status=NEW rem=100000000 filled=0 px=600000
 STATUS m=1 ts=1000 order=62 user=161 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
 STATUS m=1 ts=1000 order=63 user=162 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
 STATUS m=1 ts=1000 order=64 user=163 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=65 user=200 status=REJECTED rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
+STATUS m=1 ts=1000 order=65 user=200 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0

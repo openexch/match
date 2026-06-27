@@ -1,6 +1,6 @@
 package com.match.infrastructure.websocket;
 
-import com.match.application.orderbook.DirectMatchingEngine;
+import com.match.application.orderbook.MatchingEngine;
 import com.match.application.publisher.MarketDataBroadcaster;
 import com.match.application.publisher.MarketEventHandler;
 import com.match.application.publisher.OrderStatusType;
@@ -38,6 +38,9 @@ public class MarketPublisher implements MarketEventHandler {
     private static final int ENCODE_BUFFER_SIZE = 256 * 1024;
     // Max order status entries per batch to prevent buffer overflow (~60 bytes each)
     private static final int MAX_ORDER_STATUS_PER_BATCH = 2000;
+    // Cap trades per encoded batch so a large burst (e.g. egress re-emission on a leader takeover)
+    // cannot overflow the fixed-size encodeBuffer. Mirrors MAX_ORDER_STATUS_PER_BATCH.
+    private static final int MAX_TRADE_EXEC_PER_BATCH = 2000;
     private final UnsafeBuffer encodeBuffer = new UnsafeBuffer(new byte[ENCODE_BUFFER_SIZE]);
 
     // Pre-allocated SBE encoders (reused, zero allocation)
@@ -56,7 +59,7 @@ public class MarketPublisher implements MarketEventHandler {
     private volatile MarketDataBroadcaster broadcaster;
 
     // Reference to matching engine for order book snapshots (set after construction)
-    private volatile com.match.application.orderbook.DirectMatchingEngine matchingEngine;
+    private volatile MatchingEngine matchingEngine;
 
     // Scheduler for 50ms periodic flush
     private ScheduledExecutorService scheduler;
@@ -191,7 +194,7 @@ public class MarketPublisher implements MarketEventHandler {
      * Set the matching engine reference for order book snapshots.
      * Called during startup wiring.
      */
-    public void setMatchingEngine(com.match.application.orderbook.DirectMatchingEngine engine) {
+    public void setMatchingEngine(MatchingEngine engine) {
         this.matchingEngine = engine;
     }
 
@@ -291,8 +294,8 @@ public class MarketPublisher implements MarketEventHandler {
 
         // Capture book version for correlation (read from both books)
         if (matchingEngine != null) {
-            long bidVersion = matchingEngine.getBidBook().getVersion();
-            long askVersion = matchingEngine.getAskBook().getVersion();
+            long bidVersion = matchingEngine.getBidVersion();
+            long askVersion = matchingEngine.getAskVersion();
             long maxVersion = Math.max(bidVersion, askVersion);
             if (maxVersion < bookVersionMin) bookVersionMin = maxVersion;
             if (maxVersion > bookVersionMax) bookVersionMax = maxVersion;
@@ -364,7 +367,7 @@ public class MarketPublisher implements MarketEventHandler {
         try {
             // Capture local references to volatile fields for null-safety
             final MarketDataBroadcaster localBroadcaster = broadcaster;
-            final DirectMatchingEngine localEngine = matchingEngine;
+            final MatchingEngine localEngine = matchingEngine;
 
             // Must have broadcaster configured (gateway caches state regardless of WebSocket clients)
             if (localBroadcaster == null) {
@@ -397,12 +400,18 @@ public class MarketPublisher implements MarketEventHandler {
 
             // Flush individual trade executions for OMS (TradeExecutionBatch)
             // Reliable path: OMS-bound settlement, must not be dropped under market-data load.
-            if (!tradeExecutionBuffer.isEmpty()) {
-                int length = encodeTradeExecutionBatch();
+            // Chunked (like order status) so a large trade burst cannot overflow encodeBuffer.
+            while (!tradeExecutionBuffer.isEmpty()) {
+                int batchSize = Math.min(tradeExecutionBuffer.size(), MAX_TRADE_EXEC_PER_BATCH);
+                int length = encodeTradeExecutionBatch(batchSize);
                 if (length > 0) {
                     localBroadcaster.broadcastReliable(encodeBuffer, 0, length);
                 }
-                tradeExecutionBuffer.clear();
+                if (batchSize >= tradeExecutionBuffer.size()) {
+                    tradeExecutionBuffer.clear();
+                } else {
+                    tradeExecutionBuffer.subList(0, batchSize).clear();
+                }
             }
 
             // Flush buffered order status updates as batch (SBE encoded)
@@ -522,7 +531,7 @@ public class MarketPublisher implements MarketEventHandler {
      * @param engine The captured matching engine reference (null-safe)
      * @return Encoded length, or 0 if no change
      */
-    private int encodeBookSnapshot(DirectMatchingEngine engine) {
+    private int encodeBookSnapshot(MatchingEngine engine) {
         // Collect top 20 levels (this is a read-only operation on engine arrays)
         engine.collectTopLevels(MAX_BOOK_LEVELS);
 
@@ -818,9 +827,8 @@ public class MarketPublisher implements MarketEventHandler {
      * Provides full per-trade details for OMS settlement.
      * @return Encoded length, or 0 if nothing to encode
      */
-    private int encodeTradeExecutionBatch() {
-        int tradeCount = tradeExecutionBuffer.size();
-        if (tradeCount == 0) {
+    private int encodeTradeExecutionBatch(int batchSize) {
+        if (batchSize == 0) {
             return 0;
         }
 
@@ -837,8 +845,9 @@ public class MarketPublisher implements MarketEventHandler {
             .timestamp(System.currentTimeMillis());
 
         // Encode trades group
-        TradeExecutionBatchEncoder.TradesEncoder tradesGroup = tradeExecutionBatchEncoder.tradesCount(tradeCount);
-        for (TradeExecutionEntry entry : tradeExecutionBuffer) {
+        TradeExecutionBatchEncoder.TradesEncoder tradesGroup = tradeExecutionBatchEncoder.tradesCount(batchSize);
+        for (int i = 0; i < batchSize; i++) {
+            TradeExecutionEntry entry = tradeExecutionBuffer.get(i);
             tradesGroup.next()
                 .tradeId(entry.tradeId)
                 .takerOrderId(entry.takerOrderId)

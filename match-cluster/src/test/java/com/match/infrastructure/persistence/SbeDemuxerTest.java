@@ -1,7 +1,7 @@
 package com.match.infrastructure.persistence;
 
 import com.match.application.engine.Engine;
-import com.match.application.orderbook.DirectMatchingEngine;
+import com.match.application.orderbook.MatchingEngine;
 import com.match.domain.FixedPoint;
 import com.match.infrastructure.generated.*;
 import org.agrona.concurrent.UnsafeBuffer;
@@ -80,7 +80,7 @@ public class SbeDemuxerTest {
 
         demuxer.dispatch(buffer, 0, len, System.nanoTime());
 
-        DirectMatchingEngine dme = engine.getEngine(1);
+        MatchingEngine dme = engine.getEngine(1);
         assertFalse("Bid side should have the order", dme.isBidEmpty());
     }
 
@@ -92,7 +92,7 @@ public class SbeDemuxerTest {
 
         demuxer.dispatch(buffer, 0, len, System.nanoTime());
 
-        DirectMatchingEngine dme = engine.getEngine(1);
+        MatchingEngine dme = engine.getEngine(1);
         assertFalse("Ask side should have the order", dme.isAskEmpty());
     }
 
@@ -105,7 +105,7 @@ public class SbeDemuxerTest {
 
         demuxer.dispatch(buffer, 0, len, System.nanoTime());
 
-        DirectMatchingEngine dme = engine.getEngine(1);
+        MatchingEngine dme = engine.getEngine(1);
         assertFalse("LIMIT_MAKER bid should appear when no ask to cross", dme.isBidEmpty());
     }
 
@@ -117,7 +117,7 @@ public class SbeDemuxerTest {
 
         demuxer.dispatch(buffer, 0, len, System.nanoTime());
 
-        DirectMatchingEngine dme = engine.getEngine(1);
+        MatchingEngine dme = engine.getEngine(1);
         assertFalse("LIMIT_MAKER ask should appear when no bid to cross", dme.isAskEmpty());
     }
 
@@ -129,7 +129,7 @@ public class SbeDemuxerTest {
         int len1 = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, bidPrice, bidQty, 0L);
         demuxer.dispatch(buffer, 0, len1, System.nanoTime());
 
-        DirectMatchingEngine dme = engine.getEngine(1);
+        MatchingEngine dme = engine.getEngine(1);
         assertFalse(dme.isBidEmpty());
 
         // Market sell should match the bid
@@ -170,7 +170,7 @@ public class SbeDemuxerTest {
         int len1 = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, price, qty, 0L);
         demuxer.dispatch(buffer, 0, len1, System.nanoTime());
 
-        DirectMatchingEngine dme = engine.getEngine(1);
+        MatchingEngine dme = engine.getEngine(1);
         assertFalse(dme.isBidEmpty());
 
         // Cancel it — the engine assigns orderId starting from 1
@@ -188,7 +188,7 @@ public class SbeDemuxerTest {
         int len1 = encodeCreateOrder(200L, 1, OrderSide.ASK, OrderType.LIMIT, price, qty, 0L);
         demuxer.dispatch(buffer, 0, len1, System.nanoTime());
 
-        DirectMatchingEngine dme = engine.getEngine(1);
+        MatchingEngine dme = engine.getEngine(1);
         assertFalse(dme.isAskEmpty());
 
         long orderId = engine.getOrderIdGenerator() - 1;
@@ -253,7 +253,7 @@ public class SbeDemuxerTest {
 
     @Test
     public void allOrderTypesBidSide() {
-        DirectMatchingEngine dme = engine.getEngine(1);
+        MatchingEngine dme = engine.getEngine(1);
 
         // LIMIT bid
         long p = FixedPoint.fromDouble(55000.0);
@@ -272,7 +272,7 @@ public class SbeDemuxerTest {
 
     @Test
     public void allOrderTypesAskSide() {
-        DirectMatchingEngine dme = engine.getEngine(1);
+        MatchingEngine dme = engine.getEngine(1);
 
         // LIMIT ask
         long p = FixedPoint.fromDouble(70000.0);
@@ -290,7 +290,7 @@ public class SbeDemuxerTest {
 
     @Test
     public void marketBuyWithBudgetConsumesAsk() {
-        DirectMatchingEngine dme = engine.getEngine(1);
+        MatchingEngine dme = engine.getEngine(1);
 
         // Place an ask first
         long askPrice = FixedPoint.fromDouble(60000.0);

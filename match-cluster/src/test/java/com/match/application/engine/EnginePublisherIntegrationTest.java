@@ -46,6 +46,13 @@ public class EnginePublisherIntegrationTest {
 
     // ==================== Helpers ====================
 
+    /** Build an engine with an explicit matching implementation, wired to the shared publisher. */
+    private Engine engineWith(String impl) {
+        Engine e = new Engine(impl);
+        e.setEventPublisher(publisher);
+        return e;
+    }
+
     private CreateOrderCommand limitCmd(long userId, OrderSide side, double price, double qty) {
         CreateOrderCommand cmd = new CreateOrderCommand();
         cmd.setUserId(userId);
@@ -316,6 +323,8 @@ public class EnginePublisherIntegrationTest {
 
     @Test
     public void limitOrderLevelFullPublishesRejected() throws Exception {
+        // The 64-orders-per-level cap is a direct-index-book behavior; pin to that impl.
+        Engine engine = engineWith("direct");
         // Fill the $60,000 bid level to capacity (64 orders)
         for (int i = 0; i < 64; i++) {
             engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(100L + i, OrderSide.BID, 60_000.0, 1.0), System.nanoTime());
@@ -334,6 +343,40 @@ public class EnginePublisherIntegrationTest {
     }
 
     @Test
+    public void limitOrderBookFullPublishesRejected() throws Exception {
+        // Array-backed equivalent: no per-level cap, but a loud BOOK_FULL when the shared pool is
+        // exhausted. Same Engine terminal-status path (restReason != NONE -> REJECTED), reached via
+        // the array book. Tiny capacity so the pool fills in a handful of orders.
+        String prev = System.getProperty("match.engine.book.capacity");
+        System.setProperty("match.engine.book.capacity", "4");
+        try {
+            Engine engine = engineWith("array");
+            // Fill the bid pool (capacity 4) at distinct prices — proves it is a book-wide bound,
+            // not a per-level one.
+            for (int i = 0; i < 4; i++) {
+                engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(100L + i, OrderSide.BID, 60_000.0 + i, 1.0), System.nanoTime());
+            }
+            waitForEvents();
+            handler.events.clear();
+
+            // One more bid cannot rest (pool exhausted) -> REJECTED, never phantom NEW.
+            engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(200L, OrderSide.BID, 60_010.0, 1.0), System.nanoTime());
+            waitForEvents();
+
+            List<CapturedEvent> statuses = findByType(PublishEventType.ORDER_STATUS_UPDATE);
+            assertFalse("Should have order status", statuses.isEmpty());
+            assertEquals("Order beyond pool capacity must be REJECTED",
+                OrderStatusType.REJECTED, statuses.get(0).orderStatus);
+        } finally {
+            if (prev == null) {
+                System.clearProperty("match.engine.book.capacity");
+            } else {
+                System.setProperty("match.engine.book.capacity", prev);
+            }
+        }
+    }
+
+    @Test
     public void limitMakerOutOfRangePublishesRejected() throws Exception {
         engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitMakerCmd(100L, OrderSide.BID, 200_000.0, 1.0), System.nanoTime());
         waitForEvents();
@@ -348,6 +391,8 @@ public class EnginePublisherIntegrationTest {
 
     @Test
     public void partialFillThenLevelFullPublishesCancelled() throws Exception {
+        // The 64-orders-per-level cap is a direct-index-book behavior; pin to that impl.
+        Engine engine = engineWith("direct");
         // Construct the edge state directly: a resting ask at $61,000 AND a full
         // bid level at $61,000 (reachable in production via snapshot restore).
         var market = engine.getEngine(MARKET_ID);

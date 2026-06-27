@@ -1,7 +1,7 @@
 package com.match.infrastructure.persistence;
 
 import com.match.application.engine.Engine;
-import com.match.application.orderbook.DirectMatchingEngine;
+import com.match.application.orderbook.MatchingEngine;
 import org.agrona.DirectBuffer;
 import org.agrona.MutableDirectBuffer;
 import org.agrona.collections.Int2ObjectHashMap;
@@ -86,16 +86,16 @@ public final class SnapshotCodec {
         dst.putLong(pos, tradeIdGenerator);
         pos += 8;
 
-        final Int2ObjectHashMap<DirectMatchingEngine> engines = engine.getEngines();
+        final Int2ObjectHashMap<MatchingEngine> engines = engine.getEngines();
         dst.putInt(pos, engines.size());
         pos += 4;
 
         // Iterate exactly as the historical inline encoder did — market order is part of the
         // byte format and must stay stable for byte-identical snapshots.
-        final Int2ObjectHashMap<DirectMatchingEngine>.KeyIterator keyIt = engines.keySet().iterator();
+        final Int2ObjectHashMap<MatchingEngine>.KeyIterator keyIt = engines.keySet().iterator();
         while (keyIt.hasNext()) {
             final int marketId = keyIt.nextInt();
-            final DirectMatchingEngine matchingEngine = engines.get(marketId);
+            final MatchingEngine matchingEngine = engines.get(marketId);
 
             dst.putInt(pos, marketId);
             pos += 4;
@@ -152,7 +152,7 @@ public final class SnapshotCodec {
             final int marketId = src.getInt(pos);
             pos += 4;
 
-            final DirectMatchingEngine matchingEngine = engine.getEngine(marketId);
+            final MatchingEngine matchingEngine = engine.getEngine(marketId);
             if (matchingEngine == null) {
                 // Unknown market in this build — skip its bytes to keep parsing aligned.
                 final int numBidOrders = src.getInt(pos);

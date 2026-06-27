@@ -1,6 +1,6 @@
 package com.match.application.engine;
 
-import com.match.application.orderbook.DirectMatchingEngine;
+import com.match.application.orderbook.MatchingEngine;
 import com.match.domain.FixedPoint;
 import com.match.domain.commands.CancelOrderCommand;
 import com.match.domain.commands.CreateOrderCommand;
@@ -103,7 +103,7 @@ public class EngineTest {
 
     @Test
     public void testGetEngines_ReturnsAllEngines() {
-        Int2ObjectHashMap<DirectMatchingEngine> engines = engine.getEngines();
+        Int2ObjectHashMap<MatchingEngine> engines = engine.getEngines();
         assertNotNull(engines);
         assertEquals(MarketConfig.ALL_MARKETS.length, engines.size());
     }
@@ -115,7 +115,7 @@ public class EngineTest {
         CreateOrderCommand cmd = createLimitCmd(100, OrderSide.BID, 100000.0, 1.0);
         engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE, cmd, System.nanoTime());
 
-        DirectMatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
+        MatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
         assertFalse(btcEngine.isBidEmpty());
         assertTrue(btcEngine.isAskEmpty());
     }
@@ -125,7 +125,7 @@ public class EngineTest {
         CreateOrderCommand cmd = createLimitCmd(100, OrderSide.ASK, 100000.0, 1.0);
         engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE, cmd, System.nanoTime());
 
-        DirectMatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
+        MatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
         assertTrue(btcEngine.isBidEmpty());
         assertFalse(btcEngine.isAskEmpty());
     }
@@ -142,7 +142,7 @@ public class EngineTest {
         CreateOrderCommand bidCmd = createLimitCmd(101, OrderSide.BID, 100000.0, 1.0);
         engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE, bidCmd, System.nanoTime());
 
-        DirectMatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
+        MatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
         // Both sides should be empty after full match
         assertTrue(btcEngine.isAskEmpty());
         assertTrue(btcEngine.isBidEmpty());
@@ -158,7 +158,7 @@ public class EngineTest {
         CreateOrderCommand bidCmd = createLimitCmd(101, OrderSide.BID, 100000.0, 3.0);
         engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE, bidCmd, System.nanoTime());
 
-        DirectMatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
+        MatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
         // Ask should still have remaining, bid consumed
         assertFalse(btcEngine.isAskEmpty());
         assertTrue(btcEngine.isBidEmpty());
@@ -176,7 +176,7 @@ public class EngineTest {
         CreateOrderCommand marketCmd = createMarketBuyCmd(101, 100000.0);
         engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE, marketCmd, System.nanoTime());
 
-        DirectMatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
+        MatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
         // Ask should still have 1 remaining
         assertFalse(btcEngine.isAskEmpty());
     }
@@ -191,7 +191,7 @@ public class EngineTest {
         CreateOrderCommand marketCmd = createMarketSellCmd(101, 3.0);
         engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE, marketCmd, System.nanoTime());
 
-        DirectMatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
+        MatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
         // Bid should still have 2 remaining
         assertFalse(btcEngine.isBidEmpty());
     }
@@ -202,7 +202,7 @@ public class EngineTest {
         CreateOrderCommand marketCmd = createMarketSellCmd(101, 5.0);
         engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE, marketCmd, System.nanoTime());
 
-        DirectMatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
+        MatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
         assertTrue(btcEngine.isBidEmpty());
         assertTrue(btcEngine.isAskEmpty());
     }
@@ -215,7 +215,7 @@ public class EngineTest {
         CreateOrderCommand cmd = createLimitMakerCmd(100, OrderSide.BID, 100000.0, 1.0);
         engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE, cmd, System.nanoTime());
 
-        DirectMatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
+        MatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
         assertFalse(btcEngine.isBidEmpty());
     }
 
@@ -229,7 +229,7 @@ public class EngineTest {
         CreateOrderCommand makerCmd = createLimitMakerCmd(101, OrderSide.BID, 100000.0, 1.0);
         engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE, makerCmd, System.nanoTime());
 
-        DirectMatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
+        MatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
         // Bid should still be empty (order rejected)
         assertTrue(btcEngine.isBidEmpty());
         // Ask should still have the original order
@@ -246,7 +246,7 @@ public class EngineTest {
         CreateOrderCommand makerCmd = createLimitMakerCmd(101, OrderSide.ASK, 100000.0, 1.0);
         engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE, makerCmd, System.nanoTime());
 
-        DirectMatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
+        MatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
         assertFalse(btcEngine.isAskEmpty());
         assertFalse(btcEngine.isBidEmpty());
     }
@@ -261,7 +261,7 @@ public class EngineTest {
         CreateOrderCommand makerCmd = createLimitMakerCmd(101, OrderSide.ASK, 100000.0, 1.0);
         engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE, makerCmd, System.nanoTime());
 
-        DirectMatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
+        MatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
         assertTrue(btcEngine.isAskEmpty()); // rejected
         assertFalse(btcEngine.isBidEmpty()); // original bid still there
     }
@@ -275,7 +275,7 @@ public class EngineTest {
         long startId = engine.getOrderIdGenerator();
         engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE, createCmd, System.nanoTime());
 
-        DirectMatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
+        MatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
         assertFalse(btcEngine.isBidEmpty());
 
         // Cancel using the generated order ID

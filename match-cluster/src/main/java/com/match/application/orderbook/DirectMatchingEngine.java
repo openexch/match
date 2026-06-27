@@ -8,7 +8,7 @@ import com.match.domain.FixedPoint;
  *
  * Achieves sub-microsecond matching for typical orders.
  */
-public class DirectMatchingEngine {
+public class DirectMatchingEngine implements MatchingEngine {
 
     // Match result storage - pre-allocated
     private static final int MAX_MATCHES_PER_ORDER = 10_000;
@@ -298,6 +298,16 @@ public class DirectMatchingEngine {
         return bidBook.getBestPrice();
     }
 
+    /** Monotonic version of the bid book (memory barrier for cross-thread readers). */
+    public long getBidVersion() {
+        return bidBook.getVersion();
+    }
+
+    /** Monotonic version of the ask book (memory barrier for cross-thread readers). */
+    public long getAskVersion() {
+        return askBook.getVersion();
+    }
+
     public boolean isAskEmpty() {
         return askBook.isEmpty();
     }
@@ -334,6 +344,14 @@ public class DirectMatchingEngine {
      *
      * @param maxLevels Maximum levels to collect (up to 20)
      */
+    /**
+     * No-op: the preallocated direct-index book is positionally stable, so the flush thread reads
+     * it safely in {@link #collectTopLevels} without a writer-published snapshot.
+     */
+    public void publishTopOfBook() {
+        // intentionally empty
+    }
+
     public void collectTopLevels(int maxLevels) {
         synchronized (snapshotLock) {
             int levels = Math.min(maxLevels, MAX_PUBLISH_LEVELS);
