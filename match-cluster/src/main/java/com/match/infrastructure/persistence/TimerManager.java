@@ -108,6 +108,18 @@ public class TimerManager
     }
 
     /**
+     * Number of timer events that fired for a correlation id with no registered runnable
+     * (diagnostic only — see match#25). A climbing count on the leader means a fired timer
+     * found no handler, e.g. a flush-chain timer whose runnable was not restored after a
+     * recover-into-leader — which would silently kill the self-rescheduling flush chain.
+     * @return the cumulative unknown-timer count
+     */
+    public long getUnknownTimerCount()
+    {
+        return unknownTimerCount;
+    }
+
+    /**
      * Sets the correlation id counter (restored from snapshot)
      * @param correlationId the correlation id to restore
      */

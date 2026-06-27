@@ -163,6 +163,20 @@ public class AppClusteredService implements ClusteredService {
                 // Don't clear the queues — initial book snapshots / OMS settlement egress may be
                 // waiting for a gateway to connect. Both queues are bounded so this won't grow
                 // unbounded; the gateway uses the latest snapshot and re-reads egress on (re)connect.
+
+                // match#25 diag: queued egress with ZERO sessions to send to is the wedge
+                // signature (H2). Rate-limited so a genuinely sessionless cluster doesn't spam.
+                final int omsQ = omsEgressQueue.size();
+                final int mktQ = marketDataQueue.size();
+                if (omsQ > 0 || mktQ > 0) {
+                    final long now = System.currentTimeMillis();
+                    if (now - lastEmptyFlushDiagMs >= 2_000) {
+                        lastEmptyFlushDiagMs = now;
+                        System.out.println("EGRESS-DIAG flush-skipped: 0 sessions but queued omsQ="
+                                + omsQ + " mktQ=" + mktQ
+                                + " (role=" + (cluster != null ? cluster.role() : "null") + ")");
+                    }
+                }
                 return;
             }
 
@@ -255,9 +269,33 @@ public class AppClusteredService implements ClusteredService {
     private static final long ACTIVE_FLUSH_INTERVAL_MS = 10;
     private long lastActiveFlushMs = 0;
 
+    // --- match#25 egress-wedge diagnostics (logging-only; NO behavior change) ---
+    // These never touch replicated state, scheduling, or control flow — they only
+    // emit System.out lines so we can pin the EXACT failing condition after repeated
+    // switchovers (dead flush chain vs empty clientSessions vs queue overflow).
+    private static final long EGRESS_DIAG_INTERVAL_MS = 5_000;   // leader-health heartbeat cadence
+    private long lastEgressDiagMs = 0;
+    private long lastEmptyFlushDiagMs = 0;
+    private long flushTimerFireCount = 0;   // onFlushTimer fires observed while LEADER (chain-alive proxy)
+
+    // Fixed, reserved correlationId for the single egress flush timer (match#25 fix). The flush
+    // chain is the ONLY cluster timer in the system and it self-reschedules forever. Using a
+    // CONSTANT id (recognized by value in onTimerEvent) instead of TimerManager's monotonic counter
+    // means every node recognizes this timer deterministically after recover/replay — eliminating
+    // the cross-node correlationId desync that made a freshly-armed timer fire as "unknown" and
+    // silently killed the chain (the egress wedge). 1e12 is far above any value the counter could
+    // ever reach (~4/s) so it can never collide, even across a mixed-version rolling deploy.
+    private static final long FLUSH_TIMER_CORRELATION_ID = 1_000_000_000_000L;
+
     private void scheduleMarketDataFlush() {
-        long deadline = System.currentTimeMillis() + MARKET_DATA_FLUSH_INTERVAL_MS;
-        timerManager.scheduleTimer(deadline, this::onFlushTimer);
+        final long deadline = System.currentTimeMillis() + MARKET_DATA_FLUSH_INTERVAL_MS;
+        // Schedule the fixed-id flush timer DIRECTLY (not via the TimerManager counter/runnable map,
+        // whose un-snapshotted runnable map is exactly what desynced across switchovers). Rescheduling
+        // the same id is idempotent — at most one pending flush timer cluster-wide. No-op on followers.
+        cluster.idleStrategy().reset();
+        while (!cluster.scheduleTimer(FLUSH_TIMER_CORRELATION_ID, deadline)) {
+            cluster.idleStrategy().idle();
+        }
     }
 
     private void onFlushTimer() {
@@ -271,6 +309,22 @@ public class AppClusteredService implements ClusteredService {
                     && !clientSessions.getAllSessions().isEmpty()) {
                 sendEgressKeepWarm();
                 lastEgressSendMs = now;
+            }
+
+            // match#25 diag: leader-health heartbeat. The PRESENCE of this line confirms the
+            // flush chain is alive on the leader; if these lines STOP while a node is leader, the
+            // chain died (H1). sessions=0 with non-zero queues points at H2; climbing droppedOms/
+            // droppedMkt is H3; climbing unknownTimers means a fired timer lost its runnable.
+            flushTimerFireCount++;
+            if (now - lastEgressDiagMs >= EGRESS_DIAG_INTERVAL_MS) {
+                lastEgressDiagMs = now;
+                System.out.println("EGRESS-DIAG leader-health: sessions=" + clientSessions.getAllSessions().size()
+                        + " omsQ=" + omsEgressQueue.size() + " mktQ=" + marketDataQueue.size()
+                        + " droppedMkt=" + droppedMessages.get() + " droppedOms=" + droppedOmsEgress.get()
+                        + " unknownTimers=" + timerManager.getUnknownTimerCount()
+                        + " flushFires=" + flushTimerFireCount
+                        + " lastEgressAgeMs=" + (now - lastEgressSendMs)
+                        + " flushTimerScheduled=" + flushTimerScheduled);
             }
         }
         // Reschedule
@@ -414,14 +468,14 @@ public class AppClusteredService implements ClusteredService {
             }
         }
 
-        // Restore ONLY the timer correlation counter (so newly-armed timer ids stay
-        // monotonic); backward-compatible: old snapshots won't have this. Deliberately do
-        // NOT re-arm/restore the flush timer here. The flush timer is armed fresh once this
-        // node becomes LEADER (onRoleChange resets the flag; onSessionOpen/onSessionMessage
-        // arm it). Restoring it here used to leave flushTimerScheduled=true with a chain that
-        // never fired after a recover-into-leader, silently killing the egress keep-warm and
-        // causing gateway/OMS stale-egress reconnect loops. A stale pending timer that Aeron
-        // re-delivers simply logs one harmless "unknown timer" and does not reschedule.
+        // Read the legacy timer correlation counter for snapshot-format stability (older snapshots
+        // store it here). As of the match#25 fix it no longer drives the flush timer: the single
+        // egress flush timer uses a FIXED reserved correlationId (FLUSH_TIMER_CORRELATION_ID),
+        // recognized by value in onTimerEvent, so it re-arms deterministically (onRoleChange flag
+        // reset → onSessionOpen/onSessionMessage arm; the inherited pending fixed-id timer also
+        // continues the chain) and survives recover-into-leader WITHOUT the cross-node counter desync
+        // that used to silently kill it. A stray old-id timer re-delivered after recovery just routes
+        // to TimerManager and logs one harmless "unknown timer".
         if (pos + 8 <= length) {
             long timerCorrelationId = buffer.getLong(pos);
             pos += 8;
@@ -436,7 +490,8 @@ public class AppClusteredService implements ClusteredService {
     public void onSessionOpen(final ClientSession session, final long timestamp) {
         context.setClusterTime(timestamp);
         clientSessions.addSession(session);
-        System.out.println("New client session connected: " + session.id());
+        System.out.println("New client session connected: " + session.id()
+                + " (total sessions=" + clientSessions.getAllSessions().size() + ")");   // match#25 diag: track session count
 
         // A new session (gateway/OMS) needs full book state — trigger resnapshot.
         // Session open is a logged cluster event, so this is deterministic across
@@ -457,7 +512,8 @@ public class AppClusteredService implements ClusteredService {
     public void onSessionClose(final ClientSession session, final long timestamp, final CloseReason closeReason) {
         context.setClusterTime(timestamp);
         clientSessions.removeSession(session);
-        System.out.println("Client session closed: " + session.id() + " reason=" + closeReason);
+        System.out.println("Client session closed: " + session.id() + " reason=" + closeReason
+                + " (total sessions=" + clientSessions.getAllSessions().size() + ")");   // match#25 diag: track session count
     }
 
     @Override
@@ -520,6 +576,14 @@ public class AppClusteredService implements ClusteredService {
     @Override
     public void onTimerEvent(final long correlationId, final long timestamp) {
         context.setClusterTime(timestamp);
+        // match#25 fix: the egress flush timer is recognized by its FIXED reserved id, NOT via the
+        // TimerManager runnable map (which isn't restored on recovery — the desync source). This makes
+        // onFlushTimer fire deterministically on EVERY node after any recover/replay, so the chain
+        // cannot silently die. Any other timer id still routes through TimerManager.
+        if (correlationId == FLUSH_TIMER_CORRELATION_ID) {
+            onFlushTimer();
+            return;
+        }
         timerManager.onTimerEvent(correlationId, timestamp);
     }
 
@@ -666,7 +730,15 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onRoleChange(final Role newRole) {
-        System.out.println("SERVICE onRoleChange: " + newRole);
+        // match#25 diag: snapshot egress state at EVERY role transition (flushTimerScheduled read
+        // pre-reset). Lets us see, per switchover, whether sessions/queues/timer-state degrade.
+        System.out.println("SERVICE onRoleChange: " + newRole
+                + " [EGRESS-DIAG sessions=" + clientSessions.getAllSessions().size()
+                + " flushTimerScheduled(pre-reset)=" + flushTimerScheduled
+                + " omsQ=" + omsEgressQueue.size() + " mktQ=" + marketDataQueue.size()
+                + " droppedMkt=" + droppedMessages.get() + " droppedOms=" + droppedOmsEgress.get()
+                + " unknownTimers=" + timerManager.getUnknownTimerCount()
+                + " flushFires=" + flushTimerFireCount + "]");
         System.out.flush();
         // Always re-arm the flush timer chain on a role change. The chain is a
         // self-rescheduling cluster timer that only the LEADER schedules (a follower's
