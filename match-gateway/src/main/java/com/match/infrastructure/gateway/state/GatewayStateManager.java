@@ -38,6 +38,9 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
     // Reference to WebSocket for broadcasting to clients
     private volatile MarketDataWebSocket webSocket;
 
+    // Count of stale/duplicate book deltas dropped (switchover-seam dedup, match#19) — observability.
+    private final java.util.concurrent.atomic.AtomicLong staleDeltasDropped = new java.util.concurrent.atomic.AtomicLong(0);
+
     public void setWebSocket(MarketDataWebSocket webSocket) {
         this.webSocket = webSocket;
     }
@@ -97,6 +100,19 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
 
             // Get the order book for this market
             GatewayOrderBook orderBook = getOrCreateOrderBook(marketId);
+
+            // match#19: drop stale/duplicate deltas (old-leader or re-delivered egress across a
+            // leader-switchover seam) — they advance neither side's monotonic version, so applying
+            // (and forwarding) them would corrupt the displayed book / double-apply. The resnapshot
+            // (BookSnapshot) re-establishes the baseline, after which newer deltas apply normally.
+            if (orderBook.isStaleUpdate(bidVersion, askVersion)) {
+                long n = staleDeltasDropped.incrementAndGet();
+                if (n == 1 || n % 50 == 0) {
+                    logger.info("match#19 dedup: dropped " + n + " stale/duplicate book delta(s); market="
+                        + marketId + " incoming v=(" + bidVersion + "," + askVersion + ")");
+                }
+                return;
+            }
 
             // Convert changes to JSON array
             JsonArray changesArray = new JsonArray();
