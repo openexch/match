@@ -89,6 +89,15 @@ public class AppClusteredService implements ClusteredService {
     private final Queue<QueuedMessage> omsEgressQueue = new ArrayBlockingQueue<>(OMS_EGRESS_QUEUE_CAPACITY);
     private final AtomicLong droppedOmsEgress = new AtomicLong(0);
 
+    // The queues above are bounded by ENTRY COUNT, but each entry holds a copied batch buffer
+    // (up to ~150KB), so a count limit alone is NOT a memory bound — under a backed-up egress
+    // consumer (or while replaying a huge log) they can fill the heap and OOM the matching node.
+    // Also cap total queued BYTES. Incremented on offer, decremented on drain.
+    private static final long MARKET_DATA_MAX_BYTES = 32L << 20;  // 32 MB (UI data; lossy)
+    private static final long OMS_EGRESS_MAX_BYTES = 128L << 20;  // 128 MB (settlement; generous)
+    private final AtomicLong marketDataBytes = new AtomicLong(0);
+    private final AtomicLong omsEgressBytes = new AtomicLong(0);
+
     // Simple wrapper for queued SBE messages (holds copy of buffer content)
     private static final class QueuedMessage {
         final byte[] data;
@@ -124,12 +133,16 @@ public class AppClusteredService implements ClusteredService {
             byte[] copy = new byte[length];
             buffer.getBytes(offset, copy, 0, length);
 
-            if (!marketDataQueue.offer(new QueuedMessage(copy, length))) {
+            boolean queued = marketDataBytes.get() + length <= MARKET_DATA_MAX_BYTES
+                    && marketDataQueue.offer(new QueuedMessage(copy, length));
+            if (queued) {
+                marketDataBytes.addAndGet(length);
+            } else {
                 long dropped = droppedMessages.incrementAndGet();
                 if (dropped % 10000 == 1) {
-                    System.err.println("WARNING: Market data queue full! Dropped " + dropped +
-                        " total messages. Queue capacity: " + MARKET_DATA_QUEUE_CAPACITY +
-                        ". Clients may have stale data.");
+                    System.err.println("WARNING: Market data egress full (count or "
+                        + (MARKET_DATA_MAX_BYTES >> 20) + "MB byte budget)! Dropped " + dropped +
+                        " total messages. Clients may have stale data.");
                 }
             }
         }
@@ -142,14 +155,18 @@ public class AppClusteredService implements ClusteredService {
             byte[] copy = new byte[length];
             buffer.getBytes(offset, copy, 0, length);
 
-            if (!omsEgressQueue.offer(new QueuedMessage(copy, length))) {
+            boolean queued = omsEgressBytes.get() + length <= OMS_EGRESS_MAX_BYTES
+                    && omsEgressQueue.offer(new QueuedMessage(copy, length));
+            if (queued) {
+                omsEgressBytes.addAndGet(length);
+            } else {
                 long dropped = droppedOmsEgress.incrementAndGet();
-                // Should be unreachable in practice (large queue, drained before market data). If
-                // it ever fires, OMS may miss a fill/terminal status — alarm loudly (1st + every 1000th).
+                // Only under extreme sustained overload (the byte budget bounds heap, preventing OOM).
+                // Dropped settlement is recoverable via OMS reconciliation against the cluster log.
                 if (dropped == 1 || dropped % 1000 == 0) {
-                    System.err.println("CRITICAL: OMS egress queue full! Dropped " + dropped +
-                        " OMS-bound settlement message(s) (OrderStatus/TradeExecution). Capacity: " +
-                        OMS_EGRESS_QUEUE_CAPACITY + ". Holds/fills may be missed.");
+                    System.err.println("CRITICAL: OMS egress full (count or "
+                        + (OMS_EGRESS_MAX_BYTES >> 20) + "MB byte budget)! Dropped " + dropped +
+                        " OMS-bound settlement message(s). Recoverable via OMS reconciliation.");
                 }
             }
         }
@@ -180,17 +197,18 @@ public class AppClusteredService implements ClusteredService {
             }
 
             // Drain OMS-bound settlement egress FIRST (reliable, priority), then lossy UI market data.
-            boolean sentAny = drainQueue(omsEgressQueue, sessions);
-            sentAny |= drainQueue(marketDataQueue, sessions);
+            boolean sentAny = drainQueue(omsEgressQueue, omsEgressBytes, sessions);
+            sentAny |= drainQueue(marketDataQueue, marketDataBytes, sessions);
             if (sentAny) {
                 lastEgressSendMs = System.currentTimeMillis();
             }
         }
 
-        private boolean drainQueue(Queue<QueuedMessage> queue, List<ClientSession> sessions) {
+        private boolean drainQueue(Queue<QueuedMessage> queue, AtomicLong queuedBytes, List<ClientSession> sessions) {
             QueuedMessage msg;
             boolean sentAny = false;
             while ((msg = queue.poll()) != null) {
+                queuedBytes.addAndGet(-msg.length);
                 broadcastBuffer.putBytes(0, msg.data, 0, msg.length);
                 sentAny = true;
 
