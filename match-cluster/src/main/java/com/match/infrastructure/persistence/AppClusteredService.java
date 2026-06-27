@@ -403,87 +403,35 @@ public class AppClusteredService implements ClusteredService {
      * data, not individual fragments.
      */
     private void processSnapshotPayload(final DirectBuffer buf, final int offset, final int length) {
-        final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(length);
-        buffer.putBytes(0, buf, offset, length);
+        // Decode via the shared codec (same class that wrote the bytes in onTakeSnapshot).
+        // The codec restores the engine's order books + order-id generator in place and hands
+        // back the scalars we own externally.
+        final SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(buf, offset, length, engine);
 
-        int pos = 0;
+        eventPublisher.setTradeIdGenerator(decoded.tradeIdGenerator);
+        System.out.println("[SNAPSHOT] Restored OrderIdGenerator=" + decoded.orderIdGenerator
+                + " TradeIdGenerator=" + decoded.tradeIdGenerator);
 
-        // Read order ID generator
-        long orderIdGen = buffer.getLong(pos);
-        pos += 8;
-        engine.setOrderIdGenerator(orderIdGen);
-        System.out.println("[SNAPSHOT] Restored OrderIdGenerator: " + orderIdGen);
+        if (decoded.timerCorrelationIdPresent) {
+            // Legacy counter only — the egress flush timer uses a FIXED reserved correlationId
+            // (FLUSH_TIMER_CORRELATION_ID) recognized by value in onTimerEvent, so it re-arms
+            // deterministically (onRoleChange flag reset → onSessionOpen/onSessionMessage arm;
+            // the inherited pending fixed-id timer also continues the chain) and survives
+            // recover-into-leader WITHOUT the cross-node counter desync that used to silently
+            // kill it. A stray old-id timer re-delivered after recovery just routes to
+            // TimerManager and logs one harmless "unknown timer".
+            timerManager.setCorrelationId(decoded.timerCorrelationId);
+            System.out.println("[SNAPSHOT] Restored TimerCorrelationId (counter only): "
+                    + decoded.timerCorrelationId);
+        }
 
-        // Read trade ID generator (for event publisher)
-        long tradeIdGen = buffer.getLong(pos);
-        pos += 8;
-        eventPublisher.setTradeIdGenerator(tradeIdGen);
-        System.out.println("[SNAPSHOT] Restored TradeIdGenerator: " + tradeIdGen);
-
-        // Read number of markets
-        int numMarkets = buffer.getInt(pos);
-        pos += 4;
-        System.out.println("[SNAPSHOT] Restoring " + numMarkets + " markets");
-
-        for (int m = 0; m < numMarkets; m++) {
-            int marketId = buffer.getInt(pos);
-            pos += 4;
-
-            DirectMatchingEngine matchingEngine = engine.getEngine(marketId);
-            if (matchingEngine == null) {
-                System.out.println("[SNAPSHOT] WARNING: No engine for market " + marketId + ", skipping");
-                // Need to skip this market's data to continue parsing
-                int numBidOrders = buffer.getInt(pos);
-                pos += 4;
-                pos += numBidOrders * 4 * 8; // 4 longs per order
-                int numAskOrders = buffer.getInt(pos);
-                pos += 4;
-                pos += numAskOrders * 4 * 8;
-                continue;
-            }
-
-            // Read bid orders
-            int numBidOrders = buffer.getInt(pos);
-            pos += 4;
-            long[] bidOrders = new long[numBidOrders * 4];
-            for (int i = 0; i < bidOrders.length; i++) {
-                bidOrders[i] = buffer.getLong(pos);
-                pos += 8;
-            }
-
-            // Read ask orders
-            int numAskOrders = buffer.getInt(pos);
-            pos += 4;
-            long[] askOrders = new long[numAskOrders * 4];
-            for (int i = 0; i < askOrders.length; i++) {
-                askOrders[i] = buffer.getLong(pos);
-                pos += 8;
-            }
-
-            int rejected = matchingEngine.restoreFromSnapshot(bidOrders, askOrders);
-            System.out.println("[SNAPSHOT] Market " + marketId + ": restored " + numBidOrders + " bids, " + numAskOrders + " asks");
-            if (rejected > 0) {
-                System.err.println("[SNAPSHOT] ERROR: Market " + marketId + ": " + rejected
+        if (decoded.rejectedOrders > 0) {
+            System.err.println("[SNAPSHOT] ERROR: " + decoded.rejectedOrders
                     + " orders DROPPED during restore (geometry mismatch?) — state loss!");
-            }
         }
 
-        // Read the legacy timer correlation counter for snapshot-format stability (older snapshots
-        // store it here). As of the match#25 fix it no longer drives the flush timer: the single
-        // egress flush timer uses a FIXED reserved correlationId (FLUSH_TIMER_CORRELATION_ID),
-        // recognized by value in onTimerEvent, so it re-arms deterministically (onRoleChange flag
-        // reset → onSessionOpen/onSessionMessage arm; the inherited pending fixed-id timer also
-        // continues the chain) and survives recover-into-leader WITHOUT the cross-node counter desync
-        // that used to silently kill it. A stray old-id timer re-delivered after recovery just routes
-        // to TimerManager and logs one harmless "unknown timer".
-        if (pos + 8 <= length) {
-            long timerCorrelationId = buffer.getLong(pos);
-            pos += 8;
-            timerManager.setCorrelationId(timerCorrelationId);
-            System.out.println("[SNAPSHOT] Restored TimerCorrelationId (counter only): " + timerCorrelationId);
-        }
-
-        System.out.println("[SNAPSHOT] Snapshot load complete. Processed " + pos + " bytes of " + length);
+        System.out.println("[SNAPSHOT] Snapshot load complete. Consumed "
+                + decoded.bytesConsumed + " bytes of " + length);
     }
 
     @Override
@@ -591,69 +539,20 @@ public class AppClusteredService implements ClusteredService {
     public void onTakeSnapshot(final ExclusivePublication snapshotPublication) {
         System.out.println("[SNAPSHOT] onTakeSnapshot called");
 
+        // Serialize engine state via the shared codec. SnapshotCodec is the single source of
+        // truth for the snapshot byte layout — the same class decodes it on recovery, so encode
+        // and decode can never drift. Byte format is identical to the historical inline encoder.
         final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();
-        int pos = 0;
+        final long orderId = engine.getOrderIdGenerator();
+        final long tradeId = eventPublisher.getTradeIdGenerator();
+        final long timerCorrelationId = timerManager.getCorrelationId();
+        final int pos = SnapshotCodec.serialize(engine, tradeId, timerCorrelationId, buffer);
 
-        // Write order ID generator
-        long orderId = engine.getOrderIdGenerator();
-        buffer.putLong(pos, orderId);
-        pos += 8;
-        System.out.println("[SNAPSHOT] OrderIdGenerator: " + orderId);
-
-        // Write trade ID generator (for event publisher)
-        long tradeId = eventPublisher.getTradeIdGenerator();
-        buffer.putLong(pos, tradeId);
-        pos += 8;
-        System.out.println("[SNAPSHOT] TradeIdGenerator: " + tradeId);
-
-        // Get all engines
-        Int2ObjectHashMap<DirectMatchingEngine> engines = engine.getEngines();
-
-        // Write number of markets
-        buffer.putInt(pos, engines.size());
-        pos += 4;
-        System.out.println("[SNAPSHOT] Markets: " + engines.size());
-
-        // Write each market's orders
-        Int2ObjectHashMap<DirectMatchingEngine>.KeyIterator keyIt = engines.keySet().iterator();
-        while (keyIt.hasNext()) {
-            int marketId = keyIt.nextInt();
-            DirectMatchingEngine matchingEngine = engines.get(marketId);
-
-            // Write market ID
-            buffer.putInt(pos, marketId);
-            pos += 4;
-
-            // Get and write bid orders
-            long[] bidOrders = matchingEngine.getBidOrders();
-            int numBidOrders = bidOrders.length / 4;
-            buffer.putInt(pos, numBidOrders);
-            pos += 4;
-            for (long value : bidOrders) {
-                buffer.putLong(pos, value);
-                pos += 8;
-            }
-
-            // Get and write ask orders
-            long[] askOrders = matchingEngine.getAskOrders();
-            int numAskOrders = askOrders.length / 4;
-            buffer.putInt(pos, numAskOrders);
-            pos += 4;
-            for (long value : askOrders) {
-                buffer.putLong(pos, value);
-                pos += 8;
-            }
-
-            System.out.println("[SNAPSHOT] Market " + marketId + ": " + numBidOrders + " bids, " + numAskOrders + " asks");
-        }
-
-        // Write timer correlation ID (for replay timer chain continuity)
-        long timerCorrelationId = timerManager.getCorrelationId();
-        buffer.putLong(pos, timerCorrelationId);
-        pos += 8;
-        System.out.println("[SNAPSHOT] TimerCorrelationId: " + timerCorrelationId);
-
-        System.out.println("[SNAPSHOT] Total buffer size: " + pos + " bytes");
+        System.out.println("[SNAPSHOT] OrderIdGenerator=" + orderId
+                + " TradeIdGenerator=" + tradeId
+                + " markets=" + engine.getEngines().size()
+                + " TimerCorrelationId=" + timerCorrelationId
+                + " totalBytes=" + pos);
 
         // Bounded retry — a wedged snapshot publication used to spin forever, masking the
         // problem. 30s wall-clock is generous (cluster timeouts are seconds, not minutes).

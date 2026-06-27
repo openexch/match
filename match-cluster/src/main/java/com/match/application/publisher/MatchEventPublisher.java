@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 2. Call publish* methods from matching engine after each match
  * 3. Call shutdown() during graceful shutdown
  */
-public class MatchEventPublisher {
+public class MatchEventPublisher implements MatchEventSink {
 
     private static final Logger logger = Logger.getLogger(MatchEventPublisher.class);
 

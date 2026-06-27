@@ -1,0 +1,7 @@
+# Place a bid (order 1), update it to a higher price (cancel order 1 + re-place as order 2),
+# then an ask matches the updated order.
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=100 side=BID type=LIMIT px=60000.0 qty=1.0
+UPDATE u=100 order=1 side=BID px=61000.0 qty=1.0
+CREATE u=200 side=ASK type=LIMIT px=61000.0 qty=1.0

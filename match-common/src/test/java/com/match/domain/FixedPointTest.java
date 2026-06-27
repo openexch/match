@@ -185,4 +185,68 @@ public class FixedPointTest {
         // Should not crash; result should be approximately a * 4
         assertTrue("128-bit multiply should produce a result", result != 0);
     }
+
+    // ==================== Determinism & tick-boundary exactness ====================
+
+    @Test
+    public void testFromDoubleExactAtUsedTickBoundaries() {
+        // The matching engine's correctness depends on these being EXACT (e.g. off-tick rejection).
+        assertEquals(6_000_000_000_000L, FixedPoint.fromDouble(60_000.0));
+        assertEquals(6_000_050_000_000L, FixedPoint.fromDouble(60_000.50));
+        assertEquals(20_000_000_000_000L, FixedPoint.fromDouble(200_000.0));
+        assertEquals(50_000_000L, FixedPoint.fromDouble(0.5));
+        assertEquals(25_000_000L, FixedPoint.fromDouble(0.25));
+        assertEquals(1L, FixedPoint.fromDouble(0.00000001)); // one satoshi / smallest unit
+    }
+
+    @Test
+    public void testFromDoubleRoundsHalfUpDeterministically() {
+        // 0.000000005 * 1e8 = 0.5 → Math.round → 1; 0.000000004 → 0.4 → 0
+        assertEquals(1L, FixedPoint.fromDouble(0.000000005));
+        assertEquals(0L, FixedPoint.fromDouble(0.000000004));
+    }
+
+    @Test
+    public void testRoundTripStableInFinancialRange() {
+        long[] vals = {
+            FixedPoint.fromDouble(0.5), FixedPoint.fromDouble(60_000.0),
+            FixedPoint.fromDouble(3_000.0), FixedPoint.fromDouble(0.00000001),
+            FixedPoint.fromDouble(149_999.99)
+        };
+        for (long fp : vals) {
+            assertEquals("round-trip fromDouble(toDouble(x)) must be exact in financial range",
+                fp, FixedPoint.fromDouble(FixedPoint.toDouble(fp)));
+        }
+    }
+
+    @Test
+    public void testMultiplyCommutativeInSafeRange() {
+        // multiply() is commutative when BOTH operands are within MAX_SAFE_VALUE (the fast path).
+        // KNOWN LIMITATION: it is NOT commutative when one operand exceeds MAX_SAFE_VALUE (~$920 in
+        // fixed point), because the fast-path guard (FixedPoint.java) checks only the FIRST operand:
+        // multiply(smallQty, largePrice) can overflow the intermediate product while
+        // multiply(largePrice, smallQty) takes the overflow-safe path. Callers must pass the large
+        // operand (price) first. Tracked as a follow-up; this test pins the safe-range guarantee.
+        long[][] pairs = {
+            {FixedPoint.fromDouble(100.0), FixedPoint.fromDouble(0.5)},
+            {FixedPoint.fromDouble(50.0),  FixedPoint.fromDouble(2.0)},
+            {FixedPoint.fromDouble(0.001), FixedPoint.fromDouble(7.0)}
+        };
+        for (long[] p : pairs) {
+            assertTrue("precondition: both operands within MAX_SAFE_VALUE",
+                Math.abs(p[0]) <= FixedPoint.MAX_SAFE_VALUE && Math.abs(p[1]) <= FixedPoint.MAX_SAFE_VALUE);
+            assertEquals("multiply must be order-independent within the safe range",
+                FixedPoint.multiply(p[0], p[1]), FixedPoint.multiply(p[1], p[0]));
+        }
+    }
+
+    @Test
+    public void testFromDoubleMonotonicAcrossTicks() {
+        long prev = Long.MIN_VALUE;
+        for (double d = 50_000.0; d <= 60_000.0; d += 0.5) {
+            long fp = FixedPoint.fromDouble(d);
+            assertTrue("fromDouble must be strictly monotonic across ticks", fp > prev);
+            prev = fp;
+        }
+    }
 }

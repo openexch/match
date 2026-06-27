@@ -1,0 +1,6 @@
+# Off-tick ($60,000.50 on a $1 tick) and out-of-range ($200,000 above the $150k ceiling) limits
+# are loudly REJECTED — never silently rounded or rested.
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=100 side=BID type=LIMIT px=60000.50 qty=1.0
+CREATE u=101 side=BID type=LIMIT px=200000.0 qty=1.0

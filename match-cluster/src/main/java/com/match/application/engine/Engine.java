@@ -2,7 +2,7 @@ package com.match.application.engine;
 
 import com.match.application.orderbook.DirectMatchingEngine;
 import com.match.application.orderbook.OrderRejectReason;
-import com.match.application.publisher.MatchEventPublisher;
+import com.match.application.publisher.MatchEventSink;
 import com.match.application.publisher.OrderStatusType;
 import com.match.domain.FixedPoint;
 import com.match.domain.commands.CancelOrderCommand;
@@ -31,8 +31,9 @@ public class Engine {
     // Atomic order ID generator
     private final AtomicLong orderIdGenerator = new AtomicLong(1);
 
-    // Event publisher (optional - set via setEventPublisher)
-    private MatchEventPublisher eventPublisher;
+    // Event sink (optional - set via setEventPublisher). Interface, not the concrete
+    // MatchEventPublisher, so matching output can be captured synchronously in tests.
+    private MatchEventSink eventPublisher;
 
     // Maps cluster orderId → omsOrderId for maker order correlation in trade executions
     // When a maker order is on the book, we need to look up its omsOrderId when it matches
@@ -439,14 +440,14 @@ public class Engine {
      * Set the event publisher for broadcasting matches and order updates.
      * Call this during startup before processing orders.
      */
-    public void setEventPublisher(MatchEventPublisher publisher) {
+    public void setEventPublisher(MatchEventSink publisher) {
         this.eventPublisher = publisher;
     }
 
     /**
-     * Get the event publisher (for testing/monitoring).
+     * Get the event sink (for testing/monitoring).
      */
-    public MatchEventPublisher getEventPublisher() {
+    public MatchEventSink getEventPublisher() {
         return eventPublisher;
     }
 

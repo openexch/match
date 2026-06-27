@@ -1,0 +1,5 @@
+# Resting ask 1.0 @ 60000; a MARKET buy with a $60000 budget fully fills.
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=100 side=ASK type=LIMIT px=60000.0 qty=1.0
+CREATE u=200 side=BID type=MARKET budget=60000.0

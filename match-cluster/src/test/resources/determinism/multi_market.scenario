@@ -1,0 +1,11 @@
+# Interleaved orders across BTC, ETH and SOL. Synchronous capture (the MatchEventSink seam)
+# yields a single deterministic global event order across markets. Order IDs are global.
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=100 side=BID type=LIMIT px=60000.0 qty=1.0
+MARKET ETH_USD
+CREATE u=200 side=ASK type=LIMIT px=3000.0 qty=2.0
+MARKET SOL_USD
+CREATE u=300 side=BID type=LIMIT px=200.0 qty=10.0
+MARKET ETH_USD
+CREATE u=201 side=BID type=LIMIT px=3000.0 qty=2.0

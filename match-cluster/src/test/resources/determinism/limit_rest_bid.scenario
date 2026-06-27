@@ -1,0 +1,4 @@
+# A single limit bid with no opposing liquidity rests on the book (NEW).
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=100 side=BID type=LIMIT px=60000.0 qty=1.0

@@ -1,0 +1,5 @@
+# Place a resting bid (order 1), then cancel it. NEW then CANCELLED.
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=100 side=BID type=LIMIT px=60000.0 qty=1.0
+CANCEL u=100 order=1

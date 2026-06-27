@@ -1,0 +1,4 @@
+# MARKET buy on an empty book → REJECTED (no liquidity). No phantom fill.
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=200 side=BID type=MARKET budget=60000.0

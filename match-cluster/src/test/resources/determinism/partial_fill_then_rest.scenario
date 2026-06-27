@@ -1,0 +1,5 @@
+# Ask 0.5; bid 1.0 fills 0.5 against it and rests the remaining 0.5 (PARTIALLY_FILLED).
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=100 side=ASK type=LIMIT px=60000.0 qty=0.5
+CREATE u=200 side=BID type=LIMIT px=60000.0 qty=1.0

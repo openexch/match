@@ -1,0 +1,10 @@
+# Partial fill, then a SNAPSHOT round-trip (a simulated restart into a fresh engine), then
+# complete the fill across the restart. The event stream and IDs must be continuous — proving
+# snapshot/restore is invisible to subsequent matching. (EngineSnapshotReplayTest proves the
+# programmatic with/without-snapshot equivalence.)
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=100 side=ASK type=LIMIT px=60000.0 qty=1.0
+CREATE u=200 side=BID type=LIMIT px=60000.0 qty=0.5
+SNAPSHOT
+CREATE u=201 side=BID type=LIMIT px=60000.0 qty=0.5

@@ -1,0 +1,6 @@
+# LIMIT_MAKER that does not cross rests (NEW); one that would cross the spread is REJECTED.
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=100 side=ASK type=LIMIT px=70000.0 qty=1.0
+CREATE u=200 side=BID type=LIMIT_MAKER px=60000.0 qty=1.0
+CREATE u=300 side=BID type=LIMIT_MAKER px=70000.0 qty=1.0

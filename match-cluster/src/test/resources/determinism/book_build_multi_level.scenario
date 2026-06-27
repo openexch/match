@@ -1,0 +1,8 @@
+# Build several price levels on both sides; all rest (NEW), no matches.
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=100 side=BID type=LIMIT px=60000.0 qty=1.0
+CREATE u=101 side=BID type=LIMIT px=59000.0 qty=2.0
+CREATE u=102 side=BID type=LIMIT px=58000.0 qty=3.0
+CREATE u=200 side=ASK type=LIMIT px=61000.0 qty=1.5
+CREATE u=201 side=ASK type=LIMIT px=62000.0 qty=2.5

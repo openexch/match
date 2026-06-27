@@ -1,0 +1,7 @@
+# Asks at three ascending prices; a large bid sweeps all three → three trades, taker FILLED.
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=100 side=ASK type=LIMIT px=60000.0 qty=1.0
+CREATE u=101 side=ASK type=LIMIT px=60500.0 qty=1.0
+CREATE u=102 side=ASK type=LIMIT px=61000.0 qty=1.0
+CREATE u=200 side=BID type=LIMIT px=61000.0 qty=3.0

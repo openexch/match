@@ -10,7 +10,7 @@
 #
 # ==================================================================
 
-.PHONY: install install-deps optimize-os help build build-java build-cluster build-gateway build-loadtest sbe os-check
+.PHONY: install install-deps optimize-os help build build-java build-cluster build-gateway build-loadtest sbe os-check determinism update-goldens durability
 
 # ==================== CONFIGURATION ====================
 PROJECT_DIR := $(shell pwd)
@@ -152,6 +152,20 @@ os-check:
 	@echo "\n=== CPU Count ==="
 	@nproc
 
+# ==================== TESTING ====================
+
+# Fast, in-process determinism + durability unit suite (runs in CI via mvn verify).
+determinism:
+	mvn -pl match-cluster -am test -Dtest='DeterminismCorpusTest,EngineSnapshotReplayTest,SnapshotCodecTest,MatchingInvariantsTest' -Dsurefire.failIfNoSpecifiedTests=false
+
+# Regenerate determinism golden files after an INTENTIONAL output change (review the diff, then commit).
+update-goldens:
+	mvn -pl match-cluster -am test -Dtest=DeterminismCorpusTest -Dsurefire.failIfNoSpecifiedTests=false -DargLine="-Dupdate.golden=true"
+
+# Multi-node durability scenarios against a LIVE cluster (manual / nightly, NOT the per-push CI gate).
+durability:
+	python3 tools/durability/durability.py all
+
 # ==================== HELP ====================
 
 help:
@@ -170,5 +184,10 @@ help:
 	@echo "System:"
 	@echo "  make optimize-os        OS tuning for low latency (sudo)"
 	@echo "  make os-check           Show current OS settings"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make determinism        Fast determinism + snapshot/durability unit suite"
+	@echo "  make update-goldens     Regenerate determinism goldens (after intentional changes)"
+	@echo "  make durability         Multi-node durability scenarios (needs a live cluster)"
 	@echo ""
 	@echo "Runtime management: see ../admin-gateway"

@@ -1,0 +1,7 @@
+# Two asks at the SAME price (time priority); a 1.5 bid fills maker#1 fully then maker#2 partially.
+# Proves strict FIFO: the first trade's maker is order 1, the second's is order 2.
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=100 side=ASK type=LIMIT px=60000.0 qty=1.0
+CREATE u=101 side=ASK type=LIMIT px=60000.0 qty=1.0
+CREATE u=200 side=BID type=LIMIT px=60000.0 qty=1.5
