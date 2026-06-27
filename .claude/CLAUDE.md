@@ -148,7 +148,9 @@ curl -X POST http://localhost:8082/api/admin/stop-all-nodes                   # 
 | Cluster Setup | `match-cluster/src/main/java/com/match/infrastructure/persistence/AeronCluster.java` |
 | Cluster Service | `match-cluster/src/main/java/com/match/infrastructure/persistence/AppClusteredService.java` |
 | Matching Engine | `match-cluster/src/main/java/com/match/application/engine/Engine.java` |
-| Order Book | `match-cluster/src/main/java/com/match/application/orderbook/DirectMatchingEngine.java` |
+| Order book (DEFAULT) | `match-cluster/src/main/java/com/match/application/orderbook/ArrayMatchingEngine.java` (+ `ArrayOrderBook.java`) — array-backed, geometry-free |
+| Order book (fallback) | `match-cluster/src/main/java/com/match/application/orderbook/DirectMatchingEngine.java` — preallocated; select with `MATCH_ENGINE_IMPL=direct` |
+| Engine selection | `MatchingEngine` interface; `Engine.java` constructs the impl from `match.engine.impl` |
 | Gateway Base | `match-gateway/src/main/java/com/match/infrastructure/gateway/AeronGateway.java` |
 | Market Identity | `match-common/src/main/java/com/match/domain/MarketInfo.java` |
 | Constants | `match-common/src/main/java/com/match/infrastructure/InfrastructureConstants.java` |
@@ -184,6 +186,14 @@ Logs at: `~/.local/log/cluster/`
 | Session Keep-Alive | 1s (protocol-level, not logged) | InfrastructureConstants |
 | Egress Keep-Warm | 1s (ClusterHeartbeat, leader only) | AppClusteredService |
 
+### Engine selection & tunables (system properties / env)
+- `MATCH_ENGINE_IMPL` / `-Dmatch.engine.impl` — `array` (DEFAULT, array-backed) or `direct` (preallocated fallback).
+- `-Dmatch.engine.book.capacity` — per-side resting-order pool for the array book (default 131072).
+  Exhaustion is a loud `BOOK_FULL` reject (this replaces the old 64-orders-per-level cap). Memory ∝ capacity.
+- `-Dmatch.egress.buffer.max` — egress buffer entry cap (default 200k). Egress is ALSO **byte-bounded**
+  end-to-end (~176 MB: OMS 128 MB + market-data 32 MB) in `AppClusteredService`, so a slow/backed-up
+  consumer sheds (loud CRITICAL log + OMS reconciliation) instead of OOM'ing the matching/consensus thread.
+
 ## Order Flow
 
 ```
@@ -191,7 +201,8 @@ Logs at: `~/.local/log/cluster/`
 2. → Risk checks → Balance holds → ClusterClient.submitOrder()
 3. → SBE CreateOrder/CancelOrder/UpdateOrder → Cluster ingress
 4. → AppClusteredService.onSessionMessage()
-5. → Engine.acceptOrder() → Dispatch(CREATE|CANCEL|UPDATE) → DirectMatchingEngine
+5. → Engine.acceptOrder() → Dispatch(CREATE|CANCEL|UPDATE) → MatchingEngine
+     (ArrayMatchingEngine by default; DirectMatchingEngine if MATCH_ENGINE_IMPL=direct)
 6. → Publish TradeExecution + OrderStatus via egress
 7. → MarketGateway → WebSocket → UI
 ```
@@ -213,6 +224,15 @@ After any infrastructure change:
 ./run-load-test.sh endurance    # Endurance: 2k/s for 1 hour
 ./run-load-test.sh progressive  # Ramp: 1k → 10k/s
 ```
+
+**Measuring true throughput (important).** `run-load-test.sh` does NOT pin the load generator's CPU
+affinity. On a single box the generator's busy-spin threads contend with the cluster's matching/consensus
+threads, so an **unpinned** run reports an artifactual ceiling (~9k/s). Pin the generator OFF the cluster's
+cores to measure the real ceiling — e.g. `taskset -c 20-23 ./run-load-test.sh stress` on a 13700K (the 4
+spare E-cores). Pinned, the array engine sustains **~281k orders/sec @ 100%** (sub-µs p50), still rig-limited.
+A **manual** load-gen invocation (outside the script) must include `--add-opens
+java.base/jdk.internal.misc=ALL-UNNAMED` (plus `sun.nio.ch`, `java.nio`) or it dies with
+`IllegalAccessError`; `run-load-test.sh` already sets these.
 
 ## Debugging
 
