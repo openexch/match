@@ -160,13 +160,22 @@ public final class ArrayMatchingEngine implements MatchingEngine {
             long makerUserId = book.headOrderUserId(node);
             long makerQty = book.headOrderQuantity(node);
 
-            long maxBuyQty = FixedPoint.divide(takerRemainingBudget, price);
+            // budget/price can exceed a representable quantity for pathological
+            // budget-to-price ratios (> ~92 billion units); stop matching
+            // deterministically rather than let the throw escape mid-match.
+            long maxBuyQty;
+            try {
+                maxBuyQty = FixedPoint.divide(takerRemainingBudget, price);
+            } catch (ArithmeticException e) {
+                takerRemainingBudget = 0;
+                break;
+            }
             long matchQty = Math.min(maxBuyQty, makerQty);
             if (matchQty <= 0) break;
 
-            // NOTE: preserved verbatim from DirectMatchingEngine. multiply(qty, price) carries a
-            // known latent overflow for very large prices (tracked separately, intentionally NOT
-            // fixed here so determinism goldens do not shift).
+            // Cannot overflow: matchQty <= maxBuyQty = trunc(budget/price), so
+            // cost = matchQty * price <= budget <= Long.MAX (multiply is exact
+            // since match#30 — the old first-operand guard wrapped here).
             long cost = FixedPoint.multiply(matchQty, price);
 
             int idx = matchCount * MATCH_FIELDS;

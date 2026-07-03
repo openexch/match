@@ -79,15 +79,22 @@ public class MarketOrderHandler implements OrderBookSide.OrderTypeSideHandler {
         for (int i = 0; i < orderCount && remainingTotalPrice > 0L; i++) {
             Order maker = orders.get(i);
 
-            // Calculate max quantity we can buy with remaining budget
-            long maxQuantityToBuy = FixedPoint.divide(remainingTotalPrice, price);
+            // Calculate max quantity we can buy with remaining budget. The quotient
+            // can exceed a representable quantity for pathological budget-to-price
+            // ratios; stop matching deterministically rather than throw mid-match.
+            long maxQuantityToBuy;
+            try {
+                maxQuantityToBuy = FixedPoint.divide(remainingTotalPrice, price);
+            } catch (ArithmeticException e) {
+                return 0L;
+            }
 
             // Match quantity is min of what we can afford and what maker has
             long matchQuantity = Math.min(maker.getRemainingQuantity(), maxQuantityToBuy);
 
             if (matchQuantity <= 0L) continue;
 
-            // Calculate cost: matchQuantity * price
+            // Cannot overflow: matchQuantity <= trunc(budget/price) so cost <= budget.
             long matchCost = FixedPoint.multiply(matchQuantity, price);
             remainingTotalPrice -= matchCost;
 

@@ -209,13 +209,21 @@ public class DirectMatchingEngine implements MatchingEngine {
             long makerUserId = book.getHeadOrderUserId(priceIdx);
             long makerQty = book.getHeadOrderQuantity(priceIdx);
 
-            // Calculate max we can buy with remaining budget
-            long maxBuyQty = FixedPoint.divide(takerRemainingBudget, price);
+            // Calculate max we can buy with remaining budget. The quotient can
+            // exceed a representable quantity for pathological budget-to-price
+            // ratios; stop matching deterministically rather than throw mid-match.
+            long maxBuyQty;
+            try {
+                maxBuyQty = FixedPoint.divide(takerRemainingBudget, price);
+            } catch (ArithmeticException e) {
+                takerRemainingBudget = 0;
+                break;
+            }
             long matchQty = Math.min(maxBuyQty, makerQty);
 
             if (matchQty <= 0) break;
 
-            // Calculate cost
+            // Cannot overflow: matchQty <= trunc(budget/price) so cost <= budget.
             long cost = FixedPoint.multiply(matchQty, price);
 
             // Record match

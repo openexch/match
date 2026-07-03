@@ -42,6 +42,11 @@ public class Engine {
     // When a maker order is on the book, we need to look up its omsOrderId when it matches
     private final Long2LongHashMap orderIdToOmsOrderId = new Long2LongHashMap(-1);
 
+    // P1.1 (match#30): orders rejected at admission because price*quantity does not
+    // fit 64-bit fixed-point. Plain long: written and read on the service thread only;
+    // surfaced on the EGRESS-DIAG line as overflowRej.
+    private long overflowRejectCount;
+
     // Market ID constants
     public static final int MARKET_BTC_USD = 1;
     public static final int MARKET_ETH_USD = 2;
@@ -212,6 +217,9 @@ public class Engine {
             // Loud-limits: validate price before matching — reject the whole
             // order upfront rather than partially matching an invalid price
             int validity = engine.validateLimitPrice(price);
+            if (validity == OrderRejectReason.NONE && notionalOverflows(price, quantity)) {
+                validity = OrderRejectReason.OVERFLOW;
+            }
             if (validity != OrderRejectReason.NONE) {
                 logger.warn("Order rejected: market={} userId={} price={} reason={}",
                     marketId, userId, price, OrderRejectReason.describe(validity));
@@ -265,6 +273,9 @@ public class Engine {
         } else if (type == OrderType.LIMIT_MAKER) {
             // Loud-limits: validate price before book checks
             int validity = engine.validateLimitPrice(price);
+            if (validity == OrderRejectReason.NONE && notionalOverflows(price, quantity)) {
+                validity = OrderRejectReason.OVERFLOW;
+            }
             if (validity != OrderRejectReason.NONE) {
                 logger.warn("LIMIT_MAKER rejected: market={} userId={} price={} reason={}",
                     marketId, userId, price, OrderRejectReason.describe(validity));
@@ -307,6 +318,27 @@ public class Engine {
                 }
             }
         }
+    }
+
+    /**
+     * True if price * quantity does not fit 64-bit fixed-point (match#30).
+     * Checked at ADMISSION (LIMIT / LIMIT_MAKER / UPDATE) so no order whose
+     * notional overflows ever enters the book — every downstream cost product
+     * is then bounded by an admitted notional and cannot overflow mid-match.
+     */
+    private boolean notionalOverflows(long price, long quantity) {
+        try {
+            FixedPoint.multiply(price, quantity);
+            return false;
+        } catch (ArithmeticException e) {
+            overflowRejectCount++;
+            return true;
+        }
+    }
+
+    /** Orders rejected at admission for notional overflow (diag counter). */
+    public long getOverflowRejectCount() {
+        return overflowRejectCount;
     }
 
     /**
@@ -411,6 +443,9 @@ public class Engine {
         // Loud-limits: validate the NEW price BEFORE cancelling the old order.
         // An invalid update must reject the update and leave the resting order intact.
         int validity = engine.validateLimitPrice(newPrice);
+        if (validity == OrderRejectReason.NONE && notionalOverflows(newPrice, newQuantity)) {
+            validity = OrderRejectReason.OVERFLOW;
+        }
         if (validity != OrderRejectReason.NONE) {
             logger.warn("Update rejected: market={} orderId={} userId={} newPrice={} reason={}",
                 marketId, oldOrderId, userId, newPrice, OrderRejectReason.describe(validity));
