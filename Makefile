@@ -10,7 +10,7 @@
 #
 # ==================================================================
 
-.PHONY: install install-deps optimize-os help build build-java build-cluster build-gateway build-loadtest sbe os-check determinism update-goldens durability
+.PHONY: tune tune-report install install-deps optimize-os help build build-java build-cluster build-gateway build-loadtest sbe os-check determinism update-goldens durability
 
 # ==================== CONFIGURATION ====================
 PROJECT_DIR := $(shell pwd)
@@ -72,6 +72,15 @@ install:
 	@echo "║  To start the cluster, install and run the admin gateway:       ║"
 	@echo "║    cd ../admin-gateway && make install                          ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
+
+# Transport-critical tuning (idempotent, before/after report, safe without sudo).
+# ISOLATED_CORES/NIC env-overridable; see deploy/tuning/system-tuning.sh header.
+# optimize-os below keeps the broader system knobs (TCP, swappiness, scheduler).
+tune:
+	@./deploy/tuning/system-tuning.sh
+
+tune-report:
+	@./deploy/tuning/system-tuning.sh --report
 
 optimize-os:
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
