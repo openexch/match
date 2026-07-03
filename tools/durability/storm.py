@@ -72,7 +72,7 @@ def wait_healthy_core(timeout=90):
     raise TimeoutError(f"cluster not healthy-core within {timeout}s; last={json.dumps(last)[:400]}")
 
 
-def wait_switchover_settled(killed, timeout=90):
+def wait_switchover_settled(killed, mid, timeout=90):
     """Post-kill settle that cannot be fooled by the status CACHE (2s poller):
     the 20260703-224136 run showed a restart-node followed by an immediate
     status read returns the PRE-KILL world — 0.0s 'heals', the old leader
@@ -102,7 +102,7 @@ def wait_switchover_settled(killed, timeout=90):
                     healthy_streak = 0
             if restart_seen:
                 healthy_streak = healthy_streak + 1 if is_healthy_core(s) else 0
-                if healthy_streak >= 2 and canary_accepted():
+                if healthy_streak >= 2 and canary_accepted(mid):
                     return s
         except Exception as e:  # noqa: BLE001
             last = {"error": str(e)}
@@ -115,14 +115,21 @@ def wait_switchover_settled(killed, timeout=90):
 CANARY_USER = 819999  # seeded once at storm start; outside the measured user set
 
 
-def canary_accepted():
-    """Submit-and-cancel a far-from-market LIMIT: proves OMS -> cluster ingress
-    -> ack round-trips. Uses its own user so measured balances stay untouched."""
+def canary_accepted(mid):
+    """Submit-and-cancel a resting LIMIT: proves OMS -> cluster ingress -> ack
+    round-trips. Uses its own user so measured balances stay untouched.
+
+    Price/qty are chosen to dodge every OMS risk check (learned in run
+    20260703-233910, where a BUY at price=1 was collar-rejected for 90s and
+    aborted the storm): SELL 5% above mid stays inside the 10% price collar
+    and rests instead of crossing, and qty 0.05 keeps the notional clear of
+    the FixedPoint negative band (~$922-$1844, match#30) that spuriously
+    rejects with NOTIONAL_TOO_SMALL."""
     try:
         st, data = dur.oms_post("/api/v1/orders",
-                                {"userId": CANARY_USER, "marketId": 1, "side": "BUY",
+                                {"userId": CANARY_USER, "marketId": 1, "side": "SELL",
                                  "orderType": "LIMIT", "timeInForce": "GTC",
-                                 "price": 1, "quantity": 0.001})
+                                 "price": int(mid * 1.05), "quantity": 0.05})
         if st not in (200, 201):
             return False
         resp = json.loads(data)
@@ -296,7 +303,7 @@ def run_storm(args):
             print(f"[storm] === switchover {i}/{args.switchovers}: restarting leader node {leader} ===")
             dur.admin_post("/api/admin/restart-node", {"nodeId": leader})
             try:
-                s = wait_switchover_settled(leader, timeout=args.switchover_timeout)
+                s = wait_switchover_settled(leader, mid, timeout=args.switchover_timeout)
             except TimeoutError as e:
                 result["aborted"] = f"switchover {i}: {e}"
                 break
