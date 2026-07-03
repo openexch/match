@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static com.match.infrastructure.InfrastructureConstants.*;
 
@@ -44,6 +45,33 @@ public class MarketDataWebSocket implements AutoCloseable {
     // Attribute to store subscribed marketId per channel
     private static final AttributeKey<Integer> SUBSCRIBED_MARKET =
         AttributeKey.valueOf("subscribedMarket");
+
+    // ==================== SLOW-CLIENT BACKPRESSURE (see openexch/match#37) ====================
+    // A browser that reads slower than the market-data rate used to grow its Netty
+    // ChannelOutboundBuffer without bound: the client fell minutes behind and the
+    // accumulated frames OOM'd the gateway heap. Policy now: while a channel is
+    // unwritable (outbound buffer above the high watermark) we DROP its market-data
+    // frames and mark it for resync; when it drains we send a fresh snapshot
+    // (book + trades + candles + ticker), so it jumps to current state instead of
+    // replaying a backlog. Channels that stay unwritable too long are disconnected.
+
+    /** Outbound buffer watermarks: unwritable above high, writable again below low. */
+    private static final WriteBufferWaterMark WRITE_WATERMARKS =
+        new WriteBufferWaterMark(128 * 1024, 512 * 1024);
+    /** Disconnect a client that has not drained below the high watermark for this long. */
+    private static final long SLOW_CLIENT_DISCONNECT_MS = 30_000;
+
+    /** Set while a channel has had frames dropped and needs a state resync. */
+    private static final AttributeKey<Boolean> NEEDS_RESYNC =
+        AttributeKey.valueOf("needsResync");
+    /** Wall-clock ms when the channel first became unwritable (cleared on drain). */
+    private static final AttributeKey<Long> UNWRITABLE_SINCE =
+        AttributeKey.valueOf("unwritableSince");
+
+    // Class-level stats surfaced in the GATEWAY STATS log line (AeronGateway)
+    public static final AtomicLong DROPPED_FRAMES = new AtomicLong();
+    public static final AtomicLong RESYNCS_SENT = new AtomicLong();
+    public static final AtomicLong SLOW_CLIENTS_DISCONNECTED = new AtomicLong();
 
     private ChannelGroup channels;
     // Per-market channel groups for efficient broadcasting
@@ -102,7 +130,10 @@ public class MarketDataWebSocket implements AutoCloseable {
                     pipeline.addLast(wsHandler);
                 }
             })
-            .childOption(ChannelOption.TCP_NODELAY, true); // Low latency
+            .childOption(ChannelOption.TCP_NODELAY, true) // Low latency
+            // Backpressure boundary: flips Channel.isWritable() so broadcastMarketData
+            // can conflate instead of buffering unboundedly for slow clients
+            .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, WRITE_WATERMARKS);
 
         serverChannel = bootstrap.bind(MARKET_GATEWAY_PORT).sync().channel();
     }
@@ -124,11 +155,46 @@ public class MarketDataWebSocket implements AutoCloseable {
             // Send only to clients subscribed to this market
             ChannelGroup group = marketChannels.get(marketId);
             if (group != null && !group.isEmpty()) {
-                group.writeAndFlush(new TextWebSocketFrame(jsonMessage));
+                for (Channel ch : group) {
+                    writeOrConflate(ch, jsonMessage);
+                }
             }
         } else {
             // Broadcast to all (e.g., cluster status messages)
-            channels.writeAndFlush(new TextWebSocketFrame(jsonMessage));
+            for (Channel ch : channels) {
+                writeOrConflate(ch, jsonMessage);
+            }
+        }
+    }
+
+    /**
+     * Write a market-data frame to one client, or drop it when the client's outbound
+     * buffer is above the high watermark. Dropping is safe because the stream is
+     * conflatable: the channel is marked NEEDS_RESYNC and receives a fresh snapshot
+     * from cached state the moment it drains (channelWritabilityChanged). Clients
+     * that stay unwritable past SLOW_CLIENT_DISCONNECT_MS are closed.
+     */
+    private void writeOrConflate(Channel ch, String jsonMessage) {
+        if (ch.isWritable()) {
+            ch.writeAndFlush(new TextWebSocketFrame(jsonMessage));
+            return;
+        }
+
+        DROPPED_FRAMES.incrementAndGet();
+        final long now = System.currentTimeMillis();
+        if (ch.attr(NEEDS_RESYNC).get() == null) {
+            ch.attr(NEEDS_RESYNC).set(Boolean.TRUE);
+            ch.attr(UNWRITABLE_SINCE).setIfAbsent(now);
+            System.out.println("[WS] Slow client " + ch.remoteAddress()
+                + ": conflating (needs " + ch.bytesBeforeWritable() + "B drained)");
+        }
+
+        final Long since = ch.attr(UNWRITABLE_SINCE).get();
+        if (since != null && now - since > SLOW_CLIENT_DISCONNECT_MS) {
+            SLOW_CLIENTS_DISCONNECTED.incrementAndGet();
+            System.err.println("[WS] Disconnecting slow client " + ch.remoteAddress()
+                + ": unwritable for " + (now - since) + "ms");
+            ch.close();
         }
     }
 
@@ -167,6 +233,29 @@ public class MarketDataWebSocket implements AutoCloseable {
         @Override
         public void handlerAdded(ChannelHandlerContext ctx) {
             channels.add(ctx.channel());
+        }
+
+        /**
+         * Fired when the outbound buffer crosses a watermark. On drain (writable again)
+         * a client that had frames conflated away gets a fresh full state so it resumes
+         * from NOW instead of a gap: snapshot semantics supersede the dropped deltas.
+         */
+        @Override
+        public void channelWritabilityChanged(ChannelHandlerContext ctx) {
+            Channel channel = ctx.channel();
+            if (channel.isWritable() && Boolean.TRUE.equals(channel.attr(NEEDS_RESYNC).get())) {
+                channel.attr(NEEDS_RESYNC).set(null);
+                channel.attr(UNWRITABLE_SINCE).set(null);
+                Integer marketId = channel.attr(SUBSCRIBED_MARKET).get();
+                if (marketId != null) {
+                    RESYNCS_SENT.incrementAndGet();
+                    System.out.println("[WS] Client " + channel.remoteAddress()
+                        + " drained — resyncing market " + marketId);
+                    sendTickerStats(ctx, marketId);
+                    sendInitialState(ctx, marketId);
+                }
+            }
+            ctx.fireChannelWritabilityChanged();
         }
 
         @Override
