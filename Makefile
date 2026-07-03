@@ -10,7 +10,7 @@
 #
 # ==================================================================
 
-.PHONY: tune tune-report install install-deps optimize-os help build build-java build-cluster build-gateway build-loadtest sbe os-check determinism update-goldens durability
+.PHONY: tune tune-report install install-deps optimize-os help build build-java build-cluster build-gateway build-loadtest sbe os-check determinism update-goldens durability p1-gate p1-gate-smoke
 
 # ==================== CONFIGURATION ====================
 PROJECT_DIR := $(shell pwd)
@@ -175,6 +175,16 @@ update-goldens:
 durability:
 	python3 tools/durability/durability.py all
 
+# P1 acceptance gate (match#32): load + 50 leader switchovers + divergence/overflow
+# report. Needs a live cluster AND an admin-gateway with the #13 truthful-status fix.
+p1-gate:
+	python3 tools/durability/storm.py --switchovers 50 --pg-reconcile
+	python3 tools/durability/stranded.py
+
+# ~5 minute smoke of the same harness (3 switchovers).
+p1-gate-smoke:
+	python3 tools/durability/storm.py --switchovers 3
+
 # ==================== HELP ====================
 
 help:
@@ -198,5 +208,7 @@ help:
 	@echo "  make determinism        Fast determinism + snapshot/durability unit suite"
 	@echo "  make update-goldens     Regenerate determinism goldens (after intentional changes)"
 	@echo "  make durability         Multi-node durability scenarios (needs a live cluster)"
+	@echo "  make p1-gate            P1 acceptance storm: 50 switchovers + divergence report"
+	@echo "  make p1-gate-smoke      Same harness, 3 switchovers (~5 min)"
 	@echo ""
 	@echo "Runtime management: see ../admin-gateway"

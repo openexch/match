@@ -37,17 +37,28 @@ def load_json(path):
     with open(path) as f:
         return json.load(f)
 
-def get_order(url, oid):
+def fetch_oms_orders(url, users):
+    """One bulk GET per user (the endpoint is per-user and unpaginated) instead of
+    one GET per order — a storm run submits far too many orders for per-order
+    fetches. Returns omsOrderId -> order dict; an order absent from its user's
+    list is evicted (terminal), same as the old per-order 404."""
     u = urlparse(url)
-    c = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=10)
-    try:
-        c.request("GET", f"/api/v1/orders/{oid}")
-        r = c.getresponse(); data = r.read()
-        if r.status == 200:
-            return json.loads(data)
-    except Exception:
-        return None
-    return None
+    out = {}
+    for uid in users:
+        c = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=30)
+        try:
+            c.request("GET", f"/api/v1/orders?userId={uid}")
+            r = c.getresponse(); data = r.read()
+            if r.status == 200:
+                for o in json.loads(data):
+                    oid = o.get("omsOrderId")
+                    if oid is not None:
+                        out[oid] = o
+        except Exception:
+            pass
+        finally:
+            c.close()
+    return out
 
 def main():
     ap = argparse.ArgumentParser()
@@ -132,13 +143,14 @@ def main():
 
     # --- per-order filledQty miscount (only orders that actually had fills) ---
     submitted_ids = {r["omsOrderId"]: r for r in submitted if r.get("omsOrderId") is not None}
+    oms_view = fetch_oms_orders(args.url, sorted(test_users))
     order_findings = []
     checked = 0
     for oid, truth in order_truth_filled.items():
         if oid not in submitted_ids:
             continue  # order not from our test set
         checked += 1
-        o = get_order(args.url, oid)
+        o = oms_view.get(oid)
         if o is None:
             # terminal/evicted: if fully filled, oms_filled == submitted quantity
             oms_filled = submitted_ids[oid]["quantity"]
@@ -167,6 +179,35 @@ def main():
                     "fromTradeExecution": round(truth, 8), "fromOrderStatus": round(status_last[oid], 8)})
     engine_checked = sum(1 for oid in order_truth_filled if oid in status_last)
 
+    # --- terminal-vs-OPEN divergence (match#32 / P1.5) ---
+    # Cluster truth per order: last OrderStatus on the observer tape (SBE
+    # statusRaw >= 2 = FILLED/CANCELLED/REJECTED), or fully-filled per the
+    # TradeExecution tape. OMS view: the bulk order fetch above (absent =
+    # evicted = terminal). omsOpenClusterTerminal is the dangerous direction:
+    # OMS holds stay locked for an order the cluster already finished.
+    status_last_raw = {}
+    for s in status_rows:
+        status_last_raw[s["omsOrderId"]] = s["statusRaw"]
+    term_checked = 0
+    oms_open_cluster_terminal = []
+    oms_terminal_cluster_open = []
+    for oid, rec in submitted_ids.items():
+        fully_filled = order_truth_filled.get(oid, 0.0) >= rec["quantity"] - args.btc_tol
+        raw = status_last_raw.get(oid)
+        if raw is None and not fully_filled:
+            continue  # no cluster-side evidence either way — not checkable
+        cluster_terminal = fully_filled or (raw is not None and raw >= 2)
+        term_checked += 1
+        o = oms_view.get(oid)
+        oms_terminal = o is None or o.get("status", "") in ("FILLED", "CANCELLED", "REJECTED", "EXPIRED")
+        if cluster_terminal and not oms_terminal:
+            oms_open_cluster_terminal.append({"omsOrderId": oid, "omsStatus": o.get("status"),
+                "clusterStatusRaw": raw, "truthFilled": round(order_truth_filled.get(oid, 0.0), 8)})
+        elif oms_terminal and not cluster_terminal:
+            oms_terminal_cluster_open.append({"omsOrderId": oid,
+                "omsStatus": (o or {}).get("status", "EVICTED/404"),
+                "clusterStatusRaw": raw, "truthFilled": round(order_truth_filled.get(oid, 0.0), 8)})
+
     switchovers = [e for e in events if e.get("kind") in ("newLeader", "disconnected", "connected", "connectError", "pollError")]
 
     report = {
@@ -182,6 +223,13 @@ def main():
             "engineStreamChecked": engine_checked,
             "tradeIdGaps": len(contiguity["gapRanges"]),
             "tradeIdMissingInRange": contiguity["missingInRange"],
+            "terminalityChecked": term_checked,
+            "omsOpenClusterTerminal": len(oms_open_cluster_terminal),
+            "omsTerminalClusterOpen": len(oms_terminal_cluster_open),
+        },
+        "terminalityDivergence": {
+            "omsOpenClusterTerminalExamples": oms_open_cluster_terminal[:20],
+            "omsTerminalClusterOpenExamples": oms_terminal_cluster_open[:20],
         },
         "engineStreamDivergenceExamples": engine_examples,
         "tradeIdContiguity": contiguity,
@@ -213,6 +261,14 @@ def main():
         print("  OrderStatus stream (what OMS trusts for filledQty) UNDER-REPORTS vs TradeExecution truth:")
         for ex in engine_examples[:12]:
             print("   ", ex)
+    if oms_open_cluster_terminal or oms_terminal_cluster_open:
+        print(f"\n  TERMINALITY DIVERGENCE (OMS vs cluster, {term_checked} checked):")
+        print(f"    omsOpen/clusterTerminal (dangerous — stuck holds): {len(oms_open_cluster_terminal)}")
+        for ex in oms_open_cluster_terminal[:10]:
+            print("     ", ex)
+        print(f"    omsTerminal/clusterOpen: {len(oms_terminal_cluster_open)}")
+        for ex in oms_terminal_cluster_open[:10]:
+            print("     ", ex)
     if contiguity["gapRanges"]:
         print("\n  TRADEID GAPS (observer's own view; cross-ref reconnect windows):")
         print("   ", contiguity["gapRanges"][:20])
