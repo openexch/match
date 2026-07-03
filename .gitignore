@@ -37,3 +37,8 @@ Thumbs.db
 tools/repro-bug9/out/
 tools/repro-bug9/runs/
 tools/repro-bug9/smoke/
+tools/repro-bug9/__pycache__/
+
+# durability harness run artifacts (p1-gate reports, observer tapes)
+tools/durability/runs/
+tools/durability/__pycache__/
