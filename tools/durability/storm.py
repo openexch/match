@@ -93,6 +93,29 @@ def start_market_gateway():
     dur.admin_post("/api/admin/processes/market/start")
 
 
+def suspend_auto_snapshot():
+    """Snapshot/housekeeping while a node is down or rejoining strands it
+    (match#35), and the storm keeps nodes in exactly that state. Disable
+    auto-snapshot for the run; return the prior config for restore."""
+    st, data = dur.admin_get("/api/admin/auto-snapshot")
+    try:
+        prior = json.loads(data)
+    except ValueError:
+        prior = {}
+    if prior.get("enabled"):
+        dur._req(dur.ADMIN, "DELETE", "/api/admin/auto-snapshot")
+        print(f"[storm] auto-snapshot suspended for the run "
+              f"(was every {prior.get('intervalMinutes')}m; restored after)")
+    return prior
+
+
+def restore_auto_snapshot(prior):
+    if prior.get("enabled"):
+        dur.admin_post("/api/admin/auto-snapshot",
+                       {"intervalMinutes": prior.get("intervalMinutes", 30)})
+        print("[storm] auto-snapshot restored")
+
+
 # ---- observer ----
 
 def start_observer(run_dir, duration_s):
@@ -178,6 +201,7 @@ def run_storm(args):
 
     print("[storm] detaching market gateway (match#37: OOMs under load until P3.3)")
     stop_market_gateway()
+    prior_autosnap = suspend_auto_snapshot()
     time.sleep(2)
     try:
         observer = start_observer(run_dir, load_duration + 60)
@@ -239,6 +263,7 @@ def run_storm(args):
             load_proc.kill()
         print("[storm] restoring market gateway")
         start_market_gateway()
+        restore_auto_snapshot(prior_autosnap)
 
     with open(os.path.join(run_dir, "switchovers.json"), "w") as f:
         json.dump(switchover_log, f, indent=2)
