@@ -72,6 +72,70 @@ def wait_healthy_core(timeout=90):
     raise TimeoutError(f"cluster not healthy-core within {timeout}s; last={json.dumps(last)[:400]}")
 
 
+def wait_switchover_settled(killed, timeout=90):
+    """Post-kill settle that cannot be fooled by the status CACHE (2s poller):
+    the 20260703-224136 run showed a restart-node followed by an immediate
+    status read returns the PRE-KILL world — 0.0s 'heals', the old leader
+    recorded, and kills outpacing the OMS's reconnect until it rejected the
+    whole run. Sequence enforced here:
+
+      1. the restart is OBSERVED: the killed node leaves HEALTHY at least
+         once (or the leader moves off it);
+      2. TWO consecutive healthy-core polls (a single one can be the stale
+         cache flanking the transition);
+      3. the OMS actually accepts a canary order (ingress live end-to-end,
+         which is what the next storm cycle really needs).
+    """
+    deadline = time.time() + timeout
+    restart_seen = False
+    healthy_streak = 0
+    last = None
+    while time.time() < deadline:
+        try:
+            st, data = dur.admin_get("/api/admin/status")
+            s = json.loads(data)
+            last = s
+            killed_node = next((n for n in s.get("nodes", []) if n.get("id") == killed), {})
+            if not restart_seen:
+                if killed_node.get("health") != "HEALTHY" or s.get("leader") != killed:
+                    restart_seen = True
+                    healthy_streak = 0
+            if restart_seen:
+                healthy_streak = healthy_streak + 1 if is_healthy_core(s) else 0
+                if healthy_streak >= 2 and canary_accepted():
+                    return s
+        except Exception as e:  # noqa: BLE001
+            last = {"error": str(e)}
+            healthy_streak = 0
+        time.sleep(2)
+    raise TimeoutError(f"switchover (killed node {killed}) not settled within {timeout}s; "
+                       f"restartSeen={restart_seen} last={json.dumps(last)[:300]}")
+
+
+CANARY_USER = 819999  # seeded once at storm start; outside the measured user set
+
+
+def canary_accepted():
+    """Submit-and-cancel a far-from-market LIMIT: proves OMS -> cluster ingress
+    -> ack round-trips. Uses its own user so measured balances stay untouched."""
+    try:
+        st, data = dur.oms_post("/api/v1/orders",
+                                {"userId": CANARY_USER, "marketId": 1, "side": "BUY",
+                                 "orderType": "LIMIT", "timeInForce": "GTC",
+                                 "price": 1, "quantity": 0.001})
+        if st not in (200, 201):
+            return False
+        resp = json.loads(data)
+        if not resp.get("accepted"):
+            return False
+        oid = resp.get("omsOrderId")
+        if oid is not None:
+            dur._req(dur.OMS, "DELETE", f"/api/v1/orders/{oid}")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def require_truthful_status():
     st, data = dur.admin_get("/api/admin/status")
     s = json.loads(data)
@@ -207,6 +271,7 @@ def run_storm(args):
         observer = start_observer(run_dir, load_duration + 60)
 
         oms_load("seed", "--base", str(args.base), "--n", str(args.users))
+        oms_load("seed", "--base", str(CANARY_USER), "--n", "1")  # ingress-live probe user
         oms_load("snapshot", "--base", str(args.base), "--n", str(args.users),
                  "--out", os.path.join(run_dir, "balances-initial.json"))
 
@@ -231,7 +296,7 @@ def run_storm(args):
             print(f"[storm] === switchover {i}/{args.switchovers}: restarting leader node {leader} ===")
             dur.admin_post("/api/admin/restart-node", {"nodeId": leader})
             try:
-                s = wait_healthy_core(timeout=args.switchover_timeout)
+                s = wait_switchover_settled(leader, timeout=args.switchover_timeout)
             except TimeoutError as e:
                 result["aborted"] = f"switchover {i}: {e}"
                 break
@@ -314,6 +379,22 @@ def assemble_report(run_dir, args, result, switchover_log, markers):
     if os.path.exists(pg_path):
         balances = json.load(open(pg_path))
 
+    # Load-collapse guard (no silent caps): if the OMS rejected most of the
+    # run's orders, divergence was measured over near-zero in-flight traffic
+    # and the report must not read as a valid baseline.
+    accepted = rejected = 0
+    load_out = os.path.join(run_dir, "load.stdout")
+    if os.path.exists(load_out):
+        for line in open(load_out, errors="replace"):
+            if line.startswith("[run] DONE"):
+                for tok in line.split():
+                    if tok.startswith("accepted="):
+                        accepted = int(tok.split("=")[1])
+                    elif tok.startswith("rejected="):
+                        rejected = int(tok.split("=")[1])
+    acceptance = accepted / (accepted + rejected) if (accepted + rejected) else 0.0
+    load_collapsed = acceptance < 0.5
+
     submitted = rs.get("submittedOrders", 0)
     div_open_terminal = rs.get("omsOpenClusterTerminal", 0)
     div_terminal_open = rs.get("omsTerminalClusterOpen", 0)
@@ -336,6 +417,8 @@ def assemble_report(run_dir, args, result, switchover_log, markers):
         },
         "orders": {
             "submitted": submitted,
+            "rejectedByOms": rejected,
+            "acceptanceRate": round(acceptance, 4),
             "observedTrades": rs.get("uniqueTrades", 0),
             "terminalityChecked": div_checked,
             "engineSubmitted": totals.get("submitted", 0),
@@ -373,7 +456,9 @@ def assemble_report(run_dir, args, result, switchover_log, markers):
         "harnessOk": (result["aborted"] is None
                       and result["completed"] >= args.switchovers
                       and submitted > 0
+                      and not load_collapsed
                       and bool(rs)),
+        "loadCollapsed": load_collapsed,
     }
     out = os.path.join(run_dir, "p1-gate-report.json")
     with open(out, "w") as f:
