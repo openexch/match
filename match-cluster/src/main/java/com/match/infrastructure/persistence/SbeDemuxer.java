@@ -44,6 +44,10 @@ public class SbeDemuxer {
     private final CreateOrderCommand createCommand = new CreateOrderCommand();
     private final UpdateOrderCommand updateCommand = new UpdateOrderCommand();
 
+    // P1.5 diag counter (match#32): CreateOrder commands accepted off ingress.
+    // Plain long: written and read on the cluster service thread only.
+    private long createOrderCount;
+
 
     public SbeDemuxer(Engine engine) {
         this.engine = engine;
@@ -79,7 +83,12 @@ public class SbeDemuxer {
         }
     }
 
+    public long createOrderCount() {
+        return createOrderCount;
+    }
+
     private void handleCreateOrder(DirectBuffer buffer, int offset, long timestamp) {
+        createOrderCount++;
         createOrderDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
 
         // Direct primitive access - NO string parsing, NO allocations

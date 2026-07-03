@@ -18,6 +18,13 @@ public final class OrderRejectReason {
      * adjustable capacity bound rather than a per-level 64-order cap.
      */
     public static final int BOOK_FULL = 4;
+    /**
+     * A notional/cost computation would overflow 64-bit fixed-point. Rejecting is
+     * the only correct answer: wrong money must never enter the book (P1.1,
+     * match#30). Reserved here so the diag counter and harness can report it;
+     * detection is wired when FixedPoint.multiply learns to throw.
+     */
+    public static final int OVERFLOW = 5;
 
     private OrderRejectReason() {} // Constants only
 
@@ -28,6 +35,7 @@ public final class OrderRejectReason {
             case PRICE_OFF_TICK: return "PRICE_OFF_TICK";
             case LEVEL_FULL: return "LEVEL_FULL";
             case BOOK_FULL: return "BOOK_FULL";
+            case OVERFLOW: return "OVERFLOW";
             default: return "UNKNOWN(" + reason + ")";
         }
     }

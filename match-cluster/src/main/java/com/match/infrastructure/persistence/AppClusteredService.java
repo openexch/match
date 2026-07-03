@@ -98,6 +98,11 @@ public class AppClusteredService implements ClusteredService {
     private final AtomicLong marketDataBytes = new AtomicLong(0);
     private final AtomicLong omsEgressBytes = new AtomicLong(0);
 
+    // P1.5 (match#32): orders rejected because a notional computation would overflow
+    // 64-bit fixed-point. Pre-plumbed with OrderRejectReason.OVERFLOW; stays 0 until
+    // P1.1 (match#30) makes FixedPoint.multiply throw and routes the reject here.
+    private final AtomicLong overflowRejects = new AtomicLong(0);
+
     // Simple wrapper for queued SBE messages (holds copy of buffer content)
     private static final class QueuedMessage {
         final byte[] data;
@@ -338,6 +343,9 @@ public class AppClusteredService implements ClusteredService {
                 System.out.println("EGRESS-DIAG leader-health: sessions=" + clientSessions.getAllSessions().size()
                         + " omsQ=" + omsEgressQueue.size() + " mktQ=" + marketDataQueue.size()
                         + " droppedMkt=" + droppedMessages.get() + " droppedOms=" + droppedOmsEgress.get()
+                        + " submitted=" + sbeDemuxer.createOrderCount()
+                        + " terminal=" + eventPublisher.terminalStatusCount()
+                        + " overflowRej=" + overflowRejects.get()
                         + " unknownTimers=" + timerManager.getUnknownTimerCount()
                         + " flushFires=" + flushTimerFireCount
                         + " lastEgressAgeMs=" + (now - lastEgressSendMs)
@@ -653,6 +661,9 @@ public class AppClusteredService implements ClusteredService {
                 + " flushTimerScheduled(pre-reset)=" + flushTimerScheduled
                 + " omsQ=" + omsEgressQueue.size() + " mktQ=" + marketDataQueue.size()
                 + " droppedMkt=" + droppedMessages.get() + " droppedOms=" + droppedOmsEgress.get()
+                + " submitted=" + sbeDemuxer.createOrderCount()
+                + " terminal=" + eventPublisher.terminalStatusCount()
+                + " overflowRej=" + overflowRejects.get()
                 + " unknownTimers=" + timerManager.getUnknownTimerCount()
                 + " flushFires=" + flushTimerFireCount + "]");
         System.out.flush();

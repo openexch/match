@@ -39,6 +39,12 @@ public class MatchEventPublisher implements MatchEventSink {
     // Trade ID generator (atomic for snapshot consistency)
     private final AtomicLong tradeIdGenerator = new AtomicLong(1);
 
+    // P1.5 diag counter (match#32): terminal OrderStatus events (FILLED/CANCELLED/
+    // REJECTED) published by the engine, counted BEFORE the Disruptor so egress
+    // shedding cannot hide a terminalization. Plain long: publishOrderStatusUpdate
+    // and the diag reader both run on the cluster service thread.
+    private long terminalStatusCount;
+
     // Publisher state
     private volatile boolean running = false;
 
@@ -280,6 +286,10 @@ public class MatchEventPublisher implements MatchEventSink {
             return false;
         }
 
+        if (orderStatus >= OrderStatusType.FILLED) {
+            terminalStatusCount++;
+        }
+
         long sequence = ringBuffer.next();
         try {
             PublishEvent event = ringBuffer.get(sequence);
@@ -344,6 +354,10 @@ public class MatchEventPublisher implements MatchEventSink {
      */
     public void setTradeIdGenerator(long value) {
         tradeIdGenerator.set(value);
+    }
+
+    public long terminalStatusCount() {
+        return terminalStatusCount;
     }
 
     /**
