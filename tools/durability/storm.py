@@ -275,7 +275,8 @@ def run_storm(args):
     if args.pg_reconcile:
         subprocess.run([sys.executable, os.path.join(HERE, "pg_reconcile.py"),
                         "--dir", run_dir, "--base", str(args.base),
-                        "--n", str(args.users)], check=False)
+                        "--n", str(args.users),
+                        "--since", str(markers[0]["epoch"])], check=False)
 
     return run_dir, result, switchover_log, markers
 

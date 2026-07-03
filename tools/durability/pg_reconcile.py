@@ -50,13 +50,17 @@ def psql(query):
     return [line.split(",") for line in r.stdout.splitlines() if line]
 
 
-def executions_deltas(base, n):
-    """Side-aware per-user deltas from the executions ledger."""
+def executions_deltas(base, n, since_epoch):
+    """Side-aware per-user deltas from the executions ledger, restricted to
+    fills at/after the run start: balances-initial.json already reflects all
+    older fills, so counting them again would double-book history whenever the
+    same test users are reused across runs."""
     rows = psql(
         "SELECT user_id, side, "
         "SUM(quantity)::text, SUM(price::numeric * quantity / %d)::text "
         "FROM executions WHERE user_id >= %d AND user_id < %d "
-        "GROUP BY user_id, side" % (int(SCALE), base, base + n))
+        "AND executed_at >= to_timestamp(%f) "
+        "GROUP BY user_id, side" % (int(SCALE), base, base + n, since_epoch))
     deltas = {}
     for user_id, side, qty_s, quote_s in rows:
         u = int(user_id)
@@ -94,9 +98,9 @@ def execution_rows_for(user, limit=20):
              "isMaker": r[5], "at": r[6]} for r in rows]
 
 
-def sample(initial, base, n, usd_tol, btc_tol):
+def sample(initial, base, n, since_epoch, usd_tol, btc_tol):
     """One reconciliation pass; returns (residuals, volumeUSD)."""
-    deltas = executions_deltas(base, n)
+    deltas = executions_deltas(base, n, since_epoch)
     balances = db_balances(base, n)
     volume = sum(abs(d["USD"]) for d in deltas.values()) / 2 or 1.0
     residuals = []
@@ -120,9 +124,18 @@ def main():
     ap.add_argument("--base", type=int, required=True)
     ap.add_argument("--n", type=int, required=True)
     ap.add_argument("--settle", type=int, default=30, help="seconds between T1 and T2")
+    ap.add_argument("--since", type=float, default=0.0,
+                    help="run-start epoch seconds; only executions at/after this count "
+                         "(balances-initial already reflects older fills)")
     ap.add_argument("--usd-tol", type=float, default=0.5)
     ap.add_argument("--btc-tol", type=float, default=1e-5)
     args = ap.parse_args()
+
+    since = args.since
+    if since <= 0:
+        # Fall back to the initial-snapshot file's mtime: taken at run start,
+        # so it bounds the run window even for hand-driven invocations.
+        since = os.path.getmtime(os.path.join(args.dir, "balances-initial.json"))
 
     # Refuse to reconcile against a ledger the OMS is not writing.
     count = int(psql("SELECT count(*) FROM executions")[0][0])
@@ -133,11 +146,11 @@ def main():
 
     initial = json.load(open(os.path.join(args.dir, "balances-initial.json")))
 
-    t1_res, volume = sample(initial, args.base, args.n, args.usd_tol, args.btc_tol)
+    t1_res, volume = sample(initial, args.base, args.n, since, args.usd_tol, args.btc_tol)
     t1_pct = round(100.0 * sum(abs(r["dUSD"]) for r in t1_res) / volume, 4)
     print(f"[pg] T1: {len(t1_res)} users with residual ({t1_pct}% of volume); settling {args.settle}s...")
     time.sleep(args.settle)
-    t2_res, volume = sample(initial, args.base, args.n, args.usd_tol, args.btc_tol)
+    t2_res, volume = sample(initial, args.base, args.n, since, args.usd_tol, args.btc_tol)
     t2_pct = round(100.0 * sum(abs(r["dUSD"]) for r in t2_res) / volume, 4)
 
     if t2_res:
