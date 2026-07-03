@@ -342,6 +342,24 @@ public final class ClusterConfig
     }
 
     /**
+     * Set the same idle strategy supplier for all contexts: media driver threads (embedded
+     * mode only; an external driver reads its own driver.properties), consensus module and
+     * every service container. Each agent gets its own instance from the supplier.
+     *
+     * @param supplier of idle strategies.
+     */
+    public void idleStrategySupplier(final java.util.function.Supplier<org.agrona.concurrent.IdleStrategy> supplier)
+    {
+        this.mediaDriverContext
+                .conductorIdleStrategy(supplier.get())
+                .senderIdleStrategy(supplier.get())
+                .receiverIdleStrategy(supplier.get())
+                .sharedIdleStrategy(supplier.get());
+        this.consensusModuleContext.idleStrategySupplier(supplier::get);
+        this.clusteredServiceContexts.forEach((ctx) -> ctx.idleStrategySupplier(supplier::get));
+    }
+
+    /**
      * Set the aeron directory for all configuration contexts.
      *
      * @param aeronDir directory to use for aeron.

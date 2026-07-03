@@ -1,8 +1,13 @@
 package com.match.infrastructure.persistence;
 
 import com.match.infrastructure.Logger;
+import com.match.infrastructure.TransportConfig;
+import com.match.infrastructure.TransportConfig.DriverMode;
+import io.aeron.archive.Archive;
 import io.aeron.cluster.ClusteredMediaDriver;
+import io.aeron.cluster.ConsensusModule;
 import io.aeron.cluster.service.ClusteredServiceContainer;
+import io.aeron.exceptions.AeronException;
 import org.agrona.ErrorHandler;
 import org.agrona.concurrent.ShutdownSignalBarrier;
 import org.agrona.concurrent.SystemEpochClock;
@@ -23,6 +28,9 @@ public class AeronCluster {
     private static final Logger log = Logger.getLogger(AeronCluster.class);
     /** Counts errors surfaced by the Aeron error handler. Exposed for monitoring. */
     public static final AtomicLong AERON_ERROR_COUNT = new AtomicLong();
+    /** Ensures the fatal-error exit path (EXTERNAL driver mode) is only started once. */
+    private static final java.util.concurrent.atomic.AtomicBoolean FATAL_EXIT_STARTED =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
     public AeronCluster() {
         final ShutdownSignalBarrier barrier = new ShutdownSignalBarrier();
@@ -39,24 +47,49 @@ public class AeronCluster {
         // Route Aeron driver/archive/consensus/service errors to the application logger so
         // operators see them in node{N}.log instead of just the cluster mark file. Without
         // this, a misconfigured channel or back-pressure storm is silent.
+        final DriverMode driverMode = TransportConfig.driverMode();
+
         final ErrorHandler errorHandler = (Throwable t) -> {
             AERON_ERROR_COUNT.incrementAndGet();
             final StringWriter sw = new StringWriter();
             t.printStackTrace(new PrintWriter(sw));
             log.error("Aeron error #%d: %s", AERON_ERROR_COUNT.get(), sw.toString());
+            // In EXTERNAL mode a dead media driver surfaces as a FATAL AeronException
+            // (e.g. DriverTimeoutException). Signal the barrier so the Aeron components
+            // close, then guarantee process death: non-daemon application threads
+            // (market publishers, disruptors) would otherwise keep the JVM alive with no
+            // driver behind the IPC files, and the process manager would never restart it.
+            if (driverMode == DriverMode.EXTERNAL
+                    && t instanceof AeronException ae
+                    && ae.category() == AeronException.Category.FATAL
+                    && FATAL_EXIT_STARTED.compareAndSet(false, true)) {
+                log.error("FATAL Aeron error in EXTERNAL driver mode - node exiting in 5s for restart");
+                barrier.signal();
+                final Thread exitBackstop = new Thread(() -> {
+                    quietSleep(5000); // grace period for the components to close
+                    Runtime.getRuntime().halt(1);
+                }, "driver-death-exit");
+                exitBackstop.setDaemon(true);
+                exitBackstop.start();
+            }
         };
         clusterConfig.errorHandler(errorHandler);
 
+        // Idle strategies for consensus module, service container and (embedded mode only)
+        // media driver threads: busy-spin in prod, backoff on dev laptops (TRANSPORT_IDLE_MODE).
+        clusterConfig.idleStrategySupplier(TransportConfig.idleStrategySupplier());
+
         // ==================== ULTRA-LOW LATENCY CHANNEL CONFIG ====================
         // Large term buffers for high throughput without fragmentation.
-        // WARNING: mtu=8k requires path MTU >= 8192. Loopback (lo, 65536) and jumbo-frame
-        // networks (MTU 9000) are fine. Standard Ethernet (MTU 1500) will IP-fragment every
-        // packet > 1408 bytes, dramatically increasing loss and triggering NAK storms. Before
-        // moving cluster nodes off 127.0.0.1, either enable jumbo frames end-to-end or drop
-        // mtu to 1408 (Aeron default). Same warning applies to the MTU set on the MediaDriver
-        // below and to the OMS / market-gateway client ingress channels.
-        clusterConfig.consensusModuleContext().ingressChannel("aeron:udp?term-length=16m|mtu=8k");
-        clusterConfig.consensusModuleContext().egressChannel("aeron:udp?term-length=16m|mtu=8k");
+        // WARNING: the default mtu=8192 requires path MTU >= 8192. Loopback (lo, 65536) and
+        // jumbo-frame networks (MTU 9000) are fine. Standard Ethernet (MTU 1500) will
+        // IP-fragment every packet > 1408 bytes, dramatically increasing loss and triggering
+        // NAK storms. Before moving cluster nodes off 127.0.0.1, either enable jumbo frames
+        // end-to-end or set TRANSPORT_MTU=1408 (Aeron default). Same warning applies to the
+        // MTU on the media driver (embedded below, driver.properties for external) and to
+        // the OMS / market-gateway client ingress channels.
+        clusterConfig.consensusModuleContext().ingressChannel(TransportConfig.udpChannel("aeron:udp"));
+        clusterConfig.consensusModuleContext().egressChannel(TransportConfig.udpChannel("aeron:udp"));
 
         // ==================== FAST LEADER ELECTION CONFIG ====================
         // Single source of truth for cluster timing. Aeron defaults are: heartbeat-interval=200ms,
@@ -75,6 +108,54 @@ public class AeronCluster {
         //await DNS resolution of all the hostnames
         hostAddresses.forEach(AeronCluster::awaitDnsResolution);
 
+        if (driverMode == DriverMode.EXTERNAL) {
+            launchWithExternalDriver(clusterConfig, nodeId, barrier);
+        } else {
+            launchWithEmbeddedDriver(clusterConfig, barrier);
+        }
+    }
+
+    /**
+     * EXTERNAL driver mode (prod): the media driver runs as a separate process (see
+     * deploy/media-driver/launch-driver.sh), optionally under Onload/VMA for kernel bypass.
+     * This JVM launches only Archive + ConsensusModule + ClusteredServiceContainer, talking
+     * to the driver over shared-memory IPC. Driver tuning lives in
+     * deploy/media-driver/driver.properties (the external counterpart of the embedded
+     * overrides in {@link #launchWithEmbeddedDriver}); the driver process owns the aeron.dir
+     * lifecycle, so no dirDeleteOnStart/Shutdown here.
+     */
+    private static void launchWithExternalDriver(
+            final ClusterConfig clusterConfig, final int nodeId, final ShutdownSignalBarrier barrier) {
+        final String aeronDir = TransportConfig.aeronDir(nodeId);
+        log.info("Driver mode EXTERNAL: connecting to media driver at %s", aeronDir);
+        TransportConfig.awaitExternalDriver(aeronDir, TransportConfig.EXTERNAL_DRIVER_TIMEOUT_MS);
+        // Must be set on ALL contexts: ClusteredMediaDriver.launch used to propagate the
+        // driver's dir to the consensus module; launched separately, a context without it
+        // would silently connect to the default /dev/shm/aeron-<user> dir.
+        clusterConfig.aeronDirectoryName(aeronDir);
+
+        // Launch order mirrors ClusteredMediaDriver.launch: Archive -> ConsensusModule -> container.
+        try (
+                Archive ignored = Archive.launch(clusterConfig.archiveContext());
+                ConsensusModule ignored1 = ConsensusModule.launch(
+                        clusterConfig.consensusModuleContext().terminationHook(barrier::signal));
+                ClusteredServiceContainer ignored2 = ClusteredServiceContainer.launch(
+                        clusterConfig.clusteredServiceContext().terminationHook(barrier::signal)))
+        {
+            barrier.await();
+        } catch (Exception e) {
+            System.err.println("FATAL: Cluster node failed: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * EMBEDDED driver mode (dev default): media driver, archive and consensus module all
+     * run inside this JVM. Driver tuning below is the embedded counterpart of
+     * deploy/media-driver/driver.properties: keep the two in sync.
+     */
+    private static void launchWithEmbeddedDriver(
+            final ClusterConfig clusterConfig, final ShutdownSignalBarrier barrier) {
         try (
                 ClusteredMediaDriver ignored = ClusteredMediaDriver.launch(
                         clusterConfig.mediaDriverContext()

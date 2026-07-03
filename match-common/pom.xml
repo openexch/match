@@ -22,6 +22,12 @@
             <artifactId>agrona</artifactId>
         </dependency>
 
+        <!-- Aeron client for transport configuration (CommonContext, channel URIs) -->
+        <dependency>
+            <groupId>io.aeron</groupId>
+            <artifactId>aeron-client</artifactId>
+        </dependency>
+
         <!-- SBE for code generation at build time -->
         <dependency>
             <groupId>uk.co.real-logic</groupId>
