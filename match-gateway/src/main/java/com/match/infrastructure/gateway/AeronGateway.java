@@ -450,7 +450,10 @@ public class AeronGateway implements EgressListener, AutoCloseable {
                                       ", subConnected=" + sub.isConnected() +
                                       ", images=" + sub.imageCount() +
                                       ", sessionId=" + currentCluster.clusterSessionId() +
-                                      ", egressAge=" + egressAgeMs + "ms");
+                                      ", egressAge=" + egressAgeMs + "ms" +
+                                      ", wsDropped=" + com.match.infrastructure.websocket.MarketDataWebSocket.DROPPED_FRAMES.get() +
+                                      ", wsResyncs=" + com.match.infrastructure.websocket.MarketDataWebSocket.RESYNCS_SENT.get() +
+                                      ", wsSlowKicked=" + com.match.infrastructure.websocket.MarketDataWebSocket.SLOW_CLIENTS_DISCONNECTED.get());
                     lastStatsLogMs = nowMs;
                 }
 
