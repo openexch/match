@@ -42,44 +42,140 @@ public final class FixedPoint {
     }
 
     /**
-     * Multiply two fixed-point values (result in fixed-point).
-     * Uses Math.multiplyHigh for overflow-safe 128-bit intermediate result.
+     * Thrown when a fixed-point result cannot be represented in a signed 64-bit
+     * value. Wrong money must never be returned silently (match#30): callers on
+     * order-admission paths catch this and reject with OrderRejectReason.OVERFLOW.
+     * The stack trace is suppressed so throwing stays cheap on the match thread
+     * under hostile input; the throw sites are the few audited multiply/divide calls.
      */
-    public static long multiply(long a, long b) {
-        // For values within safe range, use fast path (no overflow possible)
-        if (a >= -MAX_SAFE_VALUE && a <= MAX_SAFE_VALUE) {
-            return (a * b) / SCALE_FACTOR;
+    public static final class OverflowException extends ArithmeticException {
+        public OverflowException() {
+            super("fixed-point overflow");
         }
-        // Overflow-safe path: use 128-bit multiplication via Math.multiplyHigh (Java 9+)
-        // result = (a * b) / SCALE_FACTOR using high/low 64-bit parts
-        long high = Math.multiplyHigh(a, b);
-        long low = a * b; // lower 64 bits (unsigned)
-        // Divide 128-bit result by SCALE_FACTOR
-        // For SCALE_FACTOR = 10^8, this is safe since high should be small for valid financial values
-        if (high == 0 || (high == -1 && low < 0)) {
-            return low / SCALE_FACTOR;
+
+        @Override
+        public synchronized Throwable fillInStackTrace() {
+            return this;
         }
-        // True 128-bit case: shift and divide
-        // high:low / SCALE_FACTOR = (high * 2^64 + low) / SCALE_FACTOR
-        return (high * (Long.divideUnsigned(-1L, SCALE_FACTOR) + 1)) + Long.divideUnsigned(low, SCALE_FACTOR);
     }
 
     /**
-     * Divide two fixed-point values (result in fixed-point).
-     * Overflow-safe: checks before scaling numerator.
+     * Multiply two fixed-point values exactly (result in fixed-point, truncated
+     * toward zero).
+     *
+     * Path selection is by whether the PRODUCT fits in 64 bits — never by operand
+     * magnitude, so argument order does not matter (the old first-operand guard let
+     * multiply(smallQty, largePrice) wrap silently, and products in [2^63, 2^64)
+     * came out negative). The wide path is an exact 128/64 division.
+     *
+     * @throws OverflowException if the true result does not fit in a signed long
+     */
+    public static long multiply(long a, long b) {
+        final long hi = Math.multiplyHigh(a, b);
+        final long lo = a * b;
+        if (hi == (lo >> 63)) {
+            // Product fits in a signed 64-bit value: divide directly (exact).
+            return lo / SCALE_FACTOR;
+        }
+        // Wide path: |a| * |b| as an unsigned 128-bit value, divided exactly.
+        // Math.abs(Long.MIN_VALUE) == Long.MIN_VALUE, which IS the correct
+        // unsigned magnitude 2^63 for the unsigned multiply below.
+        final boolean negative = (a ^ b) < 0;
+        final long ua = Math.abs(a);
+        final long ub = Math.abs(b);
+        final long phi = Math.unsignedMultiplyHigh(ua, ub);
+        final long plo = ua * ub;
+        if (Long.compareUnsigned(phi, SCALE_FACTOR) >= 0) {
+            throw new OverflowException(); // quotient would be >= 2^64
+        }
+        final long q = divideUnsigned128(phi, plo, SCALE_FACTOR);
+        return signedResult(q, negative);
+    }
+
+    /**
+     * Divide two fixed-point values exactly (result in fixed-point, truncated
+     * toward zero): (numerator * SCALE_FACTOR) / denominator with a 128-bit
+     * intermediate. The old wide path wrapped silently both when scaling large
+     * numerators and when scaling large remainders.
+     *
+     * @throws ArithmeticException on division by zero
+     * @throws OverflowException   if the true result does not fit in a signed long
      */
     public static long divide(long numerator, long denominator) {
         if (denominator == 0) {
             throw new ArithmeticException("Division by zero in fixed-point");
         }
-        // Fast path: numerator * SCALE_FACTOR won't overflow
+        // Fast path: scaling cannot overflow and |result| <= |numerator * SCALE|.
         if (numerator >= -MAX_SAFE_VALUE && numerator <= MAX_SAFE_VALUE) {
             return (numerator * SCALE_FACTOR) / denominator;
         }
-        // Overflow-safe: divide first, then scale remainder
-        long wholePart = (numerator / denominator) * SCALE_FACTOR;
-        long remainder = numerator % denominator;
-        return wholePart + (remainder * SCALE_FACTOR) / denominator;
+        final boolean negative = (numerator ^ denominator) < 0;
+        final long un = Math.abs(numerator);
+        final long ud = Math.abs(denominator);
+        final long phi = Math.unsignedMultiplyHigh(un, SCALE_FACTOR);
+        final long plo = un * SCALE_FACTOR;
+        if (Long.compareUnsigned(phi, ud) >= 0) {
+            throw new OverflowException(); // quotient would be >= 2^64
+        }
+        final long q = divideUnsigned128(phi, plo, ud);
+        return signedResult(q, negative);
+    }
+
+    /** Apply the sign to an unsigned 64-bit quotient, throwing if it cannot fit. */
+    private static long signedResult(long unsignedQuotient, boolean negative) {
+        if (negative) {
+            // Magnitudes up to 2^63 are representable as a negative long.
+            if (Long.compareUnsigned(unsignedQuotient, Long.MIN_VALUE) > 0) {
+                throw new OverflowException();
+            }
+            return -unsignedQuotient;
+        }
+        if (unsignedQuotient < 0) { // top bit set: > Long.MAX_VALUE
+            throw new OverflowException();
+        }
+        return unsignedQuotient;
+    }
+
+    /**
+     * Unsigned 128-by-64-bit division returning the 64-bit quotient
+     * (Hacker's Delight 9-4, divlu). Caller guarantees {@code hi < divisor}
+     * unsigned, so the quotient fits in 64 bits; divisor must be nonzero.
+     */
+    private static long divideUnsigned128(long hi, long lo, long divisor) {
+        final long b = 0x1_0000_0000L; // 2^32 digit base
+        final int s = Long.numberOfLeadingZeros(divisor);
+        final long v = divisor << s;                // normalized divisor, top bit set
+        final long vn1 = v >>> 32;
+        final long vn0 = v & 0xFFFF_FFFFL;
+        final long un32 = (s == 0) ? hi : (hi << s) | (lo >>> (64 - s));
+        final long un10 = lo << s;
+        final long un1 = un10 >>> 32;
+        final long un0 = un10 & 0xFFFF_FFFFL;
+
+        long q1 = Long.divideUnsigned(un32, vn1);
+        long rhat = un32 - q1 * vn1;
+        while (Long.compareUnsigned(q1, b) >= 0
+                || Long.compareUnsigned(q1 * vn0, b * rhat + un1) > 0) {
+            q1--;
+            rhat += vn1;
+            if (Long.compareUnsigned(rhat, b) >= 0) {
+                break;
+            }
+        }
+
+        final long un21 = un32 * b + un1 - q1 * v;
+        long q0 = Long.divideUnsigned(un21, vn1);
+        rhat = un21 - q0 * vn1;
+        while (Long.compareUnsigned(q0, b) >= 0
+                || Long.compareUnsigned(q0 * vn0, b * rhat + un0) > 0) {
+            q0--;
+            rhat += vn1;
+            if (Long.compareUnsigned(rhat, b) >= 0) {
+                break;
+            }
+        }
+
+        return q1 * b + q0;
     }
 
     /**

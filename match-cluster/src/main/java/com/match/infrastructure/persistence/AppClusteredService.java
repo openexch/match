@@ -98,10 +98,9 @@ public class AppClusteredService implements ClusteredService {
     private final AtomicLong marketDataBytes = new AtomicLong(0);
     private final AtomicLong omsEgressBytes = new AtomicLong(0);
 
-    // P1.5 (match#32): orders rejected because a notional computation would overflow
-    // 64-bit fixed-point. Pre-plumbed with OrderRejectReason.OVERFLOW; stays 0 until
-    // P1.1 (match#30) makes FixedPoint.multiply throw and routes the reject here.
-    private final AtomicLong overflowRejects = new AtomicLong(0);
+    // P1.5/P1.1 (match#32/#30): overflow rejects are counted in Engine at order
+    // admission (notional does not fit 64-bit fixed-point) and read from there
+    // for the EGRESS-DIAG lines below.
 
     // Simple wrapper for queued SBE messages (holds copy of buffer content)
     private static final class QueuedMessage {
@@ -345,7 +344,7 @@ public class AppClusteredService implements ClusteredService {
                         + " droppedMkt=" + droppedMessages.get() + " droppedOms=" + droppedOmsEgress.get()
                         + " submitted=" + sbeDemuxer.createOrderCount()
                         + " terminal=" + eventPublisher.terminalStatusCount()
-                        + " overflowRej=" + overflowRejects.get()
+                        + " overflowRej=" + engine.getOverflowRejectCount()
                         + " unknownTimers=" + timerManager.getUnknownTimerCount()
                         + " flushFires=" + flushTimerFireCount
                         + " lastEgressAgeMs=" + (now - lastEgressSendMs)
@@ -663,7 +662,7 @@ public class AppClusteredService implements ClusteredService {
                 + " droppedMkt=" + droppedMessages.get() + " droppedOms=" + droppedOmsEgress.get()
                 + " submitted=" + sbeDemuxer.createOrderCount()
                 + " terminal=" + eventPublisher.terminalStatusCount()
-                + " overflowRej=" + overflowRejects.get()
+                + " overflowRej=" + engine.getOverflowRejectCount()
                 + " unknownTimers=" + timerManager.getUnknownTimerCount()
                 + " flushFires=" + flushTimerFireCount + "]");
         System.out.flush();

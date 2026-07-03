@@ -174,16 +174,14 @@ public class FixedPointTest {
         assertTrue(formatted.startsWith("-42."));
     }
 
-    @Test
-    public void testMultiply_True128BitCase() {
-        // Force the true 128-bit case where high != 0 and high != -1
-        // Need values where a * b produces a high word that's not 0 or -1
-        // Use very large values: a = Long.MAX_VALUE / 2, b = SCALE_FACTOR * 4
+    @Test(expected = FixedPoint.OverflowException.class)
+    public void testMultiply_True128BitCase_ThrowsOnUnrepresentableResult() {
+        // (Long.MAX_VALUE / 2) * 4.0 = 2 * Long.MAX_VALUE: the true result does
+        // not fit a long. The old code returned an approximated wrong value here;
+        // wrong money must never be returned (match#30).
         long a = Long.MAX_VALUE / 2;
         long b = FixedPoint.SCALE_FACTOR * 4; // 4.0 in fixed point
-        long result = FixedPoint.multiply(a, b);
-        // Should not crash; result should be approximately a * 4
-        assertTrue("128-bit multiply should produce a result", result != 0);
+        FixedPoint.multiply(a, b);
     }
 
     // ==================== Determinism & tick-boundary exactness ====================
@@ -220,24 +218,37 @@ public class FixedPointTest {
     }
 
     @Test
-    public void testMultiplyCommutativeInSafeRange() {
-        // multiply() is commutative when BOTH operands are within MAX_SAFE_VALUE (the fast path).
-        // KNOWN LIMITATION: it is NOT commutative when one operand exceeds MAX_SAFE_VALUE (~$920 in
-        // fixed point), because the fast-path guard (FixedPoint.java) checks only the FIRST operand:
-        // multiply(smallQty, largePrice) can overflow the intermediate product while
-        // multiply(largePrice, smallQty) takes the overflow-safe path. Callers must pass the large
-        // operand (price) first. Tracked as a follow-up; this test pins the safe-range guarantee.
+    public void testMultiplyCommutativeEverywhere() {
+        // Path selection is now by product magnitude, never by operand order:
+        // multiply(smallQty, largePrice) and multiply(largePrice, smallQty) are
+        // identical in every range (the old first-operand guard made the qty-first
+        // order wrap silently; callers no longer need to know an argument order).
         long[][] pairs = {
             {FixedPoint.fromDouble(100.0), FixedPoint.fromDouble(0.5)},
             {FixedPoint.fromDouble(50.0),  FixedPoint.fromDouble(2.0)},
-            {FixedPoint.fromDouble(0.001), FixedPoint.fromDouble(7.0)}
+            {FixedPoint.fromDouble(0.001), FixedPoint.fromDouble(7.0)},
+            // The historical bug shapes: small qty FIRST with a large price.
+            {FixedPoint.fromDouble(0.01),  FixedPoint.fromDouble(100_000.0)}, // $1,000 band case
+            {FixedPoint.fromDouble(0.05),  FixedPoint.fromDouble(100_000.0)}, // $5,000 wrap case
+            {FixedPoint.fromDouble(1000.0), FixedPoint.fromDouble(100_000.0)} // $100M
         };
         for (long[] p : pairs) {
-            assertTrue("precondition: both operands within MAX_SAFE_VALUE",
-                Math.abs(p[0]) <= FixedPoint.MAX_SAFE_VALUE && Math.abs(p[1]) <= FixedPoint.MAX_SAFE_VALUE);
-            assertEquals("multiply must be order-independent within the safe range",
+            assertEquals("multiply must be order-independent in every range",
                 FixedPoint.multiply(p[0], p[1]), FixedPoint.multiply(p[1], p[0]));
         }
+    }
+
+    @Test
+    public void testMultiplyNegativeNotionalBandFixed() {
+        // Regression for the [2^63, 2^64) product window (match#30): notionals in
+        // ~[$922, $1844] came out NEGATIVE (multiplyHigh 0 but low signed-negative),
+        // spuriously rejecting ~3% of typical orders via NOTIONAL_TOO_SMALL.
+        long qty = FixedPoint.fromDouble(0.01);          // 1_000_000
+        long price = FixedPoint.fromDouble(100_000.0);   // 10^13
+        assertEquals(FixedPoint.fromDouble(1_000.0), FixedPoint.multiply(qty, price));
+        assertEquals(FixedPoint.fromDouble(1_000.0), FixedPoint.multiply(price, qty));
+        assertEquals(FixedPoint.fromDouble(-1_000.0), FixedPoint.multiply(-qty, price));
+        assertEquals(FixedPoint.fromDouble(1_000.0), FixedPoint.multiply(-qty, -price));
     }
 
     @Test
