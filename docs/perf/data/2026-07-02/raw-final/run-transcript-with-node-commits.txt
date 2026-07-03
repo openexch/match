@@ -1,0 +1,69 @@
+=== RATE 500000 warmup=10 total=35 (20:01:42)
+  pre : 0:L@32502251232 1:F@32502251296 2:F@32502251296
+  mid : 0:L@33671569600 1:F@33680467200 2:F@33690463616
+  post: 0:L@34665663168 1:F@34675038528 2:F@34684379392
+  │  415,398 msg/s │    987,817 sent │          0 success │        0 fails │      7 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+  │  498,754 msg/s │  1,984,827 sent │          0 success │        0 fails │     15 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+  │  499,341 msg/s │  2,983,510 sent │          0 success │        0 fails │     22 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+  │  498,480 msg/s │  3,980,471 sent │          0 success │        0 fails │     30 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+  │  498,293 msg/s │  4,977,057 sent │          0 success │        0 fails │     37 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+  │  499,462 msg/s │    996,427 sent │    996,433 success │        0 fails │      8 BP │ 100.00% │ p50:    0.2μs │ p99:    2.0μs │
+  │  499,384 msg/s │  1,995,695 sent │  1,995,700 success │        0 fails │     16 BP │ 100.00% │ p50:    0.2μs │ p99:    0.3μs │
+  │  499,236 msg/s │  2,993,668 sent │  2,993,673 success │        0 fails │     23 BP │ 100.00% │ p50:    0.3μs │ p99:    1.8μs │
+  │  499,658 msg/s │  3,992,985 sent │  3,992,991 success │        0 fails │     31 BP │ 100.00% │ p50:    0.2μs │ p99:    0.3μs │
+  │  499,715 msg/s │  4,992,415 sent │  4,992,420 success │        0 fails │     39 BP │ 100.00% │ p50:    0.2μs │ p99:    0.4μs │
+  │  450,837 msg/s │  5,894,089 sent │  5,894,093 success │   96,616 fails │ 966,205 BP │  98.39% │ p50:    0.2μs │ p99:    1.7μs │
+  │  498,888 msg/s │  6,891,866 sent │  6,891,866 success │   96,616 fails │ 966,213 BP │  98.62% │ p50:    0.2μs │ p99:    0.3μs │
+  │  498,009 msg/s │  7,888,882 sent │  7,888,887 success │   96,616 fails │ 966,221 BP │  98.79% │ p50:    0.3μs │ p99:    1.8μs │
+  │  499,682 msg/s │  8,887,248 sent │  8,887,252 success │   96,616 fails │ 966,228 BP │  98.92% │ p50:    0.2μs │ p99:    0.3μs │
+  │  497,532 msg/s │  9,882,811 sent │  9,882,811 success │   96,616 fails │ 966,236 BP │  99.03% │ p50:    0.2μs │ p99:    0.4μs │
+  │  499,548 msg/s │ 10,881,408 sent │ 10,881,409 success │   96,616 fails │ 966,244 BP │  99.12% │ p50:    0.2μs │ p99:    3.6μs │
+  │  499,761 msg/s │ 11,881,431 sent │ 11,881,434 success │   96,616 fails │ 966,251 BP │  99.19% │ p50:    0.2μs │ p99:    0.4μs │
+  Successful:            12,380,801 (99.23%)
+  Average Throughput:    349,661.12 msg/s
+    p50 (median):              0.23 μs
+    p99:                       0.34 μs
+    Max:                      82.28 μs
+  housekeep: 14G free
+=== RATE 700000 warmup=8 total=23 (20:02:28)
+  pre : 0:L@34724217664 1:F@34724217728 2:F@34724217792
+  mid : 0:L@35749672704 1:F@35765743040 2:F@35780656768
+  post: 0:L@36578031232 1:F@36591419136 2:F@36604498496
+  │  613,507 msg/s │  1,385,914 sent │          0 success │        0 fails │     10 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+  │  698,411 msg/s │  2,782,736 sent │          0 success │        0 fails │     21 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+  │  698,885 msg/s │  4,180,507 sent │          0 success │        0 fails │ 195,734 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+  │  699,351 msg/s │  5,579,209 sent │          0 success │        0 fails │ 195,745 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+  │  698,478 msg/s │  1,394,163 sent │  1,394,184 success │        0 fails │     11 BP │ 100.00% │ p50:    0.3μs │ p99:  475.7μs │
+  │  698,663 msg/s │  2,790,792 sent │  2,790,806 success │        0 fails │     21 BP │ 100.00% │ p50:    0.3μs │ p99:    2.5μs │
+  │  698,843 msg/s │  4,188,478 sent │  4,188,483 success │        0 fails │     32 BP │ 100.00% │ p50:    0.2μs │ p99:    0.3μs │
+  │  698,965 msg/s │  5,586,409 sent │  5,586,417 success │        0 fails │     43 BP │ 100.00% │ p50:    0.2μs │ p99:    0.3μs │
+  │  694,673 msg/s │  6,975,756 sent │  6,975,760 success │    7,811 fails │ 78,187 BP │  99.89% │ p50:    0.2μs │ p99:    2.6μs │
+  │  699,116 msg/s │  8,373,988 sent │  8,373,995 success │    7,811 fails │ 78,198 BP │  99.91% │ p50:    0.2μs │ p99:    0.3μs │
+  │  698,556 msg/s │  9,771,101 sent │  9,771,124 success │    7,811 fails │ 78,208 BP │  99.92% │ p50:    0.3μs │ p99:    1.9μs │
+  Successful:            10,460,473 (99.83%)
+  Average Throughput:    448,831.76 msg/s
+    p50 (median):              0.22 μs
+    p99:                       2.10 μs
+    Max:                      77.65 μs
+  housekeep: 14G free
+=== RATE 800000 warmup=8 total=20 (20:03:03)
+  pre : 0:L@36774886592 1:F@36774886592 2:F@36774886656
+  mid : 0:L@37775622400 1:F@37790937792 2:F@37803011520
+  post: 0:L@38460482560 1:F@38473068864 2:F@38487295552
+  │  662,350 msg/s │  1,575,070 sent │          0 success │        0 fails │ 150,240 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+  │  798,394 msg/s │  3,171,060 sent │          0 success │        0 fails │ 150,253 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+  │  798,480 msg/s │  4,768,021 sent │          0 success │        0 fails │ 150,265 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+  │  797,624 msg/s │  6,363,270 sent │          0 success │        0 fails │ 150,277 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+  │  796,808 msg/s │  1,591,227 sent │  1,591,236 success │        0 fails │     12 BP │ 100.00% │ p50:    0.2μs │ p99:    0.4μs │
+  │  794,375 msg/s │  3,179,184 sent │  3,179,193 success │        0 fails │     24 BP │ 100.00% │ p50:    0.2μs │ p99:    4.9μs │
+  │  797,499 msg/s │  4,774,980 sent │  4,774,980 success │        0 fails │     36 BP │ 100.00% │ p50:    0.2μs │ p99:    0.3μs │
+  │  798,268 msg/s │  6,370,719 sent │  6,370,747 success │        0 fails │     49 BP │ 100.00% │ p50:    0.3μs │ p99:    0.9μs │
+  │  796,105 msg/s │  7,962,930 sent │  7,962,960 success │        0 fails │     61 BP │ 100.00% │ p50:    0.3μs │ p99:    2.2μs │
+  │  780,276 msg/s │  9,523,482 sent │  9,523,482 success │        0 fails │     73 BP │ 100.00% │ p50:    0.2μs │ p99:    0.3μs │
+  Successful:             9,523,482 (100.00%)
+  Average Throughput:    466,174.65 msg/s
+    p50 (median):              0.22 μs
+    p99:                       0.32 μs
+    Max:                      39.22 μs
+  housekeep: 14G free
+FINAL RUNGS DONE

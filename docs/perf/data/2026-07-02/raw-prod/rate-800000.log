@@ -1,0 +1,14 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║              Aeron Cluster Load Generator Starting...                       ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+→ Launching embedded Media Driver...
+✓ Media Driver launched
+→ Connecting to Aeron Cluster...
+✗ Failed to start load generator: ERROR - cluster connect timeout: state=POLL_RESPONSE messageTimeout=5s ingressChannel=aeron:udp?term-length=16m|mtu=8k ingressEndpoints=0=localhost:9002,1=localhost:9102,2=localhost:9202 ingressPublication=Publication{originalRegistrationId=5, registrationId=5, isClosed=false, isConnected=false, initialTermId=-9270419, termBufferLength=16777216, sessionId=976402441, streamId=101, channel='aeron:udp?mtu=8k|endpoint=localhost:9002|term-length=16m', position=160} egress.isConnected=false responseChannel=aeron:udp?rejoin=false|endpoint=127.0.0.1:34820
+io.aeron.exceptions.TimeoutException: ERROR - cluster connect timeout: state=POLL_RESPONSE messageTimeout=5s ingressChannel=aeron:udp?term-length=16m|mtu=8k ingressEndpoints=0=localhost:9002,1=localhost:9102,2=localhost:9202 ingressPublication=Publication{originalRegistrationId=5, registrationId=5, isClosed=false, isConnected=false, initialTermId=-9270419, termBufferLength=16777216, sessionId=976402441, streamId=101, channel='aeron:udp?mtu=8k|endpoint=localhost:9002|term-length=16m', position=160} egress.isConnected=false responseChannel=aeron:udp?rejoin=false|endpoint=127.0.0.1:34820
+	at io.aeron.cluster.client.AeronCluster$AsyncConnect.checkDeadline(AeronCluster.java:2313)
+	at io.aeron.cluster.client.AeronCluster$AsyncConnect.poll(AeronCluster.java:2267)
+	at io.aeron.cluster.client.AeronCluster.connect(AeronCluster.java:164)
+	at com.match.loadtest.LoadGenerator.<init>(LoadGenerator.java:114)
+	at com.match.loadtest.LoadGenerator.main(LoadGenerator.java:494)

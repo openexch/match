@@ -1,0 +1,56 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║              Aeron Cluster Load Generator Starting...                       ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+→ Launching embedded Media Driver...
+✓ Media Driver launched
+→ Connecting to Aeron Cluster...
+✓ Connected to cluster: 0=localhost:9002,1=localhost:9102,2=localhost:9202
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                          Load Test Configuration                            ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ Target Rate:       1,000,000 orders/sec                                        ║
+║ Duration:                 10 seconds                                            ║
+║ Worker Threads:            1                                                    ║
+║ Market:           BTC-USD                                                     ║
+║ Scenario:         Aggressive Trading                                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+→ Starting load generation...
+
+[Worker-0] Started, target rate: 1000000 msg/s
+→ JIT Warmup phase: 5 seconds (metrics disabled)...
+│  876,313 msg/s │  1,975,210 sent │          0 success │        0 fails │ 789,502 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+│  997,646 msg/s │  3,970,502 sent │          0 success │        0 fails │ 789,517 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+→ Warmup complete, starting measurement...
+│  914,184 msg/s │    909,614 sent │    909,624 success │   85,534 fails │ 855,365 BP │  91.40% │ p50:    0.3μs │ p99:    0.7μs │
+│  827,672 msg/s │  2,565,786 sent │  2,565,795 success │  422,969 fails │ 4,229,790 BP │  85.85% │ p50:    0.2μs │ p99:    0.3μs │
+
+→ Test duration reached, stopping...
+[Worker-0] Stopped, enqueued 9,953,011 messages
+│  973,166 msg/s │  4,511,145 sent │  4,511,154 success │  471,194 fails │ 4,712,068 BP │  90.54% │ p50:    0.2μs │ p99:    0.3μs │
+
+→ Shutting down load generator...
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                              Final Results                                   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+Total Duration:            10,305 ms
+Messages Sent:          4,512,319
+Successful:             4,512,319 (90.54%)
+Failed:                   471,194
+Backpressure Events:    4,712,068
+Timeouts:                 471,194
+Average Throughput:    437,876.66 msg/s
+
+Latency Distribution (μs):
+  Min:                       0.14 μs
+  p50 (median):              0.20 μs
+  p95:                       0.25 μs
+  p99:                       0.32 μs
+  Max:                      95.12 μs
+  Avg:                       0.22 μs
+
+✓ Load generator stopped

@@ -1,0 +1,102 @@
+[
+  {
+    "targetRate": 500000,
+    "durationMs": 25296.0,
+    "sent": 9968721.0,
+    "successful": 9968721.0,
+    "successPct": 99.82,
+    "failed": 17592.0,
+    "backpressure": 176002.0,
+    "timeouts": 17592.0,
+    "throughputMsgSec": 394082.9,
+    "ingressLatencyUs": {
+      "min": 0.14,
+      "p50": 0.25,
+      "p95": 1.31,
+      "p99": 1.48,
+      "max": 3032.74,
+      "avg": 2.76
+    },
+    "egressResponsesSeen": 10000.0
+  },
+  {
+    "targetRate": 600000,
+    "durationMs": 20418.0,
+    "sent": 8951768.0,
+    "successful": 8951768.0,
+    "successPct": 99.56,
+    "failed": 39289.0,
+    "backpressure": 393016.0,
+    "timeouts": 39289.0,
+    "throughputMsgSec": 438425.31,
+    "ingressLatencyUs": {
+      "min": 0.14,
+      "p50": 0.22,
+      "p95": 0.29,
+      "p99": 0.33,
+      "max": 113.12,
+      "avg": 0.25
+    },
+    "egressResponsesSeen": 10000.0
+  },
+  {
+    "targetRate": 700000,
+    "durationMs": 15429.0,
+    "sent": 6895399.0,
+    "successful": 6895399.0,
+    "successPct": 99.47,
+    "failed": 36429.0,
+    "backpressure": 364344.0,
+    "timeouts": 36429.0,
+    "throughputMsgSec": 446911.6,
+    "ingressLatencyUs": {
+      "min": 0.14,
+      "p50": 0.28,
+      "p95": 2.24,
+      "p99": 4.05,
+      "max": 2044.52,
+      "avg": 4.17
+    },
+    "egressResponsesSeen": 10000.0
+  },
+  {
+    "targetRate": 800000,
+    "durationMs": 12406.0,
+    "sent": 5517282.0,
+    "successful": 5517282.0,
+    "successPct": 99.64,
+    "failed": 20178.0,
+    "backpressure": 201828.0,
+    "timeouts": 20178.0,
+    "throughputMsgSec": 444726.91,
+    "ingressLatencyUs": {
+      "min": 0.14,
+      "p50": 0.28,
+      "p95": 2.7,
+      "p99": 6.2,
+      "max": 3383.46,
+      "avg": 11.23
+    },
+    "egressResponsesSeen": 0
+  },
+  {
+    "targetRate": 1000000,
+    "durationMs": 10305.0,
+    "sent": 4512319.0,
+    "successful": 4512319.0,
+    "successPct": 90.54,
+    "failed": 471194.0,
+    "backpressure": 4712068.0,
+    "timeouts": 471194.0,
+    "throughputMsgSec": 437876.66,
+    "ingressLatencyUs": {
+      "min": 0.14,
+      "p50": 0.2,
+      "p95": 0.25,
+      "p99": 0.32,
+      "max": 95.12,
+      "avg": 0.22
+    },
+    "egressResponsesSeen": 0
+  }
+]

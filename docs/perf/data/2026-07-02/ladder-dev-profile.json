@@ -1,0 +1,337 @@
+[
+  {
+    "targetRate": 10000,
+    "durationMs": 45362.0,
+    "sent": 299254.0,
+    "successful": 299254.0,
+    "successPct": 100.0,
+    "failed": 0.0,
+    "backpressure": 2.0,
+    "timeouts": 0.0,
+    "throughputMsgSec": 6597.02,
+    "ingressLatencyUs": {
+      "min": 0.16,
+      "p50": 0.3,
+      "p95": 2001.34,
+      "p99": 2999.62,
+      "max": 6489.48,
+      "avg": 265.24
+    },
+    "egressResponsesSeen": 0,
+    "cpuUtilPct": {
+      "node0+driver0 (0-3)": 100.0,
+      "node1+driver1 (4-7)": 100.0,
+      "node2+driver2 (8-11)": 100.0,
+      "oms (12-15)": 17.6,
+      "market-gw (16-19)": 22.4,
+      "loadgen (20-23)": 99.9
+    },
+    "postRunHealth": [
+      "leader: 0",
+      " node 0 LEADER commit= 49786816",
+      " node 1 FOLLOWER commit= 49904064",
+      " node 2 FOLLOWER commit= 50045440",
+      "node0 critical/drop lines: 252",
+      "node1 critical/drop lines: 0",
+      "0",
+      "node2 critical/drop lines: 0",
+      "0"
+    ]
+  },
+  {
+    "targetRate": 50000,
+    "durationMs": 45385.0,
+    "sent": 1415834.0,
+    "successful": 1415834.0,
+    "successPct": 100.0,
+    "failed": 0.0,
+    "backpressure": 10.0,
+    "timeouts": 0.0,
+    "throughputMsgSec": 31196.08,
+    "ingressLatencyUs": {
+      "min": 0.16,
+      "p50": 0.26,
+      "p95": 2037.22,
+      "p99": 2919.83,
+      "max": 6719.84,
+      "avg": 286.03
+    },
+    "egressResponsesSeen": 0,
+    "cpuUtilPct": {
+      "node0+driver0 (0-3)": 100.0,
+      "node1+driver1 (4-7)": 100.0,
+      "node2+driver2 (8-11)": 100.0,
+      "oms (12-15)": 48.7,
+      "market-gw (16-19)": 42.2,
+      "loadgen (20-23)": 99.9
+    },
+    "postRunHealth": [
+      "leader: 0",
+      " node 0 LEADER commit= 280378112",
+      " node 1 FOLLOWER commit= 280787520",
+      " node 2 FOLLOWER commit= 281473984",
+      "node0 critical/drop lines: 262",
+      "node1 critical/drop lines: 3",
+      "node2 critical/drop lines: 3"
+    ]
+  },
+  {
+    "targetRate": 100000,
+    "durationMs": 45393.0,
+    "sent": 2788927.0,
+    "successful": 2788927.0,
+    "successPct": 100.0,
+    "failed": 0.0,
+    "backpressure": 21.0,
+    "timeouts": 0.0,
+    "throughputMsgSec": 61439.58,
+    "ingressLatencyUs": {
+      "min": 0.16,
+      "p50": 0.26,
+      "p95": 1889.4,
+      "p99": 2841.9,
+      "max": 6005.82,
+      "avg": 250.22
+    },
+    "egressResponsesSeen": 0,
+    "cpuUtilPct": {
+      "node0+driver0 (0-3)": 100.0,
+      "node1+driver1 (4-7)": 100.0,
+      "node2+driver2 (8-11)": 100.0,
+      "oms (12-15)": 47.5,
+      "market-gw (16-19)": 45.5,
+      "loadgen (20-23)": 99.9
+    },
+    "postRunHealth": [
+      "leader: 0",
+      " node 0 LEADER commit= 740198080",
+      " node 1 FOLLOWER commit= 741416256",
+      " node 2 FOLLOWER commit= 742303232",
+      "node0 critical/drop lines: 271",
+      "node1 critical/drop lines: 8",
+      "node2 critical/drop lines: 8"
+    ]
+  },
+  {
+    "targetRate": 150000,
+    "durationMs": 45481.0,
+    "sent": 4185731.0,
+    "successful": 4185731.0,
+    "successPct": 100.0,
+    "failed": 0.0,
+    "backpressure": 32.0,
+    "timeouts": 0.0,
+    "throughputMsgSec": 92032.52,
+    "ingressLatencyUs": {
+      "min": 0.16,
+      "p50": 0.27,
+      "p95": 2315.46,
+      "p99": 2898.41,
+      "max": 6055.78,
+      "avg": 369.11
+    },
+    "egressResponsesSeen": 10000.0,
+    "cpuUtilPct": {
+      "node0+driver0 (0-3)": 100.0,
+      "node1+driver1 (4-7)": 100.0,
+      "node2+driver2 (8-11)": 100.0,
+      "oms (12-15)": 38.2,
+      "market-gw (16-19)": 40.0,
+      "loadgen (20-23)": 99.9
+    },
+    "postRunHealth": [
+      "leader: 0",
+      " node 0 LEADER commit= 1399851200",
+      " node 1 FOLLOWER commit= 1401888704",
+      " node 2 FOLLOWER commit= 1403617792",
+      "node0 critical/drop lines: 282",
+      "node1 critical/drop lines: 15",
+      "node2 critical/drop lines: 15"
+    ]
+  },
+  {
+    "targetRate": 200000,
+    "durationMs": 45327.0,
+    "sent": 5528593.0,
+    "successful": 5528593.0,
+    "successPct": 100.0,
+    "failed": 0.0,
+    "backpressure": 42.0,
+    "timeouts": 0.0,
+    "throughputMsgSec": 121971.3,
+    "ingressLatencyUs": {
+      "min": 0.15,
+      "p50": 0.27,
+      "p95": 2303.61,
+      "p99": 2960.59,
+      "max": 6015.5,
+      "avg": 414.02
+    },
+    "egressResponsesSeen": 10000.0,
+    "cpuUtilPct": {
+      "node0+driver0 (0-3)": 100.0,
+      "node1+driver1 (4-7)": 100.0,
+      "node2+driver2 (8-11)": 100.0,
+      "oms (12-15)": 43.9,
+      "market-gw (16-19)": 49.1,
+      "loadgen (20-23)": 100.0
+    },
+    "postRunHealth": [
+      "leader: 0",
+      " node 0 LEADER commit= 2314544896",
+      " node 1 FOLLOWER commit= 2317511424",
+      " node 2 FOLLOWER commit= 2320387392",
+      "node0 critical/drop lines: 292",
+      "node1 critical/drop lines: 23",
+      "node2 critical/drop lines: 23"
+    ]
+  },
+  {
+    "targetRate": 250000,
+    "durationMs": 45293.0,
+    "sent": 6616277.0,
+    "successful": 6616277.0,
+    "successPct": 100.0,
+    "failed": 0.0,
+    "backpressure": 50.0,
+    "timeouts": 0.0,
+    "throughputMsgSec": 146077.25,
+    "ingressLatencyUs": {
+      "min": 0.16,
+      "p50": 0.27,
+      "p95": 1796.54,
+      "p99": 2790.09,
+      "max": 6173.53,
+      "avg": 245.6
+    },
+    "egressResponsesSeen": 10000.0,
+    "cpuUtilPct": {
+      "node0+driver0 (0-3)": 100.0,
+      "node1+driver1 (4-7)": 99.9,
+      "node2+driver2 (8-11)": 100.0,
+      "oms (12-15)": 40.6,
+      "market-gw (16-19)": 52.9,
+      "loadgen (20-23)": 99.9
+    },
+    "postRunHealth": [
+      "leader: 0",
+      " node 0 LEADER commit= 3393664256",
+      " node 1 FOLLOWER commit= 3396916672",
+      " node 2 FOLLOWER commit= 3399635392",
+      "node0 critical/drop lines: 302",
+      "node1 critical/drop lines: 33",
+      "node2 critical/drop lines: 32"
+    ]
+  },
+  {
+    "targetRate": 300000,
+    "durationMs": 45416.0,
+    "sent": 5417647.0,
+    "successful": 5417647.0,
+    "successPct": 65.76,
+    "failed": 2820804.0,
+    "backpressure": 28208833.0,
+    "timeouts": 2820804.0,
+    "throughputMsgSec": 119289.39,
+    "ingressLatencyUs": {
+      "min": 0.16,
+      "p50": 0.26,
+      "p95": 1945.27,
+      "p99": 2850.41,
+      "max": 6007.73,
+      "avg": 245.4
+    },
+    "egressResponsesSeen": 10000.0,
+    "cpuUtilPct": {
+      "node0+driver0 (0-3)": 100.0,
+      "node1+driver1 (4-7)": 100.0,
+      "node2+driver2 (8-11)": 99.9,
+      "oms (12-15)": 35.9,
+      "market-gw (16-19)": 48.9,
+      "loadgen (20-23)": 100.0
+    },
+    "postRunHealth": [
+      "leader: 0",
+      " node 0 LEADER commit= 4265472128",
+      " node 1 FOLLOWER commit= 4266998464",
+      " node 2 FOLLOWER commit= 4268481088",
+      "node0 critical/drop lines: 312",
+      "node1 critical/drop lines: 41",
+      "node2 critical/drop lines: 40"
+    ]
+  },
+  {
+    "targetRate": 350000,
+    "durationMs": 45426.0,
+    "sent": 5364604.0,
+    "successful": 5364604.0,
+    "successPct": 55.39,
+    "failed": 4320537.0,
+    "backpressure": 43206142.0,
+    "timeouts": 4320537.0,
+    "throughputMsgSec": 118095.45,
+    "ingressLatencyUs": {
+      "min": 0.16,
+      "p50": 0.25,
+      "p95": 2294.46,
+      "p99": 2922.58,
+      "max": 6024.45,
+      "avg": 344.44
+    },
+    "egressResponsesSeen": 10000.0,
+    "cpuUtilPct": {
+      "node0+driver0 (0-3)": 100.0,
+      "node1+driver1 (4-7)": 100.0,
+      "node2+driver2 (8-11)": 100.0,
+      "oms (12-15)": 33.3,
+      "market-gw (16-19)": 28.8,
+      "loadgen (20-23)": 100.0
+    },
+    "postRunHealth": [
+      "leader: 0",
+      " node 0 LEADER commit= 5191562176",
+      " node 1 FOLLOWER commit= 5192776192",
+      " node 2 FOLLOWER commit= 5194470912",
+      "node0 critical/drop lines: 322",
+      "node1 critical/drop lines: 49",
+      "node2 critical/drop lines: 49"
+    ]
+  },
+  {
+    "targetRate": 400000,
+    "durationMs": 45408.0,
+    "sent": 5400435.0,
+    "successful": 5400435.0,
+    "successPct": 49.1,
+    "failed": 5597374.0,
+    "backpressure": 55975094.0,
+    "timeouts": 5597374.0,
+    "throughputMsgSec": 118931.36,
+    "ingressLatencyUs": {
+      "min": 0.15,
+      "p50": 0.26,
+      "p95": 2213.43,
+      "p99": 2955.48,
+      "max": 6075.25,
+      "avg": 333.14
+    },
+    "egressResponsesSeen": 10000.0,
+    "cpuUtilPct": {
+      "node0+driver0 (0-3)": 100.0,
+      "node1+driver1 (4-7)": 100.0,
+      "node2+driver2 (8-11)": 100.0,
+      "oms (12-15)": 36.1,
+      "market-gw (16-19)": 48.0,
+      "loadgen (20-23)": 100.0
+    },
+    "postRunHealth": [
+      "leader: 0",
+      " node 0 LEADER commit= 6060150528",
+      " node 1 FOLLOWER commit= 6062400512",
+      " node 2 FOLLOWER commit= 6064714304",
+      "node0 critical/drop lines: 332",
+      "node1 critical/drop lines: 57",
+      "node2 critical/drop lines: 57"
+    ]
+  }
+]

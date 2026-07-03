@@ -1,0 +1,83 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║              Aeron Cluster Load Generator Starting...                       ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+→ Launching embedded Media Driver...
+WARNING: Could not set desired SO_SNDBUF, adjust OS to allow aeron.socket.so_sndbuf attempted=4194304, actual=212992
+WARNING: Could not set desired SO_RCVBUF, adjust OS to allow aeron.socket.so_rcvbuf attempted=4194304, actual=212992
+✓ Media Driver launched
+→ Connecting to Aeron Cluster...
+✓ Connected to cluster: 0=localhost:9002,1=localhost:9102,2=localhost:9202
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                          Load Test Configuration                            ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ Target Rate:         300,000 orders/sec                                        ║
+║ Duration:                 45 seconds                                            ║
+║ Worker Threads:            4                                                    ║
+║ Market:           BTC-USD                                                     ║
+║ Scenario:         Aggressive Trading                                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+→ Starting load generation...
+
+[Worker-0] Started, target rate: 75000 msg/s
+[Worker-1] Started, target rate: 75000 msg/s
+[Worker-2] Started, target rate: 75000 msg/s
+[Worker-3] Started, target rate: 75000 msg/s
+→ JIT Warmup phase: 10 seconds (metrics disabled)...
+│  155,400 msg/s │    368,610 sent │          0 success │        0 fails │      2 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+│  221,136 msg/s │    810,882 sent │          0 success │        0 fails │      6 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+│  235,791 msg/s │  1,282,464 sent │          0 success │        0 fails │ 1,491,140 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+│  232,949 msg/s │  1,748,362 sent │          0 success │        0 fails │ 3,351,012 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+│  232,132 msg/s │  2,212,627 sent │          0 success │        0 fails │ 5,099,257 BP │ 100.00% │ p50:    0.0μs │ p99:    0.0μs │
+→ Warmup complete, starting measurement...
+│  146,531 msg/s │    292,038 sent │    292,038 success │  181,880 fails │ 1,818,883 BP │  61.62% │ p50:    0.3μs │ p99: 3093.8μs │
+│  141,356 msg/s │    574,751 sent │    574,753 success │  376,224 fails │ 3,762,413 BP │  60.44% │ p50:    0.3μs │ p99: 2997.5μs │
+│  153,208 msg/s │    881,167 sent │    881,167 success │  537,127 fails │ 5,371,508 BP │  62.13% │ p50:    0.3μs │ p99: 2994.1μs │
+│  139,377 msg/s │  1,160,200 sent │  1,160,200 success │  713,454 fails │ 7,134,781 BP │  61.92% │ p50:    0.3μs │ p99: 2946.5μs │
+│  157,950 msg/s │  1,475,943 sent │  1,475,944 success │  864,505 fails │ 8,645,297 BP │  63.06% │ p50:    0.3μs │ p99: 2898.4μs │
+│  162,788 msg/s │  1,801,357 sent │  1,801,358 success │ 1,020,963 fails │ 10,209,895 BP │  63.83% │ p50:    0.3μs │ p99: 2957.2μs │
+│  152,267 msg/s │  2,106,044 sent │  2,106,045 success │ 1,183,208 fails │ 11,832,374 BP │  64.03% │ p50:    0.3μs │ p99: 3007.1μs │
+│  163,628 msg/s │  2,433,138 sent │  2,433,140 success │ 1,325,940 fails │ 13,259,792 BP │  64.73% │ p50:    0.3μs │ p99: 3044.5μs │
+│  166,909 msg/s │  2,766,956 sent │  2,766,956 success │ 1,457,198 fails │ 14,572,412 BP │  65.50% │ p50:    0.3μs │ p99: 2972.0μs │
+│  159,482 msg/s │  3,085,921 sent │  3,085,923 success │ 1,607,117 fails │ 16,071,609 BP │  65.76% │ p50:    0.3μs │ p99: 2929.9μs │
+│  161,252 msg/s │  3,408,425 sent │  3,408,425 success │ 1,753,529 fails │ 17,535,761 BP │  66.03% │ p50:    0.3μs │ p99: 2853.3μs │
+│  155,085 msg/s │  3,718,595 sent │  3,718,595 success │ 1,920,572 fails │ 19,206,203 BP │  65.94% │ p50:    0.3μs │ p99: 2870.0μs │
+│  150,626 msg/s │  4,019,999 sent │  4,020,001 success │ 2,102,413 fails │ 21,024,643 BP │  65.66% │ p50:    0.3μs │ p99: 2896.6μs │
+[Egress] Received 10,000 responses from cluster
+│  170,367 msg/s │  4,360,564 sent │  4,360,564 success │ 2,239,109 fails │ 22,391,656 BP │  66.07% │ p50:    0.3μs │ p99: 2973.1μs │
+│  163,533 msg/s │  4,687,630 sent │  4,687,630 success │ 2,369,582 fails │ 23,696,422 BP │  66.42% │ p50:    0.3μs │ p99: 2965.2μs │
+│  133,620 msg/s │  4,954,870 sent │  4,954,870 success │ 2,592,308 fails │ 25,923,787 BP │  65.65% │ p50:    0.3μs │ p99: 2978.5μs │
+│  143,609 msg/s │  5,242,089 sent │  5,242,091 success │ 2,772,825 fails │ 27,729,040 BP │  65.40% │ p50:    0.3μs │ p99: 2897.2μs │
+
+→ Test duration reached, stopping...
+[Worker-0] Stopped, enqueued 2,542,378 messages
+[Worker-1] Stopped, enqueued 2,743,931 messages
+[Worker-2] Stopped, enqueued 2,599,806 messages
+[Worker-3] Stopped, enqueued 2,565,355 messages
+
+→ Shutting down load generator...
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                              Final Results                                   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+Total Duration:            45,416 ms
+Messages Sent:          5,417,647
+Successful:             5,417,647 (65.76%)
+Failed:                 2,820,804
+Backpressure Events:   28,208,833
+Timeouts:               2,820,804
+Average Throughput:    119,289.39 msg/s
+
+Latency Distribution (μs):
+  Min:                       0.16 μs
+  p50 (median):              0.26 μs
+  p95:                   1,945.27 μs
+  p99:                   2,850.41 μs
+  Max:                   6,007.73 μs
+  Avg:                     245.40 μs
+
+✓ Load generator stopped
+exit=0
