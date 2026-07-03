@@ -24,3 +24,19 @@ jobs:
 
       - name: Build and test
         run: mvn -B clean verify
+
+  # Dependency CVEs + committed secrets (match#32 / P1.5). Trivy covers both on a
+  # private repo without GitHub Advanced Security; triaged findings go in .trivyignore.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Trivy scan (dependencies + secrets)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
+          exit-code: 1
+          ignore-unfixed: true
