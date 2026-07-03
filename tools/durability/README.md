@@ -55,3 +55,38 @@ Exit code `0` = every asserted invariant held; non-zero = a durability violation
   comparable; the assertions themselves are conservation-based and independent of load timing.
 - `fillexact` reuses the proven `repro-bug9` observer + `reconcile.py`, which builds ground truth
   from the cluster's TradeExecution tape and classifies any MISSED_FILL / DUPLICATE_FILL.
+
+## P1 gate harness (match#32)
+
+`storm.py` is the P1 acceptance instrument: sustained OMS-REST load + N forced leader
+switchovers (default 50), reconciled against the independent `repro-bug9` observer, plus an
+engine-counter harvest. One command, one report (`runs/<ts>/p1-gate-report.json`):
+
+```bash
+make p1-gate          # 50 switchovers + Postgres balance reconcile + stranded-follower gate
+make p1-gate-smoke    # same harness, 3 switchovers (~5 min)
+```
+
+Pieces (each also runnable standalone):
+
+- `storm.py` — orchestrator. Detaches the market gateway during the run (match#37: it OOMs
+  under load until P3.3) and restores it after. REQUIRES the truthful status API
+  (admin-gateway#13 item 1); refuses to run without per-node `health` fields, and additionally
+  cross-checks the status API's leader claim against the observer's `newLeader` events.
+  Exit 0 = harness completed; divergence itself is data (see `gates` in the report;
+  `--enforce-gates` makes gate breaches fatal once P1.1/P1.2 land).
+- `diag_counters.py` — harvests `submitted` / `terminal` / `overflowRej` / `droppedMkt` /
+  `droppedOms` from the EGRESS-DIAG lines in `~/.local/log/cluster/node*.log`. Counters are
+  in-process values that RESET on every node restart: a decreasing value marks a new
+  incarnation and the run total is the sum of last-values per incarnation. Log rotation
+  (rename + fresh file on every PM start) is stitched by rotation timestamp.
+- `stranded.py` — the stranded-follower regression gate (match#35 / P1.3-iv): stop a follower,
+  advance the log, snapshot + housekeeping (the stranding mechanism), restart it. PASS =
+  rejoins cleanly OR fails loudly; FAIL = the silent hot-loop from the 2026-07-02 incident.
+- `pg_reconcile.py` — per-user balances vs the OMS Postgres `executions` ledger (oms#22),
+  sampled at T1 (post-quiesce) and T2 (fully settled) to split snapshot-timing artifacts from
+  real drift. Needs OMS running WITH persistence; refuses on an empty executions table.
+
+Wall-clock budget: ~15-30 s per switchover cycle, so `make p1-gate` is a 25-45 minute run.
+Until P3.3 lands, keep UI/browser tabs off the market gateway during runs (it is stopped by
+the harness anyway).

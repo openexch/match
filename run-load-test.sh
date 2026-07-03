@@ -8,6 +8,14 @@ set -e
 JAR_PATH="match-loadtest/target/match-loadtest.jar"
 MAIN_CLASS="com.match.loadtest.LoadGenerator"
 
+# LOADGEN_CORES: pin the generator OFF the cluster's cores (e.g. LOADGEN_CORES=20-23).
+# Unpinned on a shared box, the generator's busy-spin threads contend with the
+# matching/consensus threads and the run reports an artifactual (~9k/s) ceiling.
+PIN_CMD=()
+if [ -n "${LOADGEN_CORES:-}" ]; then
+    PIN_CMD=(taskset -c "$LOADGEN_CORES")
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -39,7 +47,7 @@ run_test() {
     echo "  Rate: $rate orders/sec, Duration: ${duration}s, Threads: $threads, Scenario: $scenario"
     echo ""
 
-    java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
+    "${PIN_CMD[@]}" java --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
         --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
         --add-opens java.base/java.nio=ALL-UNNAMED \
         -Xms1g -Xmx1g \
