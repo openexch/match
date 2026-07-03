@@ -90,3 +90,16 @@ Pieces (each also runnable standalone):
 Wall-clock budget: ~15-30 s per switchover cycle, so `make p1-gate` is a 25-45 minute run.
 Until P3.3 lands, keep UI/browser tabs off the market gateway during runs (it is stopped by
 the harness anyway).
+
+### Run sizing until P1.2 lands (OMS open-order slot leak)
+
+The OMS caps open orders at 500/user in an in-memory counter that only decrements when a
+terminal status arrives. bug9-lost terminals (P1.2) leak those slots for the OMS process
+lifetime, so consecutive runs suffocate (observed 2026-07-03: 15,001 then 2,356 then 617
+accepted before OPEN_ORDER_LIMIT walls). Until match#31/oms#34 land:
+
+- RESTART THE OMS before a full gate run (clears the leaked counters), and
+- size the run so `users x 500 > orders x ~0.2` (the observed terminal-loss rate), e.g.
+  100 users at 100/s for the 50-switchover run.
+
+The report's `acceptanceRate` / `loadCollapsed` fields make a walled run self-evident.
