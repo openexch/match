@@ -152,8 +152,16 @@ curl -X POST http://localhost:8082/api/admin/stop-all-nodes                   # 
 | Order book (fallback) | `match-cluster/src/main/java/com/match/application/orderbook/DirectMatchingEngine.java` — preallocated; select with `MATCH_ENGINE_IMPL=direct` |
 | Engine selection | `MatchingEngine` interface; `Engine.java` constructs the impl from `match.engine.impl` |
 | Gateway Base | `match-gateway/src/main/java/com/match/infrastructure/gateway/AeronGateway.java` |
+| Gateway WS (backpressure/conflation) | `match-gateway/src/main/java/com/match/infrastructure/websocket/MarketDataWebSocket.java` |
 | Market Identity | `match-common/src/main/java/com/match/domain/MarketInfo.java` |
 | Constants | `match-common/src/main/java/com/match/infrastructure/InfrastructureConstants.java` |
+| Transport config (driver mode/idle/channels) | `match-common/src/main/java/com/match/infrastructure/TransportConfig.java` |
+| Media driver launcher + tuning | `deploy/media-driver/launch-driver.sh`, `deploy/media-driver/driver.properties` |
+| OS tuning script | `deploy/tuning/system-tuning.sh` (`make tune` / `make tune-report`) |
+| Transport architecture doc | `docs/kernel-bypass.md` |
+| Performance baseline + data | `docs/perf/2026-07-02-performance-baseline.md`, `docs/perf/data/` |
+| Incident reports | `docs/incidents/` |
+| Hot-path allocation audit | `docs/hot-path-allocations.md` |
 | SBE Schema | `match-common/src/main/resources/sbe/order-schema.xml` |
 | Admin Gateway | `admin-gateway/` (Go service) |
 
@@ -185,6 +193,28 @@ Logs at: `~/.local/log/cluster/`
 | Session Timeout | 10s | InfrastructureConstants |
 | Session Keep-Alive | 1s (protocol-level, not logged) | InfrastructureConstants |
 | Egress Keep-Warm | 1s (ClusterHeartbeat, leader only) | AppClusteredService |
+
+### Transport / media driver (full reference: docs/kernel-bypass.md)
+- Nodes run with **EXTERNAL media drivers** (`driver0/1/2` PM services) by default; the C driver
+  (`~/.local/bin/aeronmd`, built from aeron 1.51.0 source in `~/Apps/aeron`) is preferred, Java fallback
+  automatic. `TRANSPORT_DRIVER_MODE`, `AERON_DIR`, `TRANSPORT_IDLE_MODE`, `TRANSPORT_MTU` etc. per the doc.
+- Profile switch lives in `~/.config/systemd/user/admin.service.d/driver-profile.conf`:
+  **quiet mode** (dev profile + backoff, ~148k/s ceiling, CPUs free for Chrome/UI work) vs
+  **prod mode** (busy-spin DEDICATED, ~800k/s). After editing: daemon-reload, restart admin, then roll
+  each node (stop nodeN → restart driverN → start nodeN, followers first).
+- Driver crash cascades to its node automatically (RestartCascades), EXCEPT for processes adopted after
+  an admin restart (no monitor — admin-gateway#13); re-arm by API stop/start.
+
+### ⚠️ Operational rules (from the 2026-07-02 incident — docs/incidents/)
+- **NEVER run snapshot/housekeeping while any node is down, lagging, or recovering** (match#35:
+  it strands the laggard PERMANENTLY; rejoin then corrupts its local archive via replication).
+- Archives live on tmpfs: ~165 B/order/node → 16 GB /dev/shm fills in <1 min at max load. Housekeep
+  between heavy load runs; a full shm wedges followers AND breaks ClusterTool/admin snapshot ops.
+- Stranded-member reseed (validated): stop a healthy follower, copy its `cluster/`+`archive/` dirs over
+  the member's wiped state EXCLUDING `cluster-mark*.dat`, `node-state.dat`, `archive-mark.dat`, `*.lck`,
+  start both. Seconds of quorum outage.
+- Status API can show stale (healthy-looking) data for dead nodes: verify liveness via `ss -uln`
+  (ingress port bound) + fresh log lines, not status alone.
 
 ### Engine selection & tunables (system properties / env)
 - `MATCH_ENGINE_IMPL` / `-Dmatch.engine.impl` — `array` (DEFAULT, array-backed) or `direct` (preallocated fallback).
@@ -229,7 +259,10 @@ After any infrastructure change:
 affinity. On a single box the generator's busy-spin threads contend with the cluster's matching/consensus
 threads, so an **unpinned** run reports an artifactual ceiling (~9k/s). Pin the generator OFF the cluster's
 cores to measure the real ceiling — e.g. `taskset -c 20-23 ./run-load-test.sh stress` on a 13700K (the 4
-spare E-cores). Pinned, the array engine sustains **~281k orders/sec @ 100%** (sub-µs p50), still rig-limited.
+spare E-cores). Current verified ceiling (2026-07-02, external prod-profile drivers + `make optimize-os`,
+single generator thread): **800k orders/sec @ 100.00%** (ingress p50 0.22µs); quiet mode caps ~148k/s.
+Full methodology + caveats (latency metric semantics, ≥30s warmup rule, per-config ladders):
+`docs/perf/2026-07-02-performance-baseline.md`. The old embedded-driver number was ~281k.
 A **manual** load-gen invocation (outside the script) must include `--add-opens
 java.base/jdk.internal.misc=ALL-UNNAMED` (plus `sun.nio.ch`, `java.nio`) or it dies with
 `IllegalAccessError`; `run-load-test.sh` already sets these.

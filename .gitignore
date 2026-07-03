@@ -32,3 +32,8 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+# repro-bug9 run artifacts (class files, run logs, smoke captures)
+tools/repro-bug9/out/
+tools/repro-bug9/runs/
+tools/repro-bug9/smoke/

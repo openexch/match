@@ -1,0 +1,31 @@
+## date
+2026-07-02T12:43:11+03:00
+## cpu
+CPU(s):                                  24
+On-line CPU(s) list:                     0-23
+Model name:                              13th Gen Intel(R) Core(TM) i7-13700K
+Thread(s) per core:                      2
+Core(s) per socket:                      16
+Socket(s):                               1
+CPU(s) scaling MHz:                      98%
+CPU max MHz:                             5400.0000
+CPU min MHz:                             800.0000
+NUMA node0 CPU(s):                       0-23
+## governor
+powersave
+## kernel
+6.17.0-35-generic
+## mem
+               total        used        free      shared  buff/cache   available
+Mem:            31Gi        21Gi       5.1Gi        14Gi        18Gi       9.2Gi
+## java
+openjdk version "21.0.11" 2026-04-21 LTS
+OpenJDK Runtime Environment Zulu21.50+19-CA (build 21.0.11+10-LTS)
+OpenJDK 64-Bit Server VM Zulu21.50+19-CA (build 21.0.11+10-LTS, mixed mode, sharing)
+## aeron
+        <aeron.version>1.51.0</aeron.version>
+## engine
+array (default), 3-node Aeron Cluster (Raft), external media drivers (dev profile: SHARED threads + backoff idle), loopback UDP mtu=8192, term=16m
+## pinning
+node0=0-3 node1=4-7 node2=8-11 (drivers share node quads), oms=12-15, market-gw=16-19, loadgen=20-23
+## driver mode

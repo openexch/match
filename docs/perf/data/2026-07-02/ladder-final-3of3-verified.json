@@ -1,0 +1,62 @@
+[
+  {
+    "targetRate": 500000,
+    "durationMs": 35408.0,
+    "sent": 12380801.0,
+    "successful": 12380801.0,
+    "successPct": 99.23,
+    "failed": 96616.0,
+    "backpressure": 966255.0,
+    "timeouts": 96616.0,
+    "throughputMsgSec": 349661.12,
+    "ingressLatencyUs": {
+      "min": 0.14,
+      "p50": 0.23,
+      "p95": 0.31,
+      "p99": 0.34,
+      "max": 82.28,
+      "avg": 0.25
+    },
+    "egressResponsesSeen": 10000.0
+  },
+  {
+    "targetRate": 700000,
+    "durationMs": 23306.0,
+    "sent": 10460473.0,
+    "successful": 10460473.0,
+    "successPct": 99.83,
+    "failed": 17704.0,
+    "backpressure": 177160.0,
+    "timeouts": 17704.0,
+    "throughputMsgSec": 448831.76,
+    "ingressLatencyUs": {
+      "min": 0.14,
+      "p50": 0.22,
+      "p95": 1.45,
+      "p99": 2.1,
+      "max": 77.65,
+      "avg": 0.4
+    },
+    "egressResponsesSeen": 10000.0
+  },
+  {
+    "targetRate": 800000,
+    "durationMs": 20429.0,
+    "sent": 9523482.0,
+    "successful": 9523482.0,
+    "successPct": 100.0,
+    "failed": 0.0,
+    "backpressure": 73.0,
+    "timeouts": 0.0,
+    "throughputMsgSec": 466174.65,
+    "ingressLatencyUs": {
+      "min": 0.15,
+      "p50": 0.22,
+      "p95": 0.25,
+      "p99": 0.32,
+      "max": 39.22,
+      "avg": 0.23
+    },
+    "egressResponsesSeen": 10000.0
+  }
+]
