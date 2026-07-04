@@ -32,6 +32,17 @@ public class AeronCluster {
     private static final java.util.concurrent.atomic.AtomicBoolean FATAL_EXIT_STARTED =
             new java.util.concurrent.atomic.AtomicBoolean();
 
+    // P1.3 (match#35): fail-fast on the archive-replay hot-loop. The 2026-07-02
+    // and 2026-07-04 incidents each threw the IDENTICAL ArchiveException thousands
+    // of times ("replayPosition ... does not point to a valid frame") while the
+    // node sat wedged forever. No healthy scenario repeats the exact same error
+    // this many times in a row — exit loudly so the operator (and the process
+    // manager's crash accounting) sees a broken node instead of a silent spinner.
+    private static final int IDENTICAL_ERROR_EXIT_THRESHOLD = 200;
+    private static final java.util.concurrent.atomic.AtomicReference<String> LAST_ERROR_SIGNATURE =
+            new java.util.concurrent.atomic.AtomicReference<>("");
+    private static final AtomicLong IDENTICAL_ERROR_COUNT = new AtomicLong();
+
     public AeronCluster() {
         final ShutdownSignalBarrier barrier = new ShutdownSignalBarrier();
         final int portBase = getBasePort();
@@ -54,6 +65,25 @@ public class AeronCluster {
             final StringWriter sw = new StringWriter();
             t.printStackTrace(new PrintWriter(sw));
             log.error("Aeron error #%d: %s", AERON_ERROR_COUNT.get(), sw.toString());
+            // Hot-loop fail-fast (match#35): the signature is class + message —
+            // exactly what stayed byte-identical across thousands of throws in the
+            // replay-loop incidents. Any different error resets the streak.
+            final String signature = String.valueOf(t);
+            final long streak = signature.equals(LAST_ERROR_SIGNATURE.getAndSet(signature))
+                    ? IDENTICAL_ERROR_COUNT.incrementAndGet()
+                    : resetIdenticalErrorCount();
+            if (streak >= IDENTICAL_ERROR_EXIT_THRESHOLD
+                    && FATAL_EXIT_STARTED.compareAndSet(false, true)) {
+                log.error("FAIL-FAST: %d consecutive identical Aeron errors (hot-loop, match#35): %s "
+                        + "- node exiting in 5s; local state likely needs reseed/recovery", streak, signature);
+                barrier.signal();
+                final Thread hotLoopExit = new Thread(() -> {
+                    quietSleep(5000);
+                    Runtime.getRuntime().halt(2);
+                }, "hot-loop-exit");
+                hotLoopExit.setDaemon(true);
+                hotLoopExit.start();
+            }
             // In EXTERNAL mode a dead media driver surfaces as a FATAL AeronException
             // (e.g. DriverTimeoutException). Signal the barrier so the Aeron components
             // close, then guarantee process death: non-daemon application threads
@@ -74,6 +104,7 @@ public class AeronCluster {
             }
         };
         clusterConfig.errorHandler(errorHandler);
+
 
         // Idle strategies for consensus module, service container and (embedded mode only)
         // media driver threads: busy-spin in prod, backoff on dev laptops (TRANSPORT_IDLE_MODE).
@@ -288,6 +319,12 @@ public class AeronCluster {
      *
      * @param millis the number of milliseconds to sleep.
      */
+    /** New error signature seen: streak restarts at 1. */
+    private static long resetIdenticalErrorCount() {
+        IDENTICAL_ERROR_COUNT.set(1);
+        return 1;
+    }
+
     private static void quietSleep(final long millis)
     {
         try
