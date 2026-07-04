@@ -8,6 +8,7 @@ dependency-reduced-pom.xml
 
 # Aeron cluster runtime data
 backup/
+backup.pre-reset-*/
 node[0-9]/
 
 # Build tool binaries

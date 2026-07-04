@@ -121,9 +121,13 @@ curl -X DELETE http://localhost:8082/api/admin/auto-snapshot                    
 
 ### Backup & Recovery
 ```bash
-curl http://localhost:8082/api/admin/backup-info                       # Inspect backup
+curl http://localhost:8082/api/admin/backup-info                       # Inspect backup + FRESHNESS (fresh/freshReason/heartbeat)
 curl -X POST http://localhost:8082/api/admin/recover-from-backup       # Restore from backup
 ```
+Backup data lives on DISK at `match/backup/` (ClusterBackupApp, `backup` PM service; tmpfs
+`/dev/shm/aeron-cluster/backup` is legacy/unused). Trust `backup.fresh` in `/status`, never
+`running` alone (match#36: agent wedged silently for days). Full procedure + power-loss drill:
+`docs/backup-restore.md`.
 
 ### Process Manager (Extended)
 ```bash
@@ -159,6 +163,7 @@ curl -X POST http://localhost:8082/api/admin/stop-all-nodes                   # 
 | Media driver launcher + tuning | `deploy/media-driver/launch-driver.sh`, `deploy/media-driver/driver.properties` |
 | OS tuning script | `deploy/tuning/system-tuning.sh` (`make tune` / `make tune-report` / `sudo make tune-persist`) |
 | Transport architecture doc | `docs/kernel-bypass.md` |
+| Backup & restore doc (ClusterBackup → disk, RPO, drill) | `docs/backup-restore.md` |
 | Performance baseline + data | `docs/perf/2026-07-02-performance-baseline.md`, `docs/perf/data/` |
 | Incident reports | `docs/incidents/` |
 | Hot-path allocation audit | `docs/hot-path-allocations.md` |
