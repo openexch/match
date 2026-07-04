@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/projects/jdk/21/)
-[![Aeron](https://img.shields.io/badge/Aeron%20Cluster-1.48.1-green.svg)](https://github.com/aeron-io/aeron)
+[![Aeron](https://img.shields.io/badge/Aeron%20Cluster-1.51.0-green.svg)](https://github.com/aeron-io/aeron)
 
 Ultra-low latency order matching engine built on a 3-node [Aeron Cluster](https://github.com/aeron-io/aeron) (Raft consensus). Designed for 24/7 operation with zero downtime.
 
@@ -44,7 +44,7 @@ Ultra-low latency order matching engine built on a 3-node [Aeron Cluster](https:
 
 | Component | Technology |
 |-----------|-----------|
-| Matching Engine | Java 21, Aeron Cluster 1.48.1, Agrona |
+| Matching Engine | Java 21, Aeron Cluster 1.51.0, Agrona |
 | Serialization | Simple Binary Encoding (SBE) 1.33.1 |
 | Event Processing | LMAX Disruptor 4.0.0 |
 | Network I/O | Netty 4.1.100 |
@@ -77,7 +77,6 @@ curl http://localhost:8082/api/admin/status
 
 ```bash
 make build-java      # Build Java modules
-make build-admin     # Build Go admin gateway
 make build           # Build everything
 ```
 
