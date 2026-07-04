@@ -33,10 +33,10 @@ info=$(api backup-info)
 echo "$info" | python3 -c '
 import json,sys
 i=json.load(sys.stdin)
-assert i["fresh"], f"backup not fresh: {i[\"freshReason\"]}"
+assert i["fresh"], "backup not fresh: %s" % i["freshReason"]
 assert i["recordingLogBytes"] > 0, "recording.log empty — backup has never completed a cycle"
 hb=i.get("heartbeat") or {}
-print(f"[drill]   fresh, liveLogPosition={hb.get(\"liveLogPosition\")}, recordings={i[\"recordingCount\"]}")
+print("[drill]   fresh, liveLogPosition=%s, recordings=%s" % (hb.get("liveLogPosition"), i["recordingCount"]))
 ' || fail "backup precondition"
 DRILL_LOG_POS=$(echo "$info" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("heartbeat") or {}).get("liveLogPosition", 0))')
 
@@ -74,7 +74,7 @@ import json,sys
 s=json.load(sys.stdin)
 ok = s.get("leader") is not None and s.get("allNodesHealthy")
 sys.exit(0 if ok else 1)' 2>/dev/null; then
-        say "consensus restored: $(api status | python3 -c 'import json,sys; s=json.load(sys.stdin); print(f"leader={s[\"leader\"]}, allNodesHealthy={s[\"allNodesHealthy\"]}")')"
+        say "consensus restored: $(api status | python3 -c 'import json,sys; s=json.load(sys.stdin); print("leader=%s, allNodesHealthy=%s" % (s["leader"], s["allNodesHealthy"]))')"
         say "restarting backup service"
         api "processes/backup/start" POST >/dev/null || true
         say "PASS — recovered from disk backup (pre-drill liveLogPosition=$DRILL_LOG_POS)"
