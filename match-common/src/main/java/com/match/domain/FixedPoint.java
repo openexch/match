@@ -222,11 +222,89 @@ public final class FixedPoint {
     }
 
     /**
-     * Format fixed-point value as string with appropriate decimal places
+     * Format fixed-point value as string with appropriate decimal places.
+     * Always exactly {@link #SCALE} fractional digits; the canonical wire
+     * representation (oms#39): {@code parse(format(x)) == x} for every long.
      */
     public static String format(long fixedPoint) {
         long wholePart = fixedPoint / SCALE_FACTOR;
         long fractionalPart = Math.abs(fixedPoint % SCALE_FACTOR);
-        return String.format("%d.%08d", wholePart, fractionalPart);
+        // -0.5 has wholePart == 0, which would print unsigned
+        String sign = (fixedPoint < 0 && wholePart == 0) ? "-" : "";
+        return String.format("%s%d.%08d", sign, wholePart, fractionalPart);
+    }
+
+    /**
+     * Parse a decimal string into fixed-point, exactly (oms#39: the wire
+     * carries money as decimal strings because the double path is lossy).
+     *
+     * Grammar: {@code -?digits[.digits]} with 1 to {@link #SCALE} fractional
+     * digits. Anything else (empty, lone sign, trailing dot, exponents,
+     * grouping, more than 8 decimals) throws {@link NumberFormatException}:
+     * money precision is never silently rounded away.
+     *
+     * @throws NumberFormatException on malformed input
+     * @throws OverflowException when the value does not fit in fixed-point
+     */
+    public static long parse(CharSequence s) {
+        if (s == null || s.length() == 0) {
+            throw new NumberFormatException("empty fixed-point string");
+        }
+        int len = s.length();
+        int i = 0;
+        boolean negative = s.charAt(0) == '-';
+        if (negative) {
+            i++;
+        }
+        if (i == len) {
+            throw new NumberFormatException("no digits in fixed-point string");
+        }
+
+        // Integer part, accumulated SIGNED so Long.MIN_VALUE round-trips
+        long whole = 0;
+        boolean sawIntegerDigit = false;
+        try {
+            while (i < len) {
+                char c = s.charAt(i);
+                if (c == '.') {
+                    break;
+                }
+                if (c < '0' || c > '9') {
+                    throw new NumberFormatException("invalid character '" + c + "' in fixed-point string");
+                }
+                sawIntegerDigit = true;
+                whole = Math.addExact(Math.multiplyExact(whole, 10L), negative ? -(c - '0') : (c - '0'));
+                i++;
+            }
+            if (!sawIntegerDigit) {
+                throw new NumberFormatException("missing integer part in fixed-point string");
+            }
+
+            long fraction = 0;
+            int fractionDigits = 0;
+            if (i < len) { // at the '.'
+                i++;
+                if (i == len) {
+                    throw new NumberFormatException("trailing decimal point in fixed-point string");
+                }
+                while (i < len) {
+                    char c = s.charAt(i++);
+                    if (c < '0' || c > '9') {
+                        throw new NumberFormatException("invalid character '" + c + "' in fixed-point string");
+                    }
+                    if (++fractionDigits > SCALE) {
+                        throw new NumberFormatException("more than " + SCALE + " decimal places in fixed-point string");
+                    }
+                    fraction = fraction * 10 + (c - '0');
+                }
+                for (int d = fractionDigits; d < SCALE; d++) {
+                    fraction *= 10;
+                }
+            }
+
+            return Math.addExact(Math.multiplyExact(whole, SCALE_FACTOR), negative ? -fraction : fraction);
+        } catch (ArithmeticException e) {
+            throw new OverflowException();
+        }
     }
 }
