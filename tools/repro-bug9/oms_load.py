@@ -91,6 +91,7 @@ def cmd_run(args):
     stop_at = time.time() + args.duration
     per_thread_rate = max(1, args.rate // args.threads)
     counters = {"accepted": 0, "rejected": 0, "error": 0, "cancelled": 0}
+    reject_reasons = {}  # reason -> count, guarded by submitted_lock
     # Rolling-cancel queue (match#54): GTC orders that never cancel pile up
     # into the OMS 500/user open-order cap over long runs, collapsing the
     # acceptance rate as a load-shape artifact. Cancelling resting orders
@@ -126,9 +127,14 @@ def cmd_run(args):
                             with pending_lock:
                                 pending.append((t0, oid))
                     else:
-                        counters["rejected"] += 1
+                        reason = str(resp.get("rejectReason") or resp.get("status") or "unknown")
+                        with submitted_lock:
+                            counters["rejected"] += 1
+                            reject_reasons[reason] = reject_reasons.get(reason, 0) + 1
                 else:
-                    counters["rejected"] += 1
+                    with submitted_lock:
+                        counters["rejected"] += 1
+                        reject_reasons[f"http-{st}"] = reject_reasons.get(f"http-{st}", 0) + 1
             except Exception:
                 counters["error"] += 1
             dt = time.time() - t0
@@ -167,6 +173,9 @@ def cmd_run(args):
     f.flush(); f.close()
     print(f"[run] DONE accepted={counters['accepted']} rejected={counters['rejected']} "
           f"cancelled={counters['cancelled']} err={counters['error']}")
+    if reject_reasons:
+        top = sorted(reject_reasons.items(), key=lambda kv: -kv[1])
+        print("[run] reject reasons: " + ", ".join(f"{k}={v}" for k, v in top[:8]))
 
 def main():
     ap = argparse.ArgumentParser()
