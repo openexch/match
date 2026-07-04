@@ -15,7 +15,7 @@ Modes:
 Prices are whole dollars clustered tightly around --mid so both sides match frequently.
 Stdlib only.
 """
-import argparse, json, random, sys, threading, time
+import argparse, collections, json, random, sys, threading, time
 import http.client
 from urllib.parse import urlparse
 
@@ -90,7 +90,14 @@ def cmd_run(args):
     f = open(args.log, "a")
     stop_at = time.time() + args.duration
     per_thread_rate = max(1, args.rate // args.threads)
-    counters = {"accepted": 0, "rejected": 0, "error": 0}
+    counters = {"accepted": 0, "rejected": 0, "error": 0, "cancelled": 0}
+    # Rolling-cancel queue (match#54): GTC orders that never cancel pile up
+    # into the OMS 500/user open-order cap over long runs, collapsing the
+    # acceptance rate as a load-shape artifact. Cancelling resting orders
+    # older than --cancel-age (realistic trader behavior) keeps the resting
+    # inventory ~ rate * cancel-age so multi-hour storms sustain acceptance.
+    pending = collections.deque()  # (epoch_sec, omsOrderId), append-ordered by time
+    pending_lock = threading.Lock()
 
     def worker(tid):
         rng = random.Random(1000 + tid)
@@ -108,12 +115,16 @@ def cmd_run(args):
                 if st == 201 or (st == 200):
                     resp = json.loads(data)
                     if resp.get("accepted"):
-                        rec = {"ts": int(time.time()*1000), "omsOrderId": resp.get("omsOrderId"),
+                        oid = resp.get("omsOrderId")
+                        rec = {"ts": int(time.time()*1000), "omsOrderId": oid,
                                "userId": u, "side": side, "price": price, "quantity": qty,
                                "status": resp.get("status")}
                         with submitted_lock:
                             f.write(json.dumps(rec) + "\n")
                             counters["accepted"] += 1
+                        if args.cancel_every > 0 and oid is not None:
+                            with pending_lock:
+                                pending.append((t0, oid))
                     else:
                         counters["rejected"] += 1
                 else:
@@ -124,8 +135,26 @@ def cmd_run(args):
             if interval - dt > 0:
                 time.sleep(interval - dt)
 
+    def canceller():
+        while time.time() < stop_at:
+            time.sleep(min(args.cancel_every, max(1, stop_at - time.time())))
+            cutoff = time.time() - args.cancel_age
+            batch = []
+            with pending_lock:
+                while pending and pending[0][0] <= cutoff:
+                    batch.append(pending.popleft()[1])
+            for oid in batch:
+                try:
+                    st, _ = delete(args.url, f"/api/v1/orders/{oid}")
+                    if st in (200, 204):  # already-terminal orders 4xx: not a cancel
+                        counters["cancelled"] += 1
+                except Exception:
+                    pass
+
     threads = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(args.threads)]
     for t in threads: t.start()
+    if args.cancel_every > 0:
+        threading.Thread(target=canceller, daemon=True).start()
     last = time.time()
     while time.time() < stop_at:
         time.sleep(2)
@@ -133,10 +162,11 @@ def cmd_run(args):
         if now - last >= 5:
             last = now
             print(f"[run] accepted={counters['accepted']} rejected={counters['rejected']} "
-                  f"err={counters['error']} t-{int(stop_at-now)}s", flush=True)
+                  f"cancelled={counters['cancelled']} err={counters['error']} t-{int(stop_at-now)}s", flush=True)
     for t in threads: t.join(timeout=5)
     f.flush(); f.close()
-    print(f"[run] DONE accepted={counters['accepted']} rejected={counters['rejected']} err={counters['error']}")
+    print(f"[run] DONE accepted={counters['accepted']} rejected={counters['rejected']} "
+          f"cancelled={counters['cancelled']} err={counters['error']}")
 
 def main():
     ap = argparse.ArgumentParser()
@@ -155,6 +185,10 @@ def main():
     ap.add_argument("--qmax", type=float, default=0.30)
     ap.add_argument("--log", default="submitted.jsonl")
     ap.add_argument("--out", default="balances.json")
+    ap.add_argument("--cancel-every", type=int, default=15,
+                    help="run mode: cancel resting orders on this cadence, seconds (0 disables; match#54)")
+    ap.add_argument("--cancel-age", type=int, default=60,
+                    help="run mode: cancel accepted orders older than this many seconds")
     args = ap.parse_args()
     {"seed": cmd_seed, "run": cmd_run, "snapshot": cmd_snapshot, "cancel": cmd_cancel}[args.mode](args)
 

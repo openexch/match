@@ -96,7 +96,8 @@ curl -X POST http://localhost:8082/api/admin/rebuild-gateway          # Rebuild 
 ### Archive Compaction & Cleanup
 ```bash
 curl -X POST http://localhost:8082/api/admin/housekeeping              # Reclaim archive disk on LIVE cluster: purge log segments below latest snapshot (also runs automatically after /snapshot)
-curl -X POST http://localhost:8082/api/admin/cleanup -d '{"force":true}'  # Wipe Aeron mark/lock files (requires all nodes stopped)
+curl -X POST http://localhost:8082/api/admin/cleanup -d '{"force":true}'  # Clean IPC dirs + mark/lock files; ARCHIVES PRESERVED (requires all nodes+drivers stopped; dryRun allowed anytime)
+# Full state wipe additionally needs: '{"force":true,"includeArchive":true,"confirmArchiveLoss":"DELETE-CLUSTER-STATE"}'
 curl -X POST http://localhost:8082/api/admin/cleanup-node              # Per-node cleanup
 ```
 
