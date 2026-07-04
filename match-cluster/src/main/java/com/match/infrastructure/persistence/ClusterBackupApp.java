@@ -36,16 +36,32 @@ import java.util.concurrent.TimeUnit;
  * - Replicates log entries after the snapshot for complete recovery
  * - Can be used to seed new nodes or recover from cluster failure
  *
+ * Supervision (match#36): the in-JVM media driver, archive, and backup agent
+ * can die or zombify individually while the JVM stays up — observed as
+ * ConductorServiceTimeoutException killing the local archive under load, and
+ * as the consensus-response subscription unbinding so BACKUP_QUERY stalls
+ * forever. A watchdog thread therefore tracks RESPONSE-side listener callbacks
+ * (query sends don't count: a wedged agent still sends) and halts the JVM when
+ * no progress happens for BACKUP_STALL_EXIT_SEC, so the process manager
+ * restarts the whole stack fresh (bounded by its crash-loop cap). It also
+ * writes a heartbeat JSON next to the backup data for the admin gateway's
+ * backup-info freshness reporting.
+ *
  * Environment variables:
  * - CLUSTER_ADDRESSES: Comma-separated list of cluster member addresses
  * - BACKUP_HOST: This backup node's address
  * - CLUSTER_PORT_BASE: Base port for cluster (default 9000)
  * - BACKUP_INTERVAL_SEC: Interval between backup queries (default 60)
  * - BASE_DIR: Directory for backup data (default ./backup)
+ * - BACKUP_STALL_EXIT_SEC: halt the JVM when no backup progress (response,
+ *   recording-log update, or live-log advance) for this long (default 300, 0 disables)
  */
 public class ClusterBackupApp {
 
     private static final long DEFAULT_BACKUP_INTERVAL_SEC = 60;
+    private static final long DEFAULT_STALL_EXIT_SEC = 300;
+    private static final long WATCHDOG_TICK_MS = 5_000;
+    static final String PROGRESS_FILE_NAME = "backup-progress.json";
 
     public static void main(final String[] args) {
         final ShutdownSignalBarrier barrier = new ShutdownSignalBarrier();
@@ -102,6 +118,8 @@ public class ClusterBackupApp {
             .controlResponseChannel("aeron:udp?endpoint=" + backupHost + ":0")
             .aeronDirectoryName(aeronDirName);
 
+        final BackupEventsListener eventsListener = new BackupEventsListener();
+
         final ClusterBackup.Context clusterBackupContext = new ClusterBackup.Context()
             .aeronDirectoryName(aeronDirName)
             .clusterDirectoryName(new File(baseDir, ClusterConfig.CLUSTER_SUB_DIR).getAbsolutePath())
@@ -113,7 +131,7 @@ public class ClusterBackupApp {
             .catchupEndpoint(backupHost + ":0")
             .catchupChannel(catchupChannel)
             .sourceType(ClusterBackup.SourceType.LEADER)
-            .eventsListener(new BackupEventsListener())
+            .eventsListener(eventsListener)
             .deleteDirOnStart(true);
 
         MediaDriver mediaDriver = null;
@@ -124,12 +142,85 @@ public class ClusterBackupApp {
             mediaDriver = MediaDriver.launch(mediaDriverContext);
             archive = Archive.launch(archiveContext);
             clusterBackup = ClusterBackup.launch(clusterBackupContext);
+            startWatchdog(baseDir, eventsListener, getStallExitSec());
             barrier.await();
         } catch (final Exception e) {
             System.err.println("FATAL: ClusterBackup failed: " + e.getMessage());
             e.printStackTrace();
         } finally {
             CloseHelper.quietCloseAll(clusterBackup, archive, mediaDriver);
+        }
+    }
+
+    /**
+     * Watchdog: heartbeat file for the admin gateway + stall fail-fast.
+     *
+     * Progress = response-side events only (backup response, recording-log
+     * update, live-log advance). On a healthy cluster the live log advances
+     * even at idle (the cluster's timer chain writes the Raft log) and a
+     * backup response arrives every BACKUP_INTERVAL_SEC, so a quiet period of
+     * stallExitSec means the backup is providing no protection. Halt (not
+     * System.exit: shutdown hooks can block on the same wedged agents) so the
+     * process manager restarts us fresh; deleteDirOnStart/dirDeleteOnStart
+     * make the restart clean, and the PM's crash-loop cap bounds a persistent
+     * failure loudly instead of letting us spin for days (match#36).
+     */
+    private static void startWatchdog(
+        final File baseDir, final BackupEventsListener listener, final long stallExitSec) {
+
+        final long startMs = SystemEpochClock.INSTANCE.time();
+        listener.noteProgress(startMs); // grace: count from launch, not epoch 0
+
+        final Thread watchdog = new Thread(() -> {
+            while (true) {
+                try {
+                    Thread.sleep(WATCHDOG_TICK_MS);
+                } catch (final InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+
+                final long nowMs = SystemEpochClock.INSTANCE.time();
+                final long sinceProgressMs = nowMs - listener.lastProgressMs();
+                final boolean stalled = stallExitSec > 0 && sinceProgressMs > TimeUnit.SECONDS.toMillis(stallExitSec);
+
+                writeProgressFile(baseDir, listener, startMs, nowMs, stalled);
+
+                if (stalled) {
+                    System.err.printf(
+                        "FATAL: cluster backup made no progress for %ds (limit %ds, stallWarnings=%d, " +
+                        "lastResponse %dms ago, lastLiveLog %dms ago) — halting for a clean supervised restart%n",
+                        TimeUnit.MILLISECONDS.toSeconds(sinceProgressMs), stallExitSec, listener.stallCount(),
+                        nowMs - listener.lastResponseMs(), nowMs - listener.lastLiveLogMs());
+                    Runtime.getRuntime().halt(3);
+                }
+            }
+        }, "backup-watchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
+    }
+
+    /** Atomically (write+rename) publish the heartbeat JSON the admin gateway reads. */
+    private static void writeProgressFile(
+        final File baseDir, final BackupEventsListener listener,
+        final long startMs, final long nowMs, final boolean stalled) {
+        final File tmp = new File(baseDir, PROGRESS_FILE_NAME + ".tmp");
+        final File target = new File(baseDir, PROGRESS_FILE_NAME);
+        final String json = String.format(
+            "{\"pid\":%d,\"startedEpochMs\":%d,\"updatedEpochMs\":%d,\"lastProgressEpochMs\":%d," +
+            "\"lastQueryEpochMs\":%d,\"lastResponseEpochMs\":%d,\"lastLiveLogEpochMs\":%d," +
+            "\"liveLogPosition\":%d,\"snapshotsRetrieved\":%d,\"stallWarnings\":%d,\"state\":\"%s\"}%n",
+            ProcessHandle.current().pid(), startMs, nowMs, listener.lastProgressMs(),
+            listener.lastQueryMs(), listener.lastResponseMs(), listener.lastLiveLogMs(),
+            listener.liveLogPosition(), listener.snapshotsRetrieved(), listener.stallCount(),
+            stalled ? "STALLED" : "OK");
+        try {
+            java.nio.file.Files.writeString(tmp.toPath(), json);
+            java.nio.file.Files.move(tmp.toPath(), target.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (final Exception e) {
+            System.err.println("WARN: cannot write " + target + ": " + e.getMessage());
         }
     }
 
@@ -190,6 +281,14 @@ public class ClusterBackupApp {
         return new File(baseDir);
     }
 
+    private static long getStallExitSec() {
+        String value = System.getenv("BACKUP_STALL_EXIT_SEC");
+        if (null == value || value.isEmpty()) {
+            value = System.getProperty("backup.stall.exit.sec", String.valueOf(DEFAULT_STALL_EXIT_SEC));
+        }
+        return Long.parseLong(value);
+    }
+
     /**
      * Wait for DNS resolution of the given host.
      */
@@ -217,14 +316,42 @@ public class ClusterBackupApp {
         }
     }
 
+    /**
+     * Tracks backup liveness for the watchdog. Callbacks run on the
+     * cluster-backup agent thread; the watchdog thread reads the volatiles.
+     * Query sends are tracked but do NOT count as progress — a wedged agent
+     * whose responses can't arrive still sends queries (observed in match#36).
+     */
     static class BackupEventsListener implements ClusterBackupEventsListener {
+
+        private volatile long lastQueryMs;
+        private volatile long lastResponseMs;
+        private volatile long lastLiveLogMs;
+        private volatile long lastProgressMs;
+        private volatile long liveLogPosition;
+        private volatile long snapshotsRetrieved;
+        private volatile long stallCount;
+
+        void noteProgress(final long nowMs) {
+            lastProgressMs = nowMs;
+        }
+
+        long lastQueryMs() { return lastQueryMs; }
+        long lastResponseMs() { return lastResponseMs; }
+        long lastLiveLogMs() { return lastLiveLogMs; }
+        long lastProgressMs() { return lastProgressMs; }
+        long liveLogPosition() { return liveLogPosition; }
+        long snapshotsRetrieved() { return snapshotsRetrieved; }
+        long stallCount() { return stallCount; }
 
         @Override
         public void onBackupQuery() {
+            lastQueryMs = SystemEpochClock.INSTANCE.time();
         }
 
         @Override
         public void onPossibleFailure(final Exception ex) {
+            stallCount++;
             System.err.println("BACKUP WARNING: " + ex.getMessage());
         }
 
@@ -233,12 +360,22 @@ public class ClusterBackupApp {
             final ClusterMember[] clusterMembers,
             final ClusterMember logSourceMember,
             final List<RecordingLog.Snapshot> snapshotsToRetrieve) {
+            final long nowMs = SystemEpochClock.INSTANCE.time();
+            lastResponseMs = nowMs;
+            noteProgress(nowMs);
+            System.out.println("BACKUP: response, log source member " +
+                (null != logSourceMember ? logSourceMember.id() : -1) +
+                ", snapshots to retrieve " + snapshotsToRetrieve.size());
         }
 
         @Override
         public void onUpdatedRecordingLog(
             final RecordingLog recordingLog,
             final List<RecordingLog.Snapshot> snapshotsRetrieved) {
+            final long nowMs = SystemEpochClock.INSTANCE.time();
+            this.snapshotsRetrieved += snapshotsRetrieved.size();
+            noteProgress(nowMs);
+            System.out.println("BACKUP: recording log updated, snapshots retrieved " + snapshotsRetrieved.size());
         }
 
         @Override
@@ -246,6 +383,10 @@ public class ClusterBackupApp {
             final long recordingId,
             final long recordingPosCounterId,
             final long logPosition) {
+            final long nowMs = SystemEpochClock.INSTANCE.time();
+            liveLogPosition = logPosition;
+            lastLiveLogMs = nowMs;
+            noteProgress(nowMs);
         }
     }
 }
