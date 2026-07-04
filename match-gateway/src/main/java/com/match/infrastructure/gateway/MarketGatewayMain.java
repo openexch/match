@@ -28,6 +28,7 @@ public class MarketGatewayMain implements AutoCloseable {
         this.marketDataWebSocket = new MarketDataWebSocket();
         this.marketDataWebSocket.setClusterStatus(clusterStatus);
         this.marketDataWebSocket.setStateManager(stateManager);
+        this.marketDataWebSocket.setAeronGateway(aeronGateway); // match#33: /metrics relay stats
 
         // Wire state manager as egress listener (handles state updates and broadcasts)
         this.stateManager.setWebSocket(marketDataWebSocket);

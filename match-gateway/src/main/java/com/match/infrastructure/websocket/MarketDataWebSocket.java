@@ -97,6 +97,13 @@ public class MarketDataWebSocket implements AutoCloseable {
         this.stateManager = stateManager;
     }
 
+    // match#33: gateway /metrics reads AeronGateway relay stats.
+    private volatile com.match.infrastructure.gateway.AeronGateway aeronGateway;
+
+    public void setAeronGateway(com.match.infrastructure.gateway.AeronGateway aeronGateway) {
+        this.aeronGateway = aeronGateway;
+    }
+
     public ChannelGroup getChannels() {
         return channels;
     }
@@ -110,7 +117,7 @@ public class MarketDataWebSocket implements AutoCloseable {
 
         // Create shareable handlers
         final GatewayHttpHandler httpHandler = stateManager != null
-            ? new GatewayHttpHandler(stateManager) : null;
+            ? new GatewayHttpHandler(stateManager, this, aeronGateway) : null;
         final MarketDataHandler wsHandler = new MarketDataHandler();
 
         ServerBootstrap bootstrap = new ServerBootstrap();

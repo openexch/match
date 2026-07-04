@@ -104,6 +104,11 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     private final java.util.concurrent.atomic.AtomicLong aeronErrorCount = new java.util.concurrent.atomic.AtomicLong();
     public long getAeronErrorCount() { return aeronErrorCount.get(); }
 
+    // match#33: /metrics reads — volatile fields, safe from any thread.
+    public long getEgressMessageCount() { return egressMessageCount; }
+
+    public long getEgressAgeMs() { return System.currentTimeMillis() - lastEgressMessageMs; }
+
     public AeronGateway() {
         // Use environment variable or default to 127.0.0.1 for development (avoids IPv6 issues)
         final String clusterAddresses = System.getenv().getOrDefault("CLUSTER_ADDRESSES", "127.0.0.1,127.0.0.1,127.0.0.1");

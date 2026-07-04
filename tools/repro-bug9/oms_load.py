@@ -167,8 +167,11 @@ def cmd_run(args):
         now = time.time()
         if now - last >= 5:
             last = now
+            with submitted_lock:
+                top = sorted(reject_reasons.items(), key=lambda kv: -kv[1])[:2]
+            why = (" why=" + ",".join(f"{k}:{v}" for k, v in top)) if top else ""
             print(f"[run] accepted={counters['accepted']} rejected={counters['rejected']} "
-                  f"cancelled={counters['cancelled']} err={counters['error']} t-{int(stop_at-now)}s", flush=True)
+                  f"cancelled={counters['cancelled']} err={counters['error']} t-{int(stop_at-now)}s{why}", flush=True)
     for t in threads: t.join(timeout=5)
     f.flush(); f.close()
     print(f"[run] DONE accepted={counters['accepted']} rejected={counters['rejected']} "

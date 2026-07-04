@@ -41,6 +41,9 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
     // Count of stale/duplicate book deltas dropped (switchover-seam dedup, match#19) — observability.
     private final java.util.concurrent.atomic.AtomicLong staleDeltasDropped = new java.util.concurrent.atomic.AtomicLong(0);
 
+    /** match#33: /metrics read. */
+    public long getStaleDeltasDropped() { return staleDeltasDropped.get(); }
+
     public void setWebSocket(MarketDataWebSocket webSocket) {
         this.webSocket = webSocket;
     }

@@ -1,0 +1,4 @@
+Repo: openexch/match | Milestone: v0.3.0-beta
+Title: ClusterBackup node stalls silently with empty state dir ("progress has stalled")
+
+During the 2026-07-02 incident the backup node had been logging "BACKUP WARNING: WARN - progress has stalled" repeatedly while its state dir (/dev/shm/aeron-cluster/backup) was EMPTY, since ~12:22. It is the designed reseed source for stranded members (see companion housekeeping issue) and provided zero protection exactly when needed. Needs: root-cause of the stall + why the dir was empty (mkdir'd fresh at 12:22, never populated), an alert path (stall warnings must surface via admin status, not just a log file), and validation that backup data actually tracks the leader (backup-info should report freshness/position, and it must survive /dev/shm pressure, i.e. probably live on disk, not tmpfs).

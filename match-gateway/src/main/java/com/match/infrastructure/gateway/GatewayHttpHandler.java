@@ -20,9 +20,19 @@ import io.netty.util.CharsetUtil;
 @ChannelHandler.Sharable
 public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
     private final GatewayStateManager stateManager;
+    private final com.match.infrastructure.websocket.MarketDataWebSocket webSocket;
+    private final AeronGateway aeronGateway;
 
     public GatewayHttpHandler(GatewayStateManager stateManager) {
+        this(stateManager, null, null);
+    }
+
+    public GatewayHttpHandler(GatewayStateManager stateManager,
+                              com.match.infrastructure.websocket.MarketDataWebSocket webSocket,
+                              AeronGateway aeronGateway) {
         this.stateManager = stateManager;
+        this.webSocket = webSocket;
+        this.aeronGateway = aeronGateway;
     }
 
     @Override
@@ -38,6 +48,12 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
         // Health check
         if (uri.equals("/health") || uri.equals("/health/")) {
             handleHealth(ctx, req);
+            return;
+        }
+
+        // Prometheus scrape (match#33)
+        if (uri.equals("/metrics")) {
+            handleMetrics(ctx);
             return;
         }
 
@@ -94,6 +110,45 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
 
         String json = stateManager.getTrades().toJson(limit);
         sendJson(ctx, json);
+    }
+
+    /** match#33: hand-rendered Prometheus text — reads only volatile/atomic counters. */
+    private void handleMetrics(ChannelHandlerContext ctx) {
+        StringBuilder sb = new StringBuilder(2048);
+        appendSeries(sb, "gateway_ws_clients", "gauge", "Connected market-data WebSocket clients",
+                webSocket != null && webSocket.getChannels() != null ? webSocket.getChannels().size() : 0);
+        appendSeries(sb, "gateway_ws_dropped_frames_total", "counter", "Frames conflated/dropped for slow WS clients",
+                com.match.infrastructure.websocket.MarketDataWebSocket.DROPPED_FRAMES.get());
+        appendSeries(sb, "gateway_ws_resyncs_total", "counter", "State resyncs sent after frame drops",
+                com.match.infrastructure.websocket.MarketDataWebSocket.RESYNCS_SENT.get());
+        appendSeries(sb, "gateway_ws_slow_disconnects_total", "counter", "Slow WS clients disconnected",
+                com.match.infrastructure.websocket.MarketDataWebSocket.SLOW_CLIENTS_DISCONNECTED.get());
+        appendSeries(sb, "gateway_stale_deltas_total", "counter", "Out-of-order book deltas dropped",
+                stateManager != null ? stateManager.getStaleDeltasDropped() : 0);
+        if (aeronGateway != null) {
+            appendSeries(sb, "gateway_cluster_connected", "gauge", "Cluster egress session up (1) / down (0)",
+                    aeronGateway.isConnected() ? 1 : 0);
+            appendSeries(sb, "gateway_egress_messages_total", "counter", "Cluster egress messages relayed",
+                    aeronGateway.getEgressMessageCount());
+            appendSeries(sb, "gateway_egress_age_ms", "gauge", "Milliseconds since the last egress message",
+                    aeronGateway.getEgressAgeMs());
+            appendSeries(sb, "gateway_aeron_errors_total", "counter", "Aeron error handler invocations",
+                    aeronGateway.getAeronErrorCount());
+        }
+
+        byte[] body = sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        FullHttpResponse response = new DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
+                io.netty.buffer.Unpooled.wrappedBuffer(body));
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8");
+        response.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length);
+        ctx.writeAndFlush(response).addListener(io.netty.channel.ChannelFutureListener.CLOSE);
+    }
+
+    private static void appendSeries(StringBuilder sb, String name, String type, String help, long value) {
+        sb.append("# HELP ").append(name).append(' ').append(help).append('\n');
+        sb.append("# TYPE ").append(name).append(' ').append(type).append('\n');
+        sb.append(name).append(' ').append(value).append('\n');
     }
 
     private void handleHealth(ChannelHandlerContext ctx, FullHttpRequest req) {

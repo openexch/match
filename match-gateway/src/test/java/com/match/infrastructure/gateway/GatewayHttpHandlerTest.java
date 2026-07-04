@@ -291,4 +291,20 @@ public class GatewayHttpHandlerTest {
         decoder.wrapAndApplyHeader(buffer, 0, headerDec);
         stateManager.onBookSnapshot(decoder);
     }
+
+    // ==================== /metrics (match#33) ====================
+
+    @Test
+    public void metricsEndpointRendersPrometheusText() {
+        EmbeddedChannel channel = createChannel();
+        FullHttpResponse response = sendRequest(channel, HttpMethod.GET, "/metrics");
+
+        assertEquals(HttpResponseStatus.OK, response.status());
+        assertTrue(response.headers().get("Content-Type").startsWith("text/plain"));
+        String body = getBody(response);
+        assertTrue(body.contains("gateway_ws_clients"));
+        assertTrue(body.contains("# TYPE gateway_stale_deltas_total counter"));
+        // No AeronGateway wired in this test: relay series are omitted, not broken.
+        assertFalse(body.contains("gateway_egress_messages_total"));
+    }
 }
