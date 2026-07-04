@@ -237,7 +237,9 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             for (OrderStatusBatchDecoder.OrdersDecoder order : decoder.orders()) {
                 JsonObject o = new JsonObject();
                 o.addProperty("orderId", order.orderId());
-                o.addProperty("omsOrderId", order.omsOrderId());
+                // As a STRING: Snowflake ids exceed JS 2^53 precision and get
+                // rounded by JSON.parse (trading-ui#25 / oms#39 id contract).
+                o.addProperty("omsOrderId", String.valueOf(order.omsOrderId()));
                 o.addProperty("userId", order.userId());
                 o.addProperty("status", order.status().name());
                 o.addProperty("price", (double) order.price() / SCALE_FACTOR);
