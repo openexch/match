@@ -6,6 +6,30 @@
 
 Ultra-low latency order matching engine built on a 3-node [Aeron Cluster](https://github.com/aeron-io/aeron) (Raft consensus). Designed for 24/7 operation with zero downtime.
 
+## The Open Exchange stack
+
+This is the anchor repo of **Open Exchange**, open-source exchange
+infrastructure released as one product across four repos:
+
+| Repo | Role |
+|---|---|
+| [match](https://github.com/openexch/match) | Matching engine cluster (this repo) |
+| [oms](https://github.com/openexch/oms) | Order management: REST/gRPC edge, auth, risk, balances, Postgres ledger |
+| [admin-gateway](https://github.com/openexch/admin-gateway) | Process manager and operations API |
+| [trading-ui](https://github.com/openexch/trading-ui) | Trading and admin web interface |
+
+Start here:
+
+- **[docs/QUICKSTART.md](docs/QUICKSTART.md)**: fresh clone to a working stack
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: the umbrella architecture, what we provide vs. what an integrator owns, and the version/compatibility matrix
+- **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**: every runtime knob across the four repos
+
+Open Exchange is the **infrastructure layer**: matching, order management,
+ledger, operations. KYC/AML, custody, identity, and regulatory compliance
+are the integrator's responsibility (see the scope table in the
+architecture doc). Beta software; no external security audit yet; provided
+as is under Apache-2.0.
+
 ## Key Features
 
 - **Sub-microsecond matching** — Zero-allocation hot path with O(1) order book operations via direct array indexing
@@ -45,9 +69,9 @@ Ultra-low latency order matching engine built on a 3-node [Aeron Cluster](https:
 | Component | Technology |
 |-----------|-----------|
 | Matching Engine | Java 21, Aeron Cluster 1.51.0, Agrona |
-| Serialization | Simple Binary Encoding (SBE) 1.33.1 |
+| Serialization | Simple Binary Encoding (SBE) 1.38.1 |
 | Event Processing | LMAX Disruptor 4.0.0 |
-| Network I/O | Netty 4.1.100 |
+| Network I/O | Netty 4.2 |
 | Admin Gateway | Go |
 | Build | Maven, Make |
 
