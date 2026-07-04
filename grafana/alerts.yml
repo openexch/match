@@ -1,0 +1,45 @@
+# Starter Prometheus alert rules for Open Exchange (match#33).
+groups:
+  - name: openexchange
+    rules:
+      - alert: NoClusterLeader
+        expr: max(match_cluster_role) < 2
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: "No cluster node reports LEADER for 30s (election stuck or quorum lost)"
+
+      - alert: SnapshotAgeHigh
+        # Auto-snapshot interval is 5m on the dev box; alert at >2x interval.
+        # Only the leader takes snapshots, so look at the leader's age.
+        expr: min(match_snapshot_age_seconds{} and on(instance) (match_cluster_role == 2)) > 600
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Leader has not taken a cluster snapshot in >10m (2x interval)"
+
+      - alert: OmsEgressDrops
+        expr: increase(match_dropped_oms_egress_total[5m]) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "Reliable OMS egress dropped messages — settlement stream integrity at risk (bug9 class)"
+
+      - alert: OmsEgressGaps
+        expr: increase(oms_egress_status_gaps_total[5m]) > 0 or increase(oms_egress_trade_gaps_total[5m]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "OMS detected statusSeq/tradeId gaps on the egress wire (resnapshot repair engaged)"
+
+      - alert: RiskRejectSpike
+        expr: sum(rate(oms_orders_total{result="rejected"}[5m])) > 10
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "Order reject rate >10/s for 2m — risk config, collar, or slot-cap issue"
+
+      - alert: OmsClusterDisconnected
+        expr: oms_cluster_connected == 0
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: "OMS lost its cluster egress session for 30s"

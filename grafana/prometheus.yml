@@ -1,0 +1,19 @@
+# Example Prometheus scrape config for a single-box Open Exchange deployment
+# (match#33 / oms#38). All endpoints are loopback-only by design — run
+# Prometheus on the same box or tunnel; never expose these ports publicly.
+global:
+  scrape_interval: 5s
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: match-nodes            # cluster nodes (JDK HTTP server, METRICS_PORT, default 9500+nodeId)
+    static_configs:
+      - targets: ['localhost:9500', 'localhost:9501', 'localhost:9502']
+  - job_name: market-gateway         # Netty WS/HTTP server
+    static_configs:
+      - targets: ['localhost:8081']
+  - job_name: oms                    # Micrometer /metrics (auth-exempt)
+    static_configs:
+      - targets: ['localhost:8080']

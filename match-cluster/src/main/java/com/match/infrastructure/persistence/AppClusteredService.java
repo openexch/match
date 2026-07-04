@@ -66,6 +66,12 @@ public class AppClusteredService implements ClusteredService {
     // Store cluster reference for snapshot idle strategy and broadcasting
     private Cluster cluster;
 
+    // match#33: hot-path-safe metrics — plain longs written on this (agent)
+    // thread, scraped via a JDK HTTP server on its own daemon thread.
+    private final com.match.infrastructure.metrics.NodeMetrics nodeMetrics =
+            new com.match.infrastructure.metrics.NodeMetrics();
+    private com.match.infrastructure.metrics.NodeMetricsServer metricsServer;
+
     // Lazy-initialized AeronArchive client used to confirm snapshot recordings are durable
     // before onTakeSnapshot returns. See awaitSnapshotRecorded() for the full reasoning.
     private AeronArchive snapshotArchive;
@@ -269,8 +275,50 @@ public class AppClusteredService implements ClusteredService {
         // P1.2 (match#31): OMS-requested open-order membership snapshot
         sbeDemuxer.setOpenOrdersSnapshotRequestHandler(this::emitOpenOrdersSnapshot);
 
+        startMetricsServer();
+
         System.out.println("SERVICE onStart complete, markets initialized");
         System.out.flush();
+    }
+
+    /** match#33: node /metrics on METRICS_PORT (default 9500 + nodeId). */
+    private void startMetricsServer() {
+        // cluster.memberId() is -1 during onStart (not yet joined) — use the
+        // CLUSTER_NODE env / node.id prop, exactly like AeronCluster bootstrap.
+        int nodeId;
+        try {
+            String envNode = System.getenv("CLUSTER_NODE");
+            nodeId = Integer.parseInt(envNode != null ? envNode : System.getProperty("node.id", "0"));
+        } catch (NumberFormatException e) {
+            nodeId = 0;
+        }
+        nodeMetrics.setMemberId(nodeId);
+        nodeMetrics.setRole(cluster.role().code());
+        try {
+            String env = System.getenv("METRICS_PORT");
+            int port = env != null ? Integer.parseInt(env) : 9500 + nodeId;
+            metricsServer = new com.match.infrastructure.metrics.NodeMetricsServer(nodeMetrics)
+                    .counter("match_orders_submitted_total", "Orders admitted by the engine", sbeDemuxer::createOrderCount)
+                    .counter("match_orders_terminal_total", "Terminal order statuses published", eventPublisher::terminalStatusCount)
+                    .counter("match_overflow_rejects_total", "Orders rejected for fixed-point overflow", engine::getOverflowRejectCount)
+                    .counter("match_trades_total", "Trades executed (trade id high-water mark)", eventPublisher::getTradeIdGenerator)
+                    .counter("match_dropped_market_msgs_total", "Lossy market-data egress drops", droppedMessages::get)
+                    .counter("match_dropped_oms_egress_total", "Reliable OMS egress drops (should stay 0)", droppedOmsEgress::get)
+                    .counter("match_unknown_timers_total", "Fired cluster timers with no runnable", timerManager::getUnknownTimerCount)
+                    .counter("match_flush_timer_fires_total", "Egress flush timer fires", () -> flushTimerFireCount)
+                    .counter("match_aeron_errors_total", "Aeron error handler invocations", AeronCluster.AERON_ERROR_COUNT::get)
+                    .gauge("match_egress_queue_oms", "Queued reliable OMS egress messages", omsEgressQueue::size)
+                    .gauge("match_egress_queue_market", "Queued lossy market-data messages", marketDataQueue::size)
+                    .gauge("match_egress_queue_oms_bytes", "Bytes queued for OMS egress", omsEgressBytes::get)
+                    .gauge("match_egress_queue_market_bytes", "Bytes queued for market-data egress", marketDataBytes::get)
+                    .gauge("match_client_sessions", "Connected cluster client sessions", () -> clientSessions.getAllSessions().size())
+                    .gauge("match_last_egress_age_ms", "Milliseconds since the last egress send (leader only)",
+                            () -> lastEgressSendMs == 0 ? -1 : System.currentTimeMillis() - lastEgressSendMs);
+            metricsServer.start(port);
+        } catch (Exception e) {
+            // Metrics must never take a node down.
+            System.err.println("METRICS: failed to start node metrics server: " + e.getMessage());
+        }
     }
 
     // ---- P1.2 (match#31): open-order membership snapshot for OMS repair ----
@@ -439,6 +487,8 @@ public class AppClusteredService implements ClusteredService {
                         + " flushTimerScheduled=" + flushTimerScheduled);
             }
         }
+        // match#33: publish plain-long metric writes to the scraper thread.
+        nodeMetrics.publish();
         // Reschedule
         scheduleMarketDataFlush();
     }
@@ -587,11 +637,18 @@ public class AppClusteredService implements ClusteredService {
 
         context.setSessionContext(session, timestamp);
 
+        // match#33: sampled latency (1-in-16) — two nanoTime calls only on
+        // sampled messages; recording is plain-long writes on this thread.
+        final boolean sampled = nodeMetrics.shouldSample();
+        final long t0 = sampled ? System.nanoTime() : 0;
         try {
             sbeDemuxer.dispatch(buffer, offset, length, timestamp);
         } catch (Exception e) {
             System.err.println("ORDER ERROR: " + e.getMessage());
             throw new RuntimeException(e);
+        }
+        if (sampled) {
+            nodeMetrics.recordOrderLatency(System.nanoTime() - t0);
         }
 
         // Schedule the idle/keep-warm flush timer lazily (can't schedule from onStart —
@@ -690,6 +747,7 @@ public class AppClusteredService implements ClusteredService {
         // recording is pruned on restart and recovery fails with `unknown recording id`. See
         // /tmp/cluster-forensic2-033046/ROOT-CAUSE-V2.md for the full repro.
         awaitSnapshotRecorded(snapshotPublication);
+        nodeMetrics.stampSnapshot(System.currentTimeMillis()); // match#33: wall-clock stamp, metrics only
     }
 
     /**
@@ -754,6 +812,7 @@ public class AppClusteredService implements ClusteredService {
                 + " unknownTimers=" + timerManager.getUnknownTimerCount()
                 + " flushFires=" + flushTimerFireCount + "]");
         System.out.flush();
+        nodeMetrics.setRole(newRole.code());
         // Always re-arm the flush timer chain on a role change. The chain is a
         // self-rescheduling cluster timer that only the LEADER schedules (a follower's
         // scheduleTimer is a no-op) and that does NOT survive a snapshot recover-into-leader
@@ -766,6 +825,9 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onTerminate(final Cluster cluster) {
+        if (metricsServer != null) {
+            metricsServer.stop();
+        }
         if (snapshotArchive != null) {
             CloseHelper.quietClose(snapshotArchive);
             snapshotArchive = null;
