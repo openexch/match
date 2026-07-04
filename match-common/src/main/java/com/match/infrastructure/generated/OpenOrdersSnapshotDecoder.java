@@ -5,19 +5,19 @@ import org.agrona.DirectBuffer;
 
 
 /**
- * Incremental book level changes
+ * Open-order membership snapshot for OMS reconciliation
  */
 @SuppressWarnings("all")
-public final class BookDeltaDecoder
+public final class OpenOrdersSnapshotDecoder
 {
-    public static final int BLOCK_LENGTH = 28;
-    public static final int TEMPLATE_ID = 25;
+    public static final int BLOCK_LENGTH = 21;
+    public static final int TEMPLATE_ID = 27;
     public static final int SCHEMA_ID = 1;
     public static final int SCHEMA_VERSION = 3;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
-    private final BookDeltaDecoder parentMessage = this;
+    private final OpenOrdersSnapshotDecoder parentMessage = this;
     private DirectBuffer buffer;
     private int offset;
     private int limit;
@@ -59,7 +59,7 @@ public final class BookDeltaDecoder
         return offset;
     }
 
-    public BookDeltaDecoder wrap(
+    public OpenOrdersSnapshotDecoder wrap(
         final DirectBuffer buffer,
         final int offset,
         final int actingBlockLength,
@@ -77,7 +77,7 @@ public final class BookDeltaDecoder
         return this;
     }
 
-    public BookDeltaDecoder wrapAndApplyHeader(
+    public OpenOrdersSnapshotDecoder wrapAndApplyHeader(
         final DirectBuffer buffer,
         final int offset,
         final MessageHeaderDecoder headerDecoder)
@@ -97,7 +97,7 @@ public final class BookDeltaDecoder
             headerDecoder.version());
     }
 
-    public BookDeltaDecoder sbeRewind()
+    public OpenOrdersSnapshotDecoder sbeRewind()
     {
         return wrap(buffer, offset, actingBlockLength, actingVersion);
     }
@@ -132,27 +132,27 @@ public final class BookDeltaDecoder
         this.limit = limit;
     }
 
-    public static int marketIdId()
+    public static int requestIdId()
     {
         return 1;
     }
 
-    public static int marketIdSinceVersion()
+    public static int requestIdSinceVersion()
     {
         return 0;
     }
 
-    public static int marketIdEncodingOffset()
+    public static int requestIdEncodingOffset()
     {
         return 0;
     }
 
-    public static int marketIdEncodingLength()
+    public static int requestIdEncodingLength()
     {
-        return 4;
+        return 8;
     }
 
-    public static String marketIdMetaAttribute(final MetaAttribute metaAttribute)
+    public static String requestIdMetaAttribute(final MetaAttribute metaAttribute)
     {
         if (MetaAttribute.PRESENCE == metaAttribute)
         {
@@ -162,48 +162,48 @@ public final class BookDeltaDecoder
         return "";
     }
 
-    public static int marketIdNullValue()
+    public static long requestIdNullValue()
     {
-        return -2147483648;
+        return -9223372036854775808L;
     }
 
-    public static int marketIdMinValue()
+    public static long requestIdMinValue()
     {
-        return -2147483647;
+        return -9223372036854775807L;
     }
 
-    public static int marketIdMaxValue()
+    public static long requestIdMaxValue()
     {
-        return 2147483647;
+        return 9223372036854775807L;
     }
 
-    public int marketId()
+    public long requestId()
     {
-        return buffer.getInt(offset + 0, BYTE_ORDER);
+        return buffer.getLong(offset + 0, BYTE_ORDER);
     }
 
 
-    public static int timestampId()
+    public static int snapshotMaxOrderIdId()
     {
         return 2;
     }
 
-    public static int timestampSinceVersion()
+    public static int snapshotMaxOrderIdSinceVersion()
     {
         return 0;
     }
 
-    public static int timestampEncodingOffset()
-    {
-        return 4;
-    }
-
-    public static int timestampEncodingLength()
+    public static int snapshotMaxOrderIdEncodingOffset()
     {
         return 8;
     }
 
-    public static String timestampMetaAttribute(final MetaAttribute metaAttribute)
+    public static int snapshotMaxOrderIdEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String snapshotMaxOrderIdMetaAttribute(final MetaAttribute metaAttribute)
     {
         if (MetaAttribute.PRESENCE == metaAttribute)
         {
@@ -213,99 +213,48 @@ public final class BookDeltaDecoder
         return "";
     }
 
-    public static long timestampNullValue()
+    public static long snapshotMaxOrderIdNullValue()
     {
         return -9223372036854775808L;
     }
 
-    public static long timestampMinValue()
+    public static long snapshotMaxOrderIdMinValue()
     {
         return -9223372036854775807L;
     }
 
-    public static long timestampMaxValue()
+    public static long snapshotMaxOrderIdMaxValue()
     {
         return 9223372036854775807L;
     }
 
-    public long timestamp()
+    public long snapshotMaxOrderId()
     {
-        return buffer.getLong(offset + 4, BYTE_ORDER);
+        return buffer.getLong(offset + 8, BYTE_ORDER);
     }
 
 
-    public static int bidVersionId()
+    public static int chunkIndexId()
     {
         return 3;
     }
 
-    public static int bidVersionSinceVersion()
+    public static int chunkIndexSinceVersion()
     {
         return 0;
     }
 
-    public static int bidVersionEncodingOffset()
+    public static int chunkIndexEncodingOffset()
     {
-        return 12;
+        return 16;
     }
 
-    public static int bidVersionEncodingLength()
-    {
-        return 8;
-    }
-
-    public static String bidVersionMetaAttribute(final MetaAttribute metaAttribute)
-    {
-        if (MetaAttribute.PRESENCE == metaAttribute)
-        {
-            return "required";
-        }
-
-        return "";
-    }
-
-    public static long bidVersionNullValue()
-    {
-        return -9223372036854775808L;
-    }
-
-    public static long bidVersionMinValue()
-    {
-        return -9223372036854775807L;
-    }
-
-    public static long bidVersionMaxValue()
-    {
-        return 9223372036854775807L;
-    }
-
-    public long bidVersion()
-    {
-        return buffer.getLong(offset + 12, BYTE_ORDER);
-    }
-
-
-    public static int askVersionId()
+    public static int chunkIndexEncodingLength()
     {
         return 4;
     }
 
-    public static int askVersionSinceVersion()
-    {
-        return 0;
-    }
-
-    public static int askVersionEncodingOffset()
-    {
-        return 20;
-    }
-
-    public static int askVersionEncodingLength()
-    {
-        return 8;
-    }
-
-    public static String askVersionMetaAttribute(final MetaAttribute metaAttribute)
+    public static String chunkIndexMetaAttribute(final MetaAttribute metaAttribute)
     {
         if (MetaAttribute.PRESENCE == metaAttribute)
         {
@@ -315,57 +264,108 @@ public final class BookDeltaDecoder
         return "";
     }
 
-    public static long askVersionNullValue()
+    public static int chunkIndexNullValue()
     {
-        return -9223372036854775808L;
+        return -2147483648;
     }
 
-    public static long askVersionMinValue()
+    public static int chunkIndexMinValue()
     {
-        return -9223372036854775807L;
+        return -2147483647;
     }
 
-    public static long askVersionMaxValue()
+    public static int chunkIndexMaxValue()
     {
-        return 9223372036854775807L;
+        return 2147483647;
     }
 
-    public long askVersion()
+    public int chunkIndex()
     {
-        return buffer.getLong(offset + 20, BYTE_ORDER);
+        return buffer.getInt(offset + 16, BYTE_ORDER);
     }
 
 
-    private final ChangesDecoder changes = new ChangesDecoder(this);
-
-    public static long changesDecoderId()
+    public static int isLastId()
     {
-        return 10;
+        return 4;
     }
 
-    public static int changesDecoderSinceVersion()
+    public static int isLastSinceVersion()
     {
         return 0;
     }
 
-    public ChangesDecoder changes()
+    public static int isLastEncodingOffset()
     {
-        changes.wrap(buffer);
-        return changes;
+        return 20;
     }
 
-    public static final class ChangesDecoder
-        implements Iterable<ChangesDecoder>, java.util.Iterator<ChangesDecoder>
+    public static int isLastEncodingLength()
+    {
+        return 1;
+    }
+
+    public static String isLastMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static short isLastNullValue()
+    {
+        return (short)255;
+    }
+
+    public static short isLastMinValue()
+    {
+        return (short)0;
+    }
+
+    public static short isLastMaxValue()
+    {
+        return (short)254;
+    }
+
+    public short isLast()
+    {
+        return ((short)(buffer.getByte(offset + 20) & 0xFF));
+    }
+
+
+    private final OrdersDecoder orders = new OrdersDecoder(this);
+
+    public static long ordersDecoderId()
+    {
+        return 10;
+    }
+
+    public static int ordersDecoderSinceVersion()
+    {
+        return 0;
+    }
+
+    public OrdersDecoder orders()
+    {
+        orders.wrap(buffer);
+        return orders;
+    }
+
+    public static final class OrdersDecoder
+        implements Iterable<OrdersDecoder>, java.util.Iterator<OrdersDecoder>
     {
         public static final int HEADER_SIZE = 4;
-        private final BookDeltaDecoder parentMessage;
+        private final OpenOrdersSnapshotDecoder parentMessage;
         private DirectBuffer buffer;
         private int count;
         private int index;
         private int offset;
         private int blockLength;
 
-        ChangesDecoder(final BookDeltaDecoder parentMessage)
+        OrdersDecoder(final OpenOrdersSnapshotDecoder parentMessage)
         {
             this.parentMessage = parentMessage;
         }
@@ -384,7 +384,7 @@ public final class BookDeltaDecoder
             count = (buffer.getShort(limit + 2, BYTE_ORDER) & 0xFFFF);
         }
 
-        public ChangesDecoder next()
+        public OrdersDecoder next()
         {
             if (index >= count)
             {
@@ -415,7 +415,7 @@ public final class BookDeltaDecoder
 
         public static int sbeBlockLength()
         {
-            return 22;
+            return 16;
         }
 
         public int actingBlockLength()
@@ -433,7 +433,7 @@ public final class BookDeltaDecoder
             return count;
         }
 
-        public java.util.Iterator<ChangesDecoder> iterator()
+        public java.util.Iterator<OrdersDecoder> iterator()
         {
             return this;
         }
@@ -448,27 +448,27 @@ public final class BookDeltaDecoder
             return index < count;
         }
 
-        public static int priceId()
+        public static int orderIdId()
         {
             return 1;
         }
 
-        public static int priceSinceVersion()
+        public static int orderIdSinceVersion()
         {
             return 0;
         }
 
-        public static int priceEncodingOffset()
+        public static int orderIdEncodingOffset()
         {
             return 0;
         }
 
-        public static int priceEncodingLength()
+        public static int orderIdEncodingLength()
         {
             return 8;
         }
 
-        public static String priceMetaAttribute(final MetaAttribute metaAttribute)
+        public static String orderIdMetaAttribute(final MetaAttribute metaAttribute)
         {
             if (MetaAttribute.PRESENCE == metaAttribute)
             {
@@ -478,48 +478,48 @@ public final class BookDeltaDecoder
             return "";
         }
 
-        public static long priceNullValue()
+        public static long orderIdNullValue()
         {
             return -9223372036854775808L;
         }
 
-        public static long priceMinValue()
+        public static long orderIdMinValue()
         {
             return -9223372036854775807L;
         }
 
-        public static long priceMaxValue()
+        public static long orderIdMaxValue()
         {
             return 9223372036854775807L;
         }
 
-        public long price()
+        public long orderId()
         {
             return buffer.getLong(offset + 0, BYTE_ORDER);
         }
 
 
-        public static int quantityId()
+        public static int omsOrderIdId()
         {
             return 2;
         }
 
-        public static int quantitySinceVersion()
+        public static int omsOrderIdSinceVersion()
         {
             return 0;
         }
 
-        public static int quantityEncodingOffset()
+        public static int omsOrderIdEncodingOffset()
         {
             return 8;
         }
 
-        public static int quantityEncodingLength()
+        public static int omsOrderIdEncodingLength()
         {
             return 8;
         }
 
-        public static String quantityMetaAttribute(final MetaAttribute metaAttribute)
+        public static String omsOrderIdMetaAttribute(final MetaAttribute metaAttribute)
         {
             if (MetaAttribute.PRESENCE == metaAttribute)
             {
@@ -529,157 +529,24 @@ public final class BookDeltaDecoder
             return "";
         }
 
-        public static long quantityNullValue()
+        public static long omsOrderIdNullValue()
         {
             return -9223372036854775808L;
         }
 
-        public static long quantityMinValue()
+        public static long omsOrderIdMinValue()
         {
             return -9223372036854775807L;
         }
 
-        public static long quantityMaxValue()
+        public static long omsOrderIdMaxValue()
         {
             return 9223372036854775807L;
         }
 
-        public long quantity()
+        public long omsOrderId()
         {
             return buffer.getLong(offset + 8, BYTE_ORDER);
-        }
-
-
-        public static int orderCountId()
-        {
-            return 3;
-        }
-
-        public static int orderCountSinceVersion()
-        {
-            return 0;
-        }
-
-        public static int orderCountEncodingOffset()
-        {
-            return 16;
-        }
-
-        public static int orderCountEncodingLength()
-        {
-            return 4;
-        }
-
-        public static String orderCountMetaAttribute(final MetaAttribute metaAttribute)
-        {
-            if (MetaAttribute.PRESENCE == metaAttribute)
-            {
-                return "required";
-            }
-
-            return "";
-        }
-
-        public static int orderCountNullValue()
-        {
-            return -2147483648;
-        }
-
-        public static int orderCountMinValue()
-        {
-            return -2147483647;
-        }
-
-        public static int orderCountMaxValue()
-        {
-            return 2147483647;
-        }
-
-        public int orderCount()
-        {
-            return buffer.getInt(offset + 16, BYTE_ORDER);
-        }
-
-
-        public static int sideId()
-        {
-            return 4;
-        }
-
-        public static int sideSinceVersion()
-        {
-            return 0;
-        }
-
-        public static int sideEncodingOffset()
-        {
-            return 20;
-        }
-
-        public static int sideEncodingLength()
-        {
-            return 1;
-        }
-
-        public static String sideMetaAttribute(final MetaAttribute metaAttribute)
-        {
-            if (MetaAttribute.PRESENCE == metaAttribute)
-            {
-                return "required";
-            }
-
-            return "";
-        }
-
-        public short sideRaw()
-        {
-            return ((short)(buffer.getByte(offset + 20) & 0xFF));
-        }
-
-        public OrderSide side()
-        {
-            return OrderSide.get(((short)(buffer.getByte(offset + 20) & 0xFF)));
-        }
-
-
-        public static int updateTypeId()
-        {
-            return 5;
-        }
-
-        public static int updateTypeSinceVersion()
-        {
-            return 0;
-        }
-
-        public static int updateTypeEncodingOffset()
-        {
-            return 21;
-        }
-
-        public static int updateTypeEncodingLength()
-        {
-            return 1;
-        }
-
-        public static String updateTypeMetaAttribute(final MetaAttribute metaAttribute)
-        {
-            if (MetaAttribute.PRESENCE == metaAttribute)
-            {
-                return "required";
-            }
-
-            return "";
-        }
-
-        public short updateTypeRaw()
-        {
-            return ((short)(buffer.getByte(offset + 21) & 0xFF));
-        }
-
-        public BookUpdateType updateType()
-        {
-            return BookUpdateType.get(((short)(buffer.getByte(offset + 21) & 0xFF)));
         }
 
 
@@ -691,26 +558,17 @@ public final class BookDeltaDecoder
             }
 
             builder.append('(');
-            builder.append("price=");
-            builder.append(this.price());
+            builder.append("orderId=");
+            builder.append(this.orderId());
             builder.append('|');
-            builder.append("quantity=");
-            builder.append(this.quantity());
-            builder.append('|');
-            builder.append("orderCount=");
-            builder.append(this.orderCount());
-            builder.append('|');
-            builder.append("side=");
-            builder.append(this.side());
-            builder.append('|');
-            builder.append("updateType=");
-            builder.append(this.updateType());
+            builder.append("omsOrderId=");
+            builder.append(this.omsOrderId());
             builder.append(')');
 
             return builder;
         }
         
-        public ChangesDecoder sbeSkip()
+        public OrdersDecoder sbeSkip()
         {
 
             return this;
@@ -724,7 +582,7 @@ public final class BookDeltaDecoder
             return "";
         }
 
-        final BookDeltaDecoder decoder = new BookDeltaDecoder();
+        final OpenOrdersSnapshotDecoder decoder = new OpenOrdersSnapshotDecoder();
         decoder.wrap(buffer, offset, actingBlockLength, actingVersion);
 
         return decoder.appendTo(new StringBuilder()).toString();
@@ -739,7 +597,7 @@ public final class BookDeltaDecoder
 
         final int originalLimit = limit();
         limit(offset + actingBlockLength);
-        builder.append("[BookDelta](sbeTemplateId=");
+        builder.append("[OpenOrdersSnapshot](sbeTemplateId=");
         builder.append(TEMPLATE_ID);
         builder.append("|sbeSchemaId=");
         builder.append(SCHEMA_ID);
@@ -758,33 +616,33 @@ public final class BookDeltaDecoder
         }
         builder.append(BLOCK_LENGTH);
         builder.append("):");
-        builder.append("marketId=");
-        builder.append(this.marketId());
+        builder.append("requestId=");
+        builder.append(this.requestId());
         builder.append('|');
-        builder.append("timestamp=");
-        builder.append(this.timestamp());
+        builder.append("snapshotMaxOrderId=");
+        builder.append(this.snapshotMaxOrderId());
         builder.append('|');
-        builder.append("bidVersion=");
-        builder.append(this.bidVersion());
+        builder.append("chunkIndex=");
+        builder.append(this.chunkIndex());
         builder.append('|');
-        builder.append("askVersion=");
-        builder.append(this.askVersion());
+        builder.append("isLast=");
+        builder.append(this.isLast());
         builder.append('|');
-        builder.append("changes=[");
-        final int changesOriginalOffset = changes.offset;
-        final int changesOriginalIndex = changes.index;
-        final ChangesDecoder changes = this.changes();
-        if (changes.count() > 0)
+        builder.append("orders=[");
+        final int ordersOriginalOffset = orders.offset;
+        final int ordersOriginalIndex = orders.index;
+        final OrdersDecoder orders = this.orders();
+        if (orders.count() > 0)
         {
-            while (changes.hasNext())
+            while (orders.hasNext())
             {
-                changes.next().appendTo(builder);
+                orders.next().appendTo(builder);
                 builder.append(',');
             }
             builder.setLength(builder.length() - 1);
         }
-        changes.offset = changesOriginalOffset;
-        changes.index = changesOriginalIndex;
+        orders.offset = ordersOriginalOffset;
+        orders.index = ordersOriginalIndex;
         builder.append(']');
 
         limit(originalLimit);
@@ -792,16 +650,16 @@ public final class BookDeltaDecoder
         return builder;
     }
     
-    public BookDeltaDecoder sbeSkip()
+    public OpenOrdersSnapshotDecoder sbeSkip()
     {
         sbeRewind();
-        ChangesDecoder changes = this.changes();
-        if (changes.count() > 0)
+        OrdersDecoder orders = this.orders();
+        if (orders.count() > 0)
         {
-            while (changes.hasNext())
+            while (orders.hasNext())
             {
-                changes.next();
-                changes.sbeSkip();
+                orders.next();
+                orders.sbeSkip();
             }
         }
 

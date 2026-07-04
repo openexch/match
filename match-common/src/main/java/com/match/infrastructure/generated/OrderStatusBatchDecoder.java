@@ -13,7 +13,7 @@ public final class OrderStatusBatchDecoder
     public static final int BLOCK_LENGTH = 12;
     public static final int TEMPLATE_ID = 24;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 2;
+    public static final int SCHEMA_VERSION = 3;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -313,7 +313,7 @@ public final class OrderStatusBatchDecoder
 
         public static int sbeBlockLength()
         {
-            return 58;
+            return 66;
         }
 
         public int actingBlockLength()
@@ -785,6 +785,62 @@ public final class OrderStatusBatchDecoder
         }
 
 
+        public static int statusSeqId()
+        {
+            return 11;
+        }
+
+        public static int statusSeqSinceVersion()
+        {
+            return 3;
+        }
+
+        public static int statusSeqEncodingOffset()
+        {
+            return 58;
+        }
+
+        public static int statusSeqEncodingLength()
+        {
+            return 8;
+        }
+
+        public static String statusSeqMetaAttribute(final MetaAttribute metaAttribute)
+        {
+            if (MetaAttribute.PRESENCE == metaAttribute)
+            {
+                return "required";
+            }
+
+            return "";
+        }
+
+        public static long statusSeqNullValue()
+        {
+            return -9223372036854775808L;
+        }
+
+        public static long statusSeqMinValue()
+        {
+            return -9223372036854775807L;
+        }
+
+        public static long statusSeqMaxValue()
+        {
+            return 9223372036854775807L;
+        }
+
+        public long statusSeq()
+        {
+            if (parentMessage.actingVersion < 3)
+            {
+                return -9223372036854775808L;
+            }
+
+            return buffer.getLong(offset + 58, BYTE_ORDER);
+        }
+
+
         public StringBuilder appendTo(final StringBuilder builder)
         {
             if (null == buffer)
@@ -819,6 +875,9 @@ public final class OrderStatusBatchDecoder
             builder.append('|');
             builder.append("omsOrderId=");
             builder.append(this.omsOrderId());
+            builder.append('|');
+            builder.append("statusSeq=");
+            builder.append(this.statusSeq());
             builder.append(')');
 
             return builder;

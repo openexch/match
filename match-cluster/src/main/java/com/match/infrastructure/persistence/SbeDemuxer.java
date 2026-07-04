@@ -48,6 +48,18 @@ public class SbeDemuxer {
     // Plain long: written and read on the cluster service thread only.
     private long createOrderCount;
 
+    /** P1.2 (match#31): receives logged RequestOpenOrdersSnapshot commands. */
+    public interface OpenOrdersSnapshotRequestHandler {
+        void onOpenOrdersSnapshotRequest(long requestId);
+    }
+
+    private final com.match.infrastructure.generated.RequestOpenOrdersSnapshotDecoder
+            requestOpenOrdersDecoder = new com.match.infrastructure.generated.RequestOpenOrdersSnapshotDecoder();
+    private OpenOrdersSnapshotRequestHandler openOrdersSnapshotRequestHandler;
+
+    public void setOpenOrdersSnapshotRequestHandler(OpenOrdersSnapshotRequestHandler handler) {
+        this.openOrdersSnapshotRequestHandler = handler;
+    }
 
     public SbeDemuxer(Engine engine) {
         this.engine = engine;
@@ -75,6 +87,16 @@ public class SbeDemuxer {
 
             case UpdateOrderDecoder.TEMPLATE_ID:
                 handleUpdateOrder(buffer, offset, timestamp);
+                break;
+
+            case com.match.infrastructure.generated.RequestOpenOrdersSnapshotDecoder.TEMPLATE_ID:
+                // P1.2 (match#31): logged command; deterministic across replicas
+                // (no state mutation — only the leader emits the egress reply).
+                requestOpenOrdersDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
+                if (openOrdersSnapshotRequestHandler != null) {
+                    openOrdersSnapshotRequestHandler.onOpenOrdersSnapshotRequest(
+                            requestOpenOrdersDecoder.requestId());
+                }
                 break;
 
             default:
