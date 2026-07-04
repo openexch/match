@@ -28,20 +28,24 @@ Push a feature branch, open a PR, and merge the PR. Gates differ per repo
 | oms | ✅ | — | ✅ | ✅ |
 | trading-ui | ✅ | — | — | — |
 
-**Signed + linear interaction (match, admin-gateway).** GitHub signs the *squash* / *merge* commits it
-creates, but it **cannot auto-sign a rebase merge** (rebase replays your commits). So:
+**Merging into a signature-required base (match, oms, admin-gateway) — squash only.** GitHub
+**refuses rebase merges** into a signature-required base outright ("Rebase merges cannot be
+automatically signed"), and **blocks merging any PR whose HEAD commits are unsigned**. (The
+v0.2.0-alpha era sign-locally + rebase-merge path no longer works; validated 2026-07-03 on
+match#38/#40/#41 and admin-gateway#14.) Working procedure:
 
-- To **keep granular linear history** (multiple distinct commits), **sign your commits** (1Password SSH
-  agent) and **rebase-merge** the PR. This is how v0.2.0-alpha's 4 commits landed on match `main`.
-- If your commits are **unsigned**, **squash-merge** — GitHub signs the single squashed commit. This
-  collapses a multi-commit PR to one (fine for a single-commit PR).
+- **Sign your commits** (1Password SSH agent) — an unsigned PR head blocks the merge entirely.
+- **One PR per logical commit**, and **squash-merge** each (`gh pr merge --squash`) — GitHub signs
+  the squash commit. Granular linear history = several small PRs, not one multi-commit PR.
+- Gotcha: if the signing agent dies mid-session, commits made before the outage stay valid — PR the
+  original signed commits rather than rebasing (a rebase re-commits, unsigned).
 
 ## Release conventions
 
 - **Tag-only releases.** A release = an **annotated git tag** + a **GitHub prerelease**. We do **not**
   bump a version string in `pom.xml` / `package.json` / `go.mod` — the tag is the version.
-- **Annotated tag message:** `vX.Y.Z-alpha — <one-line summary>`.
-- **All alphas are prereleases.**
+- **Annotated tag message:** `vX.Y.Z-<stage> — <one-line summary>`.
+- **All alphas and betas are prereleases.**
 
 ## Procedure (per repo)
 
@@ -52,10 +56,9 @@ git fetch origin
 # 1. Land the work on main via a PR (direct push is rejected by the ruleset).
 git push -u origin <feature-branch>
 gh pr create -R openexch/<repo> --base main --head <feature-branch> --title "..." --body "..."
-# Merge: rebase if your commits are signed (keeps granular history); else squash (GitHub signs the
-# result). On oms / admin-gateway the Copilot review must pass first.
-gh pr merge <n> -R openexch/<repo> --rebase     # signed commits  -> linear + granular
-#   or: gh pr merge <n> -R openexch/<repo> --squash   # unsigned   -> GitHub signs one commit
+# Merge: squash-merge (GitHub signs the squash commit). Keep PRs to one logical commit each for
+# granular history. On oms / admin-gateway the Copilot review must pass first.
+gh pr merge <n> -R openexch/<repo> --squash
 
 # 2. Tag the TRUE main tip AFTER the merge (verify HEAD == origin/main; ff local if behind).
 git switch main && git pull --ff-only

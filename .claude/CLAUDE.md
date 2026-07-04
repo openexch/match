@@ -175,7 +175,6 @@ curl -X POST http://localhost:8082/api/admin/stop-all-nodes                   # 
 
 ```bash
 make build-java    # Build Java modules (mvn clean package -DskipTests)
-make build-admin   # Build Go admin gateway
 make build         # Build everything
 make install       # Full installation with services
 ```
