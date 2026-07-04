@@ -43,3 +43,33 @@ groups:
         labels: {severity: critical}
         annotations:
           summary: "OMS lost its cluster egress session for 30s"
+
+      # Admin-gateway metrics (admin-gateway#12). Alert on fresh, never on
+      # running: a running backup process proves nothing (match#36 — the
+      # agent wedged silently for days while looking healthy).
+      - alert: BackupNotFresh
+        expr: admin_backup_fresh == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "Disk backup is not tracking the cluster (heartbeat stale or not OK) — RPO growing"
+
+      - alert: NodeUnhealthy
+        expr: admin_cluster_all_nodes_healthy == 0
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "A cluster node is not HEALTHY for 2m — snapshot/housekeeping guard is engaged; investigate before it strands"
+
+      - alert: ManagedProcessFailed
+        expr: admin_process_failed > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "A managed process hit the crash-loop cap or a start error (see lastError in /api/admin/processes)"
+
+      - alert: AdminGatewayDown
+        expr: up{job="admin-gateway"} == 0
+        for: 1m
+        labels: {severity: warning}
+        annotations:
+          summary: "Admin gateway is not scrapable — process management and backup monitoring are blind"
