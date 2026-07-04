@@ -82,6 +82,9 @@ tune:
 tune-report:
 	@./deploy/tuning/system-tuning.sh --report
 
+tune-persist:
+	@./deploy/tuning/system-tuning.sh --persist
+
 optimize-os:
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
 	@echo "║           Optimizing OS for Ultra-Low Latency                    ║"
@@ -125,7 +128,9 @@ optimize-os:
 	@echo "→ File descriptors & huge pages..."
 	@sudo sysctl -w fs.file-max=2097152 >/dev/null
 	@sudo sysctl -w vm.nr_hugepages=1024 >/dev/null 2>&1 || true
-	@echo "  ✓ OS optimization complete"
+	@echo "→ Persisting across reboots (sysctl.d + boot tuning unit)..."
+	@./deploy/tuning/system-tuning.sh --persist | sed -n '/7\. persistence/,/AFTER:/p' | sed '$$d' || true
+	@echo "  ✓ OS optimization complete (boot-persistent; verify after kernel upgrades: make tune-report)"
 
 # ==================== BUILD ====================
 

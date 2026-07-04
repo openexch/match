@@ -157,7 +157,7 @@ curl -X POST http://localhost:8082/api/admin/stop-all-nodes                   # 
 | Constants | `match-common/src/main/java/com/match/infrastructure/InfrastructureConstants.java` |
 | Transport config (driver mode/idle/channels) | `match-common/src/main/java/com/match/infrastructure/TransportConfig.java` |
 | Media driver launcher + tuning | `deploy/media-driver/launch-driver.sh`, `deploy/media-driver/driver.properties` |
-| OS tuning script | `deploy/tuning/system-tuning.sh` (`make tune` / `make tune-report`) |
+| OS tuning script | `deploy/tuning/system-tuning.sh` (`make tune` / `make tune-report` / `sudo make tune-persist`) |
 | Transport architecture doc | `docs/kernel-bypass.md` |
 | Performance baseline + data | `docs/perf/2026-07-02-performance-baseline.md`, `docs/perf/data/` |
 | Incident reports | `docs/incidents/` |
@@ -215,6 +215,11 @@ Logs at: `~/.local/log/cluster/`
   start both. Seconds of quorum outage.
 - Status API can show stale (healthy-looking) data for dead nodes: verify liveness via `ss -uln`
   (ingress port bound) + fresh log lines, not status alone.
+- OS tuning must be BOOT-PERSISTENT: `sudo make tune-persist` writes
+  `/etc/sysctl.d/99-openexchange.conf` + `openexchange-tuning.service` (THP/governor). After any
+  reboot or kernel upgrade, run `make tune-report` (shows runtime-vs-persisted drift) BEFORE starting
+  drivers/nodes — unpersisted socket limits after the 2026-07-03 reboot crash-looped the drivers and
+  corrupted node0's archive (match#48).
 
 ### Engine selection & tunables (system properties / env)
 - `MATCH_ENGINE_IMPL` / `-Dmatch.engine.impl` — `array` (DEFAULT, array-backed) or `direct` (preallocated fallback).
