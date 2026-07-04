@@ -342,6 +342,16 @@ public class Engine {
     }
 
     /**
+     * omsOrderId for a resting order, or 0 when unknown (match#31: the mapping
+     * is not part of the snapshot, so orders restored from a snapshot have no
+     * correlation until they trade — OMS reconciles by cluster orderId).
+     */
+    public long getOmsOrderIdFor(long orderId) {
+        final long v = orderIdToOmsOrderId.get(orderId);
+        return v == -1 ? 0 : v;
+    }
+
+    /**
      * Calculate total filled quantity from match results.
      */
     private long calculateFilledQuantity(MatchingEngine engine, int matchCount) {

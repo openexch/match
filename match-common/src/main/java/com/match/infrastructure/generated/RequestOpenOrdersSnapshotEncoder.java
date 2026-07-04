@@ -5,19 +5,19 @@ import org.agrona.MutableDirectBuffer;
 
 
 /**
- * Cluster egress keep-warm heartbeat
+ * OMS requests an OpenOrdersSnapshot egress
  */
 @SuppressWarnings("all")
-public final class ClusterHeartbeatEncoder
+public final class RequestOpenOrdersSnapshotEncoder
 {
-    public static final int BLOCK_LENGTH = 16;
-    public static final int TEMPLATE_ID = 21;
+    public static final int BLOCK_LENGTH = 8;
+    public static final int TEMPLATE_ID = 7;
     public static final int SCHEMA_ID = 1;
     public static final int SCHEMA_VERSION = 3;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
-    private final ClusterHeartbeatEncoder parentMessage = this;
+    private final RequestOpenOrdersSnapshotEncoder parentMessage = this;
     private MutableDirectBuffer buffer;
     private int offset;
     private int limit;
@@ -57,7 +57,7 @@ public final class ClusterHeartbeatEncoder
         return offset;
     }
 
-    public ClusterHeartbeatEncoder wrap(final MutableDirectBuffer buffer, final int offset)
+    public RequestOpenOrdersSnapshotEncoder wrap(final MutableDirectBuffer buffer, final int offset)
     {
         if (buffer != this.buffer)
         {
@@ -69,7 +69,7 @@ public final class ClusterHeartbeatEncoder
         return this;
     }
 
-    public ClusterHeartbeatEncoder wrapAndApplyHeader(
+    public RequestOpenOrdersSnapshotEncoder wrapAndApplyHeader(
         final MutableDirectBuffer buffer, final int offset, final MessageHeaderEncoder headerEncoder)
     {
         headerEncoder
@@ -97,27 +97,27 @@ public final class ClusterHeartbeatEncoder
         this.limit = limit;
     }
 
-    public static int nodeIdId()
+    public static int requestIdId()
     {
         return 1;
     }
 
-    public static int nodeIdSinceVersion()
+    public static int requestIdSinceVersion()
     {
         return 0;
     }
 
-    public static int nodeIdEncodingOffset()
+    public static int requestIdEncodingOffset()
     {
         return 0;
     }
 
-    public static int nodeIdEncodingLength()
+    public static int requestIdEncodingLength()
     {
         return 8;
     }
 
-    public static String nodeIdMetaAttribute(final MetaAttribute metaAttribute)
+    public static String requestIdMetaAttribute(final MetaAttribute metaAttribute)
     {
         if (MetaAttribute.PRESENCE == metaAttribute)
         {
@@ -127,76 +127,24 @@ public final class ClusterHeartbeatEncoder
         return "";
     }
 
-    public static long nodeIdNullValue()
+    public static long requestIdNullValue()
     {
         return -9223372036854775808L;
     }
 
-    public static long nodeIdMinValue()
+    public static long requestIdMinValue()
     {
         return -9223372036854775807L;
     }
 
-    public static long nodeIdMaxValue()
+    public static long requestIdMaxValue()
     {
         return 9223372036854775807L;
     }
 
-    public ClusterHeartbeatEncoder nodeId(final long value)
+    public RequestOpenOrdersSnapshotEncoder requestId(final long value)
     {
         buffer.putLong(offset + 0, value, BYTE_ORDER);
-        return this;
-    }
-
-
-    public static int timestampId()
-    {
-        return 2;
-    }
-
-    public static int timestampSinceVersion()
-    {
-        return 0;
-    }
-
-    public static int timestampEncodingOffset()
-    {
-        return 8;
-    }
-
-    public static int timestampEncodingLength()
-    {
-        return 8;
-    }
-
-    public static String timestampMetaAttribute(final MetaAttribute metaAttribute)
-    {
-        if (MetaAttribute.PRESENCE == metaAttribute)
-        {
-            return "required";
-        }
-
-        return "";
-    }
-
-    public static long timestampNullValue()
-    {
-        return -9223372036854775808L;
-    }
-
-    public static long timestampMinValue()
-    {
-        return -9223372036854775807L;
-    }
-
-    public static long timestampMaxValue()
-    {
-        return 9223372036854775807L;
-    }
-
-    public ClusterHeartbeatEncoder timestamp(final long value)
-    {
-        buffer.putLong(offset + 8, value, BYTE_ORDER);
         return this;
     }
 
@@ -218,7 +166,7 @@ public final class ClusterHeartbeatEncoder
             return builder;
         }
 
-        final ClusterHeartbeatDecoder decoder = new ClusterHeartbeatDecoder();
+        final RequestOpenOrdersSnapshotDecoder decoder = new RequestOpenOrdersSnapshotDecoder();
         decoder.wrap(buffer, offset, BLOCK_LENGTH, SCHEMA_VERSION);
 
         return decoder.appendTo(builder);

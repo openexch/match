@@ -5,19 +5,19 @@ import org.agrona.DirectBuffer;
 
 
 /**
- * Cancel order event
+ * OMS requests an OpenOrdersSnapshot egress
  */
 @SuppressWarnings("all")
-public final class CancelOrderDecoder
+public final class RequestOpenOrdersSnapshotDecoder
 {
-    public static final int BLOCK_LENGTH = 20;
-    public static final int TEMPLATE_ID = 2;
+    public static final int BLOCK_LENGTH = 8;
+    public static final int TEMPLATE_ID = 7;
     public static final int SCHEMA_ID = 1;
     public static final int SCHEMA_VERSION = 3;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
-    private final CancelOrderDecoder parentMessage = this;
+    private final RequestOpenOrdersSnapshotDecoder parentMessage = this;
     private DirectBuffer buffer;
     private int offset;
     private int limit;
@@ -59,7 +59,7 @@ public final class CancelOrderDecoder
         return offset;
     }
 
-    public CancelOrderDecoder wrap(
+    public RequestOpenOrdersSnapshotDecoder wrap(
         final DirectBuffer buffer,
         final int offset,
         final int actingBlockLength,
@@ -77,7 +77,7 @@ public final class CancelOrderDecoder
         return this;
     }
 
-    public CancelOrderDecoder wrapAndApplyHeader(
+    public RequestOpenOrdersSnapshotDecoder wrapAndApplyHeader(
         final DirectBuffer buffer,
         final int offset,
         final MessageHeaderDecoder headerDecoder)
@@ -97,7 +97,7 @@ public final class CancelOrderDecoder
             headerDecoder.version());
     }
 
-    public CancelOrderDecoder sbeRewind()
+    public RequestOpenOrdersSnapshotDecoder sbeRewind()
     {
         return wrap(buffer, offset, actingBlockLength, actingVersion);
     }
@@ -132,27 +132,27 @@ public final class CancelOrderDecoder
         this.limit = limit;
     }
 
-    public static int userIdId()
+    public static int requestIdId()
     {
         return 1;
     }
 
-    public static int userIdSinceVersion()
+    public static int requestIdSinceVersion()
     {
         return 0;
     }
 
-    public static int userIdEncodingOffset()
+    public static int requestIdEncodingOffset()
     {
         return 0;
     }
 
-    public static int userIdEncodingLength()
+    public static int requestIdEncodingLength()
     {
         return 8;
     }
 
-    public static String userIdMetaAttribute(final MetaAttribute metaAttribute)
+    public static String requestIdMetaAttribute(final MetaAttribute metaAttribute)
     {
         if (MetaAttribute.PRESENCE == metaAttribute)
         {
@@ -162,126 +162,24 @@ public final class CancelOrderDecoder
         return "";
     }
 
-    public static long userIdNullValue()
+    public static long requestIdNullValue()
     {
         return -9223372036854775808L;
     }
 
-    public static long userIdMinValue()
+    public static long requestIdMinValue()
     {
         return -9223372036854775807L;
     }
 
-    public static long userIdMaxValue()
+    public static long requestIdMaxValue()
     {
         return 9223372036854775807L;
     }
 
-    public long userId()
+    public long requestId()
     {
         return buffer.getLong(offset + 0, BYTE_ORDER);
-    }
-
-
-    public static int orderIdId()
-    {
-        return 2;
-    }
-
-    public static int orderIdSinceVersion()
-    {
-        return 0;
-    }
-
-    public static int orderIdEncodingOffset()
-    {
-        return 8;
-    }
-
-    public static int orderIdEncodingLength()
-    {
-        return 8;
-    }
-
-    public static String orderIdMetaAttribute(final MetaAttribute metaAttribute)
-    {
-        if (MetaAttribute.PRESENCE == metaAttribute)
-        {
-            return "required";
-        }
-
-        return "";
-    }
-
-    public static long orderIdNullValue()
-    {
-        return -9223372036854775808L;
-    }
-
-    public static long orderIdMinValue()
-    {
-        return -9223372036854775807L;
-    }
-
-    public static long orderIdMaxValue()
-    {
-        return 9223372036854775807L;
-    }
-
-    public long orderId()
-    {
-        return buffer.getLong(offset + 8, BYTE_ORDER);
-    }
-
-
-    public static int marketIdId()
-    {
-        return 3;
-    }
-
-    public static int marketIdSinceVersion()
-    {
-        return 0;
-    }
-
-    public static int marketIdEncodingOffset()
-    {
-        return 16;
-    }
-
-    public static int marketIdEncodingLength()
-    {
-        return 4;
-    }
-
-    public static String marketIdMetaAttribute(final MetaAttribute metaAttribute)
-    {
-        if (MetaAttribute.PRESENCE == metaAttribute)
-        {
-            return "required";
-        }
-
-        return "";
-    }
-
-    public static int marketIdNullValue()
-    {
-        return -2147483648;
-    }
-
-    public static int marketIdMinValue()
-    {
-        return -2147483647;
-    }
-
-    public static int marketIdMaxValue()
-    {
-        return 2147483647;
-    }
-
-    public int marketId()
-    {
-        return buffer.getInt(offset + 16, BYTE_ORDER);
     }
 
 
@@ -292,7 +190,7 @@ public final class CancelOrderDecoder
             return "";
         }
 
-        final CancelOrderDecoder decoder = new CancelOrderDecoder();
+        final RequestOpenOrdersSnapshotDecoder decoder = new RequestOpenOrdersSnapshotDecoder();
         decoder.wrap(buffer, offset, actingBlockLength, actingVersion);
 
         return decoder.appendTo(new StringBuilder()).toString();
@@ -307,7 +205,7 @@ public final class CancelOrderDecoder
 
         final int originalLimit = limit();
         limit(offset + actingBlockLength);
-        builder.append("[CancelOrder](sbeTemplateId=");
+        builder.append("[RequestOpenOrdersSnapshot](sbeTemplateId=");
         builder.append(TEMPLATE_ID);
         builder.append("|sbeSchemaId=");
         builder.append(SCHEMA_ID);
@@ -326,21 +224,15 @@ public final class CancelOrderDecoder
         }
         builder.append(BLOCK_LENGTH);
         builder.append("):");
-        builder.append("userId=");
-        builder.append(this.userId());
-        builder.append('|');
-        builder.append("orderId=");
-        builder.append(this.orderId());
-        builder.append('|');
-        builder.append("marketId=");
-        builder.append(this.marketId());
+        builder.append("requestId=");
+        builder.append(this.requestId());
 
         limit(originalLimit);
 
         return builder;
     }
     
-    public CancelOrderDecoder sbeSkip()
+    public RequestOpenOrdersSnapshotDecoder sbeSkip()
     {
         sbeRewind();
 

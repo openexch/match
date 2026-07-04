@@ -117,7 +117,15 @@ public class MarketPublisher implements MarketEventHandler {
         boolean isBuy;
         long timestamp;
         long omsOrderId;
+        long statusSeq;
     }
+
+    // P1.2 (match#31): per-market monotonic sequence over OrderStatus events,
+    // consumed at the DROP-OR-BUFFER decision in bufferOrderStatus so that a
+    // dropped status leaves a visible gap the OMS can detect and repair via
+    // RequestOpenOrdersSnapshot. Publisher-thread local (leader-only egress);
+    // resets on restart/leader change, which the OMS rebaselines on reconnect.
+    private long statusSeq;
 
     // Trade execution buffer for OMS TradeExecutionBatch
     private final java.util.List<TradeExecutionEntry> tradeExecutionBuffer = new java.util.ArrayList<>(100);
@@ -517,6 +525,9 @@ public class MarketPublisher implements MarketEventHandler {
      * Reduces message count by bundling multiple status updates together.
      */
     private synchronized void bufferOrderStatus(PublishEvent event) {
+        // Consume a sequence number BEFORE the drop decision: a dropped status
+        // must leave a gap on the wire so the OMS detects the loss (match#31).
+        final long seq = ++statusSeq;
         // Bounded egress: drop rather than grow into OOM if the flush has fallen behind.
         // Terminal statuses are recoverable via OMS reconciliation against the cluster log.
         if (orderStatusBuffer.size() >= maxEgressBuffer) {
@@ -541,6 +552,7 @@ public class MarketPublisher implements MarketEventHandler {
         entry.isBuy = event.isOrderIsBuy();
         entry.timestamp = event.getTimestamp();
         entry.omsOrderId = event.getOmsOrderId();
+        entry.statusSeq = seq;
         orderStatusBuffer.add(entry);
     }
 
@@ -877,7 +889,8 @@ public class MarketPublisher implements MarketEventHandler {
                 .filledQty(entry.filledQty)
                 .side(entry.isBuy ? OrderSide.BID : OrderSide.ASK)
                 .timestamp(entry.timestamp)
-                .omsOrderId(entry.omsOrderId);
+                .omsOrderId(entry.omsOrderId)
+                .statusSeq(entry.statusSeq);
         }
 
         return MessageHeaderEncoder.ENCODED_LENGTH + orderStatusBatchEncoder.encodedLength();

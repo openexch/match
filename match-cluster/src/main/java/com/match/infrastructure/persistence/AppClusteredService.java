@@ -266,8 +266,96 @@ public class AppClusteredService implements ClusteredService {
         // Initialize event publishing for all markets
         initializeEventPublishing();
 
+        // P1.2 (match#31): OMS-requested open-order membership snapshot
+        sbeDemuxer.setOpenOrdersSnapshotRequestHandler(this::emitOpenOrdersSnapshot);
+
         System.out.println("SERVICE onStart complete, markets initialized");
         System.out.flush();
+    }
+
+    // ---- P1.2 (match#31): open-order membership snapshot for OMS repair ----
+
+    private static final int OPEN_ORDERS_CHUNK = 512;
+    private final org.agrona.ExpandableArrayBuffer openOrdersBuffer = new org.agrona.ExpandableArrayBuffer(64 * 1024);
+    private final MessageHeaderEncoder openOrdersHeaderEncoder = new MessageHeaderEncoder();
+    private final com.match.infrastructure.generated.OpenOrdersSnapshotEncoder openOrdersEncoder =
+            new com.match.infrastructure.generated.OpenOrdersSnapshotEncoder();
+
+    /**
+     * Emit the full open-order membership set (cluster orderId + omsOrderId when
+     * known) as chunked OpenOrdersSnapshot egress. Runs on the service thread for
+     * every replica (the command is logged/deterministic) but mutates no state,
+     * and only the LEADER enqueues egress — followers have no sessions and must
+     * not fill their egress byte budget with output nobody drains.
+     *
+     * snapshotMaxOrderId is the orderId generator at emission time: the OMS only
+     * terminalizes absent orders BELOW this cutoff, so orders created after the
+     * snapshot can never be misclassified.
+     */
+    private void emitOpenOrdersSnapshot(long requestId) {
+        if (cluster == null || cluster.role() != Cluster.Role.LEADER) {
+            return;
+        }
+        final long snapshotMaxOrderId = engine.getOrderIdGenerator();
+
+        // Gather all resting orderIds (snapshot-codec enumeration: orderId is
+        // tuple slot 0 of every 4-long record). Rare repair path — allocation OK.
+        final java.util.ArrayList<long[]> sides = new java.util.ArrayList<>();
+        final Int2ObjectHashMap<com.match.application.orderbook.MatchingEngine> engines = engine.getEngines();
+        final Int2ObjectHashMap<com.match.application.orderbook.MatchingEngine>.ValueIterator it =
+                engines.values().iterator();
+        int total = 0;
+        while (it.hasNext()) {
+            final com.match.application.orderbook.MatchingEngine me = it.next();
+            final long[] bids = me.getBidOrders();
+            final long[] asks = me.getAskOrders();
+            sides.add(bids);
+            sides.add(asks);
+            total += bids.length / 4 + asks.length / 4;
+        }
+
+        int chunkIndex = 0;
+        int written = 0;
+        long[] chunk = new long[OPEN_ORDERS_CHUNK];
+        int inChunk = 0;
+        for (long[] side : sides) {
+            for (int i = 0; i < side.length; i += 4) {
+                chunk[inChunk++] = side[i];
+                written++;
+                if (inChunk == OPEN_ORDERS_CHUNK) {
+                    encodeAndSendOpenOrdersChunk(requestId, snapshotMaxOrderId, chunkIndex++,
+                            written == total, chunk, inChunk);
+                    inChunk = 0;
+                }
+            }
+        }
+        // Final (possibly empty) chunk always carries isLast so the OMS can
+        // complete reconciliation even with zero open orders.
+        if (inChunk > 0 || chunkIndex == 0) {
+            encodeAndSendOpenOrdersChunk(requestId, snapshotMaxOrderId, chunkIndex++, true, chunk, inChunk);
+        }
+        System.out.println("[P1.2] OpenOrdersSnapshot emitted: requestId=" + requestId
+                + " orders=" + total + " chunks=" + chunkIndex
+                + " maxOrderId=" + snapshotMaxOrderId);
+    }
+
+    private void encodeAndSendOpenOrdersChunk(long requestId, long snapshotMaxOrderId,
+                                              int chunkIndex, boolean isLast,
+                                              long[] orderIds, int count) {
+        openOrdersEncoder.wrapAndApplyHeader(openOrdersBuffer, 0, openOrdersHeaderEncoder)
+                .requestId(requestId)
+                .snapshotMaxOrderId(snapshotMaxOrderId)
+                .chunkIndex(chunkIndex)
+                .isLast((short) (isLast ? 1 : 0));
+        final com.match.infrastructure.generated.OpenOrdersSnapshotEncoder.OrdersEncoder group =
+                openOrdersEncoder.ordersCount(count);
+        for (int i = 0; i < count; i++) {
+            group.next()
+                    .orderId(orderIds[i])
+                    .omsOrderId(engine.getOmsOrderIdFor(orderIds[i]));
+        }
+        final int length = MessageHeaderEncoder.ENCODED_LENGTH + openOrdersEncoder.encodedLength();
+        aeronBroadcaster.broadcastReliable(openOrdersBuffer, 0, length);
     }
 
     private boolean flushTimerScheduled = false;
