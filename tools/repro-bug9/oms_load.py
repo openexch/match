@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """
 Bug #9 repro — OMS HTTP load driver (seed / run / snapshot / cancel).
 

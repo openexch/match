@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Bug #9 repro — force ONE clean leader switchover and wait until the cluster settles.
 #
 # Targets the CURRENT leader with the admin gateway's zero-downtime restart-node,

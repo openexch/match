@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """
 Stranded-follower regression gate (match#32 triage item 1; gates match#35 / P1.3-iv).
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 #
 # system-tuning.sh — OS tuning for the Open Exchange low-latency transport.
 #

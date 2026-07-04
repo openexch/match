@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Bug #9 repro — orchestrate one full run: observe -> seed -> load -> N switchovers -> quiesce -> reconcile.
 #
 # OBSERVATION ONLY. Forces leader switchovers via restart-node (each self-heals, ~seconds of UI stutter).

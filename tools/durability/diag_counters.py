@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """
 Harvest the engine's EGRESS-DIAG counters from node logs (match#32 / P1.5).
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """
 Per-user balance reconciliation against the OMS Postgres ledger (oms#22 / P1.5).
 
