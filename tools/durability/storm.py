@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """
 P1 gate storm (match#32 / P1.5): sustained OMS-REST load + >=50 forced leader
 switchovers, reconciled against an independent egress observer, producing the

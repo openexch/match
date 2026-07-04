@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 package com.match.determinism;
 
 import com.match.application.publisher.MatchEventSink;

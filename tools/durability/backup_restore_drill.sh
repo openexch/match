@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 #
 # backup_restore_drill.sh — power-loss recovery drill (admin-gateway#9 exit criterion).
 #

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
 
 # Load Test Runner Script
 # Quick launcher for various load testing scenarios

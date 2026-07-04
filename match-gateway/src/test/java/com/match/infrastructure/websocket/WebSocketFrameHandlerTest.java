@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 package com.match.infrastructure.websocket;
 
 import io.netty.channel.DefaultChannelId;

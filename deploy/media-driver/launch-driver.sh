@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 #
 # launch-driver.sh — start a standalone Aeron media driver for one instance.
 #

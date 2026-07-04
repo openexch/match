@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 package com.match.domain.commands;
 
 import com.match.domain.enums.OrderSide;
