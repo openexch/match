@@ -10,6 +10,14 @@
 # Usage:
 #   system-tuning.sh [--report]   # report only, change nothing
 #                    [--strict]   # exit 1 if any change FAILED (default: exit 0)
+#                    [--persist]  # also persist across reboots: write the sysctl
+#                                 # set to /etc/sysctl.d/99-openexchange.conf and
+#                                 # install a boot oneshot unit for THP=never +
+#                                 # performance governor (openexchange-tuning.service)
+#
+# --report also shows drift between runtime values and the persisted sysctl.d
+# file, so `make tune-report` catches a kernel upgrade or manual change that
+# left boot state diverging from the running config.
 #
 # Relationship to `make optimize-os`: that target keeps broader system knobs
 # (TCP, swappiness, scheduler). This script owns the TRANSPORT-critical set and
@@ -43,13 +51,49 @@ NR_HUGEPAGES="${NR_HUGEPAGES:-1024}"
 
 REPORT_ONLY=0
 STRICT=0
+PERSIST=0
 for arg in "$@"; do
     case "$arg" in
         --report) REPORT_ONLY=1 ;;
         --strict) STRICT=1 ;;
-        *) echo "unknown flag: $arg (use --report|--strict)" >&2; exit 1 ;;
+        --persist) PERSIST=1 ;;
+        *) echo "unknown flag: $arg (use --report|--strict|--persist)" >&2; exit 1 ;;
     esac
 done
+
+# ==================== PERSISTENCE TARGETS (env-overridable for tests) ====================
+SYSCTL_PERSIST_FILE="${SYSCTL_PERSIST_FILE:-/etc/sysctl.d/99-openexchange.conf}"
+TUNING_UNIT_NAME="${TUNING_UNIT_NAME:-openexchange-tuning.service}"
+TUNING_UNIT_FILE="${TUNING_UNIT_FILE:-/etc/systemd/system/${TUNING_UNIT_NAME}}"
+
+# Full boot-persisted sysctl set: the transport-critical values owned by this
+# script PLUS the broader `make optimize-os` set, so one file covers both.
+# Keys absent on the running kernel are commented out at write time.
+desired_sysctls() {
+    cat <<EOF
+net.core.rmem_max=$RMEM_MAX_TARGET
+net.core.wmem_max=$WMEM_MAX_TARGET
+net.core.rmem_default=1048576
+net.core.wmem_default=1048576
+net.core.netdev_max_backlog=30000
+net.core.somaxconn=4096
+net.ipv4.tcp_rmem=4096 1048576 16777216
+net.ipv4.tcp_wmem=4096 1048576 16777216
+net.ipv4.tcp_fastopen=3
+net.ipv4.tcp_timestamps=0
+net.ipv4.tcp_sack=0
+net.ipv4.tcp_low_latency=1
+vm.swappiness=0
+vm.dirty_ratio=10
+vm.dirty_background_ratio=5
+vm.zone_reclaim_mode=0
+vm.nr_hugepages=$NR_HUGEPAGES
+fs.file-max=2097152
+kernel.sched_min_granularity_ns=10000000
+kernel.sched_wakeup_granularity_ns=15000000
+kernel.sched_migration_cost_ns=5000000
+EOF
+}
 
 FAILS=0
 log()  { echo "[tune] $*"; }
@@ -96,6 +140,24 @@ report() {
         echo "nic irqs:         ${irqs:-none} (affinity: $(for i in ${irqs//,/ }; do cat /proc/irq/$i/smp_affinity_list 2>/dev/null | tr '\n' ' '; done))"
     fi
     echo "/dev/shm:         $(df -h /dev/shm 2>/dev/null | awk 'NR==2{print $3" used / "$2" ("$5")"}')  aeron archive: $(du -sh /dev/shm/aeron-cluster 2>/dev/null | cut -f1 || echo none)"
+    # Boot persistence + runtime-vs-persisted drift
+    if [[ -f "$SYSCTL_PERSIST_FILE" ]]; then
+        local drift="" nkeys=0 key want have
+        while IFS='=' read -r key want; do
+            [[ "$key" =~ ^[[:space:]]*(#|$) ]] && continue
+            key="$(echo "$key" | tr -d '[:space:]')"
+            want="$(echo "$want" | tr -s '\t ' ' ' | sed 's/^ //; s/ $//')"
+            nkeys=$((nkeys+1))
+            have="$(sysctl -n "$key" 2>/dev/null | tr -s '\t ' ' ' || true)"
+            [[ "$have" == "$want" ]] || drift+="$key(runtime=${have:-unreadable} persisted=$want) "
+        done < "$SYSCTL_PERSIST_FILE"
+        echo "persisted:        $SYSCTL_PERSIST_FILE ($nkeys keys)  drift: ${drift:-none}"
+    else
+        echo "persisted:        NOT PERSISTED — sysctls revert on reboot (run with --persist)"
+    fi
+    local unit_state
+    unit_state="$(systemctl is-enabled "$TUNING_UNIT_NAME" 2>/dev/null || true)"
+    echo "boot unit:        $TUNING_UNIT_NAME: ${unit_state:-missing} (THP=never + performance governor at boot)"
     echo "-------------------------------------------------------------"
 }
 
@@ -238,6 +300,70 @@ if grep -q "isolcpus=" /proc/cmdline; then
 else
     echo "[tune]   isolcpus/nohz_full/rcu_nocbs not set. For full isolation add to GRUB:"
     echo "[tune]     isolcpus=${ISOLATED_CORES:-<cores>} nohz_full=${ISOLATED_CORES:-<cores>} rcu_nocbs=${ISOLATED_CORES:-<cores>}"
+fi
+
+# ==================== 7. PERSIST ACROSS REBOOTS (opt-in) ====================
+if [[ $PERSIST -eq 1 ]]; then
+    log "7. persistence (sysctl.d + boot tuning unit)"
+    if [[ "$SUDO" == "__nosudo__" ]]; then
+        warn "cannot persist (need sudo) — tuning reverts on reboot"
+    else
+        # --- 7a. /etc/sysctl.d/99-openexchange.conf ---
+        TMP_CONF=$(mktemp)
+        {
+            echo "# Open Exchange low-latency tuning."
+            echo "# Written by match/deploy/tuning/system-tuning.sh --persist (make optimize-os)."
+            echo "# Edit via the script, not by hand: reruns overwrite this file."
+            echo "# Verify runtime-vs-persisted drift anytime: make tune-report"
+            while IFS='=' read -r key val; do
+                if sysctl -n "$key" >/dev/null 2>&1; then
+                    echo "$key = $val"
+                else
+                    echo "# absent on this kernel: $key = $val"
+                fi
+            done < <(desired_sysctls)
+        } > "$TMP_CONF"
+        if cmp -s "$TMP_CONF" "$SYSCTL_PERSIST_FILE" 2>/dev/null; then
+            skip "$SYSCTL_PERSIST_FILE up to date"
+        elif $SUDO install -m 0644 "$TMP_CONF" "$SYSCTL_PERSIST_FILE" 2>/dev/null; then
+            # Apply immediately so runtime == boot state (idempotent over 1-6)
+            $SUDO sysctl -qp "$SYSCTL_PERSIST_FILE" >/dev/null 2>&1 || true
+            ok "wrote $SYSCTL_PERSIST_FILE ($(grep -c '^[^#]' "$TMP_CONF") keys) and applied it"
+        else
+            warn "cannot write $SYSCTL_PERSIST_FILE"
+        fi
+        rm -f "$TMP_CONF"
+
+        # --- 7b. boot oneshot unit: THP=never + performance governor ---
+        # (neither is a sysctl, so sysctl.d cannot carry them across reboots)
+        TMP_UNIT=$(mktemp)
+        cat > "$TMP_UNIT" <<'EOF'
+[Unit]
+Description=Open Exchange low-latency boot tuning (THP=never, performance governor)
+Documentation=https://github.com/openexch/match/blob/main/deploy/tuning/system-tuning.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=-/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'
+ExecStart=-/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/defrag'
+ExecStart=-/bin/sh -c 'for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$g" 2>/dev/null || true; done'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        if cmp -s "$TMP_UNIT" "$TUNING_UNIT_FILE" 2>/dev/null \
+           && [[ "$(systemctl is-enabled "$TUNING_UNIT_NAME" 2>/dev/null)" == "enabled" ]]; then
+            skip "$TUNING_UNIT_NAME installed and enabled"
+        elif $SUDO install -m 0644 "$TMP_UNIT" "$TUNING_UNIT_FILE" 2>/dev/null \
+             && $SUDO systemctl daemon-reload 2>/dev/null \
+             && $SUDO systemctl enable --now "$TUNING_UNIT_NAME" >/dev/null 2>&1; then
+            ok "installed + enabled $TUNING_UNIT_NAME (runs at every boot)"
+        else
+            warn "cannot install/enable $TUNING_UNIT_NAME — THP/governor revert on reboot"
+        fi
+        rm -f "$TMP_UNIT"
+    fi
 fi
 
 # ==================== AFTER REPORT + DIFF ====================

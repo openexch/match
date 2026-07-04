@@ -155,9 +155,16 @@ and everything works identically. That warning is the design working.
    and the admin tooling (see `docs/incidents/2026-07-02-*.md`).
 2. Never run snapshot+housekeeping while any member is down, lagging, or
    recovering (openexch/match#35, strands the laggard permanently until fixed).
-3. `make tune` (deploy/tuning/system-tuning.sh) with `ISOLATED_CORES`/`NIC` set;
-   restart drivers after raising socket limits (sockets size at creation; the
-   silent fallback is 208 KB and it costs ~25% throughput at the top end).
+3. `sudo make tune-persist` (deploy/tuning/system-tuning.sh --persist) with
+   `ISOLATED_CORES`/`NIC` set: applies the tuning AND persists it across reboots
+   (`/etc/sysctl.d/99-openexchange.conf` + `openexchange-tuning.service` for
+   THP/governor). Restart drivers after raising socket limits (sockets size at
+   creation; the silent fallback is 208 KB and it costs ~25% throughput at the
+   top end). Unpersisted sysctls reverting on reboot is exactly the 2026-07-03
+   corruption chain (openexch/match#48): drivers crash-loop on SO_RCVBUF
+   validation, nodes start against absent drivers, kill-mid-write corrupts the
+   archive. After kernel upgrades, verify with `make tune-report` (shows
+   runtime-vs-persisted drift).
 4. GRUB: `isolcpus= nohz_full= rcu_nocbs=` for the driver + engine cores
    (guidance printed by the tuning script; boot params, applied manually).
 5. `ENGINE_DRIVER_PROFILE=prod` + `SENDER/RECEIVER/CONDUCTOR_CORE`; one node
