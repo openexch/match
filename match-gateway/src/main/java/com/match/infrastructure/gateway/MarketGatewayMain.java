@@ -2,6 +2,7 @@
 package com.match.infrastructure.gateway;
 
 import com.match.infrastructure.admin.ClusterStatus;
+import com.match.infrastructure.gateway.persistence.MarketDataPersistence;
 import com.match.infrastructure.gateway.state.GatewayStateManager;
 import com.match.infrastructure.websocket.MarketDataWebSocket;
 
@@ -16,12 +17,18 @@ public class MarketGatewayMain implements AutoCloseable {
     private final MarketDataWebSocket marketDataWebSocket;
     private final GatewayStateManager stateManager;
     private final ClusterStatus clusterStatus;
+    private final MarketDataPersistence persistence; // null when disabled by env
 
     public MarketGatewayMain() {
         this.clusterStatus = new ClusterStatus();
 
         // Create state manager for local state caching
         this.stateManager = new GatewayStateManager();
+
+        // Market-data persistence (TimescaleDB): the source of truth for
+        // chart/time-series data. Null (pure in-memory) when not configured.
+        this.persistence = MarketDataPersistence.startOrNull(stateManager);
+        this.stateManager.setPersistence(persistence);
 
         this.aeronGateway = new AeronGateway();
         this.aeronGateway.setClusterStatus(clusterStatus);
@@ -44,6 +51,13 @@ public class MarketGatewayMain implements AutoCloseable {
         marketDataWebSocket.start();
 
         clusterStatus.setMarketChannels(marketDataWebSocket.getChannels());
+
+        // Seed candle rings + ticker from the database. Must happen HERE,
+        // before startPolling(): the rings are single-writer and the egress
+        // thread becomes their writer once polling begins.
+        if (persistence != null) {
+            persistence.hydrate(stateManager.inMemoryCandleProvider());
+        }
     }
 
     public void startPolling() {
@@ -57,6 +71,10 @@ public class MarketGatewayMain implements AutoCloseable {
         }
         if (aeronGateway != null) {
             aeronGateway.close();
+        }
+        // After the egress producer stops, so the final drain sees everything
+        if (persistence != null) {
+            persistence.close();
         }
     }
 

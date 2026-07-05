@@ -272,4 +272,87 @@ public class InMemoryCandleProviderTest {
         assertNotSame(list1.get(0), list2.get(0));
         assertEquals(list1.get(0).open, list2.get(0).open, 0.0001);
     }
+
+    // ==================== seed (startup hydration from the DB) ====================
+
+    private static Candle candle(long timeSec, double open, double high, double low,
+                                 double close, double volume, int tradeCount) {
+        Candle c = new Candle();
+        c.time = timeSec;
+        c.open = open;
+        c.high = high;
+        c.low = low;
+        c.close = close;
+        c.volume = volume;
+        c.tradeCount = tradeCount;
+        c.marketId = 1;
+        return c;
+    }
+
+    @Test
+    public void testSeed_RestoresHistory() {
+        provider.seed(1, "1m", java.util.List.of(
+                candle(60, 100, 110, 95, 105, 3, 2),
+                candle(120, 105, 106, 104, 104, 1, 1)));
+
+        List<Candle> candles = provider.getCandles(1, "1m", 10);
+        assertEquals(2, candles.size());
+        assertEquals(60, candles.get(0).time);
+        assertEquals(100.0, candles.get(0).open, 0.0001);
+        assertEquals(120, candles.get(1).time);
+        assertEquals(104.0, candles.get(1).close, 0.0001);
+    }
+
+    @Test
+    public void testSeed_ThenTradeInSameBucket_ContinuesAccumulation() {
+        // Pre-restart in-flight bucket at 120s with high 106 / low 104
+        provider.seed(1, "1m", java.util.List.of(candle(120, 105, 106, 104, 104, 1.0, 1)));
+
+        // Post-restart trade inside the same 1m bucket (t=150s)
+        provider.onTrade(1, 110.0, 2.0, 150_000L);
+
+        Candle current = provider.getCurrentCandle(1, "1m");
+        assertEquals(120, current.time);
+        assertEquals(105.0, current.open, 0.0001);  // pre-restart open preserved
+        assertEquals(110.0, current.high, 0.0001);  // merged with new trade
+        assertEquals(104.0, current.low, 0.0001);
+        assertEquals(110.0, current.close, 0.0001);
+        assertEquals(3.0, current.volume, 0.0001);  // 1.0 seeded + 2.0 live
+        assertEquals(2, current.tradeCount);
+    }
+
+    @Test
+    public void testSeed_ThenTradeInNewBucket_AppendsCandle() {
+        provider.seed(1, "1m", java.util.List.of(candle(60, 100, 110, 95, 105, 3, 2)));
+        provider.onTrade(1, 120.0, 1.0, 125_000L); // next bucket (120s)
+
+        List<Candle> candles = provider.getCandles(1, "1m", 10);
+        assertEquals(2, candles.size());
+        assertEquals(60, candles.get(0).time);
+        assertEquals(120, candles.get(1).time);
+        assertEquals(120.0, candles.get(1).open, 0.0001);
+    }
+
+    @Test
+    public void testSeed_BeyondCapacity_KeepsMostRecent() {
+        InMemoryCandleProvider small = new InMemoryCandleProvider(3);
+        java.util.List<Candle> history = new java.util.ArrayList<>();
+        for (int i = 1; i <= 5; i++) {
+            history.add(candle(i * 60L, i, i, i, i, 1, 1));
+        }
+        small.seed(1, "1m", history);
+
+        List<Candle> candles = small.getCandles(1, "1m", 10);
+        assertEquals(3, candles.size());
+        assertEquals(180, candles.get(0).time); // oldest two wrapped away
+        assertEquals(300, candles.get(2).time);
+    }
+
+    @Test
+    public void testSeed_InvalidMarketOrInterval_Ignored() {
+        provider.seed(0, "1m", java.util.List.of(candle(60, 1, 1, 1, 1, 1, 1)));
+        provider.seed(1, "2m", java.util.List.of(candle(60, 1, 1, 1, 1, 1, 1)));
+        assertTrue(provider.getCandles(1, "1m", 10).isEmpty());
+        assertTrue(provider.getCandles(0, "1m", 10).isEmpty());
+    }
 }

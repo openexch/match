@@ -18,7 +18,23 @@ public interface CandleProvider {
      * @param quantity    execution quantity
      * @param timestampMs trade timestamp in epoch milliseconds
      */
-    void onTrade(int marketId, double price, double quantity, long timestampMs);
+    default void onTrade(int marketId, double price, double quantity, long timestampMs) {
+        onTrade(marketId, price, quantity, 1, timestampMs);
+    }
+
+    /**
+     * Process an aggregated trade and update candle state.
+     * The egress stream carries price-aggregated entries; tradeCount is the
+     * number of underlying executions, so candle tradeCount stays consistent
+     * with the persisted trades (which sum trade_count in the database).
+     *
+     * @param marketId    market ID
+     * @param price       execution price
+     * @param quantity    aggregated execution quantity
+     * @param tradeCount  number of underlying executions (>= 1)
+     * @param timestampMs trade timestamp in epoch milliseconds
+     */
+    void onTrade(int marketId, double price, double quantity, int tradeCount, long timestampMs);
 
     /**
      * Get historical candles for a market and interval.

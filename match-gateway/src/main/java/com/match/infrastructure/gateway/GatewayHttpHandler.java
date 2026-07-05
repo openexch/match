@@ -99,18 +99,32 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
         int marketId = parseQueryParam(uri, "marketId", 1);
         String interval = parseQueryString(uri, "interval", "1m");
         int limit = parseQueryParam(uri, "limit", 200);
-        limit = Math.min(limit, 500); // Cap at ring buffer size
+        limit = Math.min(limit, 500); // Cap kept from the ring-buffer era (API contract)
 
-        String json = stateManager.buildCandleHistoryJson(marketId, interval, limit);
-        sendJson(ctx, json);
+        // DB-first with in-memory fallback; completes on a persistence read
+        // thread — Netty marshals writeAndFlush back to the event loop.
+        stateManager.buildCandleHistoryJsonAsync(marketId, interval, limit)
+                .whenComplete((json, err) -> {
+                    if (err != null) {
+                        sendError(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, err.getMessage());
+                    } else {
+                        sendJson(ctx, json);
+                    }
+                });
     }
 
     private void handleTrades(ChannelHandlerContext ctx, String uri) {
         int limit = parseQueryParam(uri, "limit", 50);
         limit = Math.min(limit, 500); // Cap at max buffer size
 
-        String json = stateManager.getTrades().toJson(limit);
-        sendJson(ctx, json);
+        stateManager.recentTradesJsonAsync(limit, 0)
+                .whenComplete((json, err) -> {
+                    if (err != null) {
+                        sendError(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, err.getMessage());
+                    } else {
+                        sendJson(ctx, json);
+                    }
+                });
     }
 
     /** match#33: hand-rendered Prometheus text — reads only volatile/atomic counters. */
@@ -135,6 +149,24 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
                     aeronGateway.getEgressAgeMs());
             appendSeries(sb, "gateway_aeron_errors_total", "counter", "Aeron error handler invocations",
                     aeronGateway.getAeronErrorCount());
+        }
+        var persistence = stateManager != null ? stateManager.getPersistence() : null;
+        if (persistence != null) {
+            var db = persistence.db();
+            appendSeries(sb, "market_pg_up", "gauge", "Market-data TimescaleDB reachable (1) / down (0)",
+                    db.isAvailable() ? 1 : 0);
+            appendSeries(sb, "market_pg_trades_written_total", "counter", "Trades persisted to TimescaleDB",
+                    db.tradesWritten.get());
+            appendSeries(sb, "market_pg_trades_dropped_total", "counter", "Trades dropped on a full write queue",
+                    db.tradesDropped.get());
+            appendSeries(sb, "market_pg_write_errors_total", "counter", "Trade batches dropped after statement failures",
+                    db.writeErrors.get());
+            appendSeries(sb, "market_pg_batch_flushes_total", "counter", "Trade batch inserts executed",
+                    db.batchFlushes.get());
+            appendSeries(sb, "market_pg_queue_depth", "gauge", "Trades waiting in the write queue",
+                    db.queueDepth());
+            appendSeries(sb, "market_pg_read_fallbacks_total", "counter", "History reads served from memory instead of the DB",
+                    db.readFallbacks.get());
         }
 
         byte[] body = sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);

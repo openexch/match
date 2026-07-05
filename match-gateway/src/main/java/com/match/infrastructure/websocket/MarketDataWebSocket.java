@@ -353,14 +353,14 @@ public class MarketDataWebSocket implements AutoCloseable {
                             }
                         }
                     } else if ("getTrades".equals(action)) {
-                        // Query: return recent trades
+                        // Query: return recent trades (DB-first, memory fallback)
                         if (stateManager != null) {
                             int limit = 50;
                             if (msg.containsKey("limit")) {
                                 limit = ((Number) msg.get("limit")).intValue();
                             }
-                            String json = stateManager.getTrades().toJson(limit);
-                            ctx.writeAndFlush(new TextWebSocketFrame(json));
+                            stateManager.recentTradesJsonAsync(limit, 0).thenAccept(json ->
+                                    ctx.channel().writeAndFlush(new TextWebSocketFrame(json)));
                         }
                     }
                 } catch (Exception e) {
@@ -403,17 +403,16 @@ public class MarketDataWebSocket implements AutoCloseable {
                     ctx.write(new TextWebSocketFrame(buildEmptyBookSnapshot(requestedMarketId)));
                 }
 
-                // Send recent trades for this market (last 50)
-                if (stateManager.getTrades().hasData()) {
-                    String tradesJson = stateManager.getTrades().toJsonForMarket(50, requestedMarketId);
-                    ctx.write(new TextWebSocketFrame(tradesJson));
-                }
-
-                // Send candle history for this market (last 200 1m candles)
-                String candleJson = stateManager.buildCandleHistoryJson(requestedMarketId, "1m", 200);
-                ctx.write(new TextWebSocketFrame(candleJson));
-
+                // Flush the synchronously-written book frame before the async sends
                 ctx.flush();
+
+                // Recent trades + 1m candle history: DB-first (survives gateway
+                // restarts), in-memory fallback. Completed on a persistence read
+                // thread; the 2s JSON cache absorbs connect/resync storms.
+                stateManager.recentTradesJsonAsync(50, requestedMarketId).thenAccept(json ->
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame(json)));
+                stateManager.buildCandleHistoryJsonAsync(requestedMarketId, "1m", 200).thenAccept(json ->
+                        ctx.channel().writeAndFlush(new TextWebSocketFrame(json)));
             } else {
                 Map<String, Object> response = new HashMap<>();
                 response.put("type", "REFRESH_PENDING");
