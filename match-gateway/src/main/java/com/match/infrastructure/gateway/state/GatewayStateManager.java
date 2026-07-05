@@ -40,6 +40,7 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
     private volatile MarketDataWebSocket webSocket;
 
     // Count of stale/duplicate book deltas dropped (switchover-seam dedup, match#19) — observability.
+    private final java.util.concurrent.atomic.AtomicLong chainBreaks = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong staleDeltasDropped = new java.util.concurrent.atomic.AtomicLong(0);
 
     /** match#33: /metrics read. */
@@ -56,6 +57,10 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             long timestamp = decoder.timestamp();
             long bidVersion = decoder.bidVersion();
             long askVersion = decoder.askVersion();
+            long bookVersion = decoder.bookVersion();
+            if (bookVersion == BookSnapshotDecoder.bookVersionNullValue()) {
+                bookVersion = 0; // pre-v4 upstream (mixed-version rolling update)
+            }
 
             // Convert bids to JSON array (convert fixed-point to decimal)
             JsonArray bidsArray = new JsonArray();
@@ -79,13 +84,13 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
 
             // Update local state (per-market order book)
             String marketName = getMarketName(marketId);
-            long version = Math.max(bidVersion, askVersion);
+            long version = bookVersion > 0 ? bookVersion : Math.max(bidVersion, askVersion);
             GatewayOrderBook orderBook = getOrCreateOrderBook(marketId);
             orderBook.update(marketId, marketName, bidsArray, asksArray, bidVersion, askVersion, version, timestamp);
 
             // Build JSON and broadcast to WebSocket
             if (webSocket != null) {
-                String json = buildBookSnapshotJson(marketId, marketName, timestamp, bidVersion, askVersion, bidsArray, asksArray);
+                String json = buildBookSnapshotJson(marketId, marketName, timestamp, bidVersion, askVersion, version, bidsArray, asksArray);
                 webSocket.broadcastMarketData(json);
             }
         } catch (Exception e) {
@@ -100,10 +105,27 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             long timestamp = decoder.timestamp();
             long bidVersion = decoder.bidVersion();
             long askVersion = decoder.askVersion();
+            long bookVersion = decoder.bookVersion();
+            long fromVersion = decoder.fromVersion();
+            if (bookVersion == BookDeltaDecoder.bookVersionNullValue()) {
+                bookVersion = 0; // pre-v4 upstream
+                fromVersion = 0;
+            }
             String marketName = getMarketName(marketId);
 
             // Get the order book for this market
             GatewayOrderBook orderBook = getOrCreateOrderBook(marketId);
+
+            // v4 chain continuity: every delta names the published state it
+            // extends. A mismatch means this consumer missed an update
+            // (should not happen on the reliable egress path outside leader
+            // seams, which re-snapshot via onSessionOpen) — count loudly.
+            if (fromVersion > 0 && orderBook.getVersion() > 0 && fromVersion != orderBook.getVersion()) {
+                long n = chainBreaks.incrementAndGet();
+                logger.warn("book-version chain break #" + n + ": market=" + marketId
+                    + " have=" + orderBook.getVersion() + " delta " + fromVersion + "->" + bookVersion
+                    + " (resnapshot will re-establish)");
+            }
 
             // match#19: drop stale/duplicate deltas (old-leader or re-delivered egress across a
             // leader-switchover seam) — they advance neither side's monotonic version, so applying
@@ -140,11 +162,12 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             }
 
             // Update versions on this market's order book
-            orderBook.updateVersions(marketId, marketName, bidVersion, askVersion, timestamp);
+            orderBook.updateVersions(marketId, marketName, bidVersion, askVersion, bookVersion, timestamp);
 
             // Build JSON and broadcast to WebSocket
             if (webSocket != null && !changesArray.isEmpty()) {
-                String json = buildBookDeltaJson(marketId, marketName, timestamp, bidVersion, askVersion, changesArray);
+                String json = buildBookDeltaJson(marketId, marketName, timestamp, bidVersion, askVersion,
+                        bookVersion, fromVersion, changesArray);
                 webSocket.broadcastMarketData(json);
             }
         } catch (Exception e) {
@@ -278,7 +301,7 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
 
     // Build JSON for WebSocket broadcast - book snapshot
     private String buildBookSnapshotJson(int marketId, String market, long timestamp,
-            long bidVersion, long askVersion, JsonArray bids, JsonArray asks) {
+            long bidVersion, long askVersion, long bookVersion, JsonArray bids, JsonArray asks) {
         JsonObject obj = new JsonObject();
         obj.addProperty("type", "BOOK_SNAPSHOT");
         obj.addProperty("marketId", marketId);
@@ -286,6 +309,9 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
         obj.addProperty("timestamp", timestamp);
         obj.addProperty("bidVersion", bidVersion);
         obj.addProperty("askVersion", askVersion);
+        // v4: the single monotonic book version this snapshot represents.
+        obj.addProperty("bookVersion", bookVersion);
+        obj.addProperty("version", bookVersion);
         obj.add("bids", bids);
         obj.add("asks", asks);
         return obj.toString();
@@ -304,7 +330,7 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
 
     // Build JSON for WebSocket broadcast - book delta
     private String buildBookDeltaJson(int marketId, String market, long timestamp,
-            long bidVersion, long askVersion, JsonArray changes) {
+            long bidVersion, long askVersion, long bookVersion, long fromVersion, JsonArray changes) {
         JsonObject obj = new JsonObject();
         obj.addProperty("type", "BOOK_DELTA");
         obj.addProperty("marketId", marketId);
@@ -312,6 +338,11 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
         obj.addProperty("timestamp", timestamp);
         obj.addProperty("bidVersion", bidVersion);
         obj.addProperty("askVersion", askVersion);
+        // v4 chain: this delta advances the book fromVersion -> bookVersion;
+        // a client whose current bookVersion != fromVersion missed an update
+        // and should re-snapshot (action:refresh).
+        obj.addProperty("bookVersion", bookVersion);
+        obj.addProperty("fromVersion", fromVersion);
         obj.add("changes", changes);
         return obj.toString();
     }

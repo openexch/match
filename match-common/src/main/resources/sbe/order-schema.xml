@@ -2,7 +2,7 @@
 <sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
                    package="com.match.infrastructure.generated"
                    id="1"
-                   version="3"
+                   version="4"
                    semanticVersion="5.2"
                    description="Match Order Schema - Optimized for Ultra-Low Latency"
 >
@@ -137,6 +137,11 @@
         <field name="timestamp" id="2" type="int64"/>
         <field name="bidVersion" id="3" type="int64"/>
         <field name="askVersion" id="4" type="int64"/>
+        <!-- Single monotonic per-book version (v4): derived from the Aeron log
+             position of the last mutating command, so it is deterministic
+             across replicas and never regresses across restarts/failovers.
+             Chains snapshots and deltas for client-side stitching. -->
+        <field name="bookVersion" id="5" type="int64" sinceVersion="4"/>
         <group name="bids" id="10" dimensionType="groupSizeEncoding">
             <field name="price" id="1" type="int64"/>
             <field name="quantity" id="2" type="int64"/>
@@ -230,6 +235,11 @@
         <field name="timestamp" id="2" type="int64"/>
         <field name="bidVersion" id="3" type="int64"/>
         <field name="askVersion" id="4" type="int64"/>
+        <!-- v4 book-version chain: this delta advances the book from
+             fromVersion to bookVersion. A client whose current version is not
+             fromVersion has missed an update and must re-snapshot. -->
+        <field name="bookVersion" id="5" type="int64" sinceVersion="4"/>
+        <field name="fromVersion" id="6" type="int64" sinceVersion="4"/>
         <group name="changes" id="10" dimensionType="groupSizeEncoding">
             <field name="price" id="1" type="int64"/>
             <field name="quantity" id="2" type="int64"/>

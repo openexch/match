@@ -138,6 +138,9 @@ public class GatewayOrderBook {
         json.addProperty("bidVersion", bidVersion);
         json.addProperty("askVersion", askVersion);
         json.addProperty("version", version);
+        // v4 alias: the single monotonic book version chained across
+        // snapshots and deltas (equals "version"; explicit name for clients).
+        json.addProperty("bookVersion", version);
 
         JsonArray bidsArray = new JsonArray();
         for (int i = 0; i < bidCount; i++) {
@@ -268,13 +271,24 @@ public class GatewayOrderBook {
      * Update versions and regenerate cached JSON after delta processing.
      */
     public void updateVersions(int marketId, String marketName, long bidVersion, long askVersion, long timestamp) {
+        updateVersions(marketId, marketName, bidVersion, askVersion, 0L, timestamp);
+    }
+
+    /**
+     * Delta-path version update including the v4 book-version chain (0 when the
+     * upstream message predates schema v4).
+     */
+    public void updateVersions(int marketId, String marketName, long bidVersion, long askVersion,
+                               long bookVersion, long timestamp) {
         long stamp = lock.writeLock();
         try {
             this.marketId = marketId;
             this.marketName = marketName;
             this.bidVersion = bidVersion;
             this.askVersion = askVersion;
-            this.version = Math.max(bidVersion, askVersion);
+            // v4 chain: bookVersion is authoritative when present; the
+            // per-side max remains the legacy fallback for old upstreams.
+            this.version = bookVersion > 0 ? bookVersion : Math.max(bidVersion, askVersion);
             this.lastUpdateMs = timestamp;
             this.cachedJson = buildJson();
         } finally {

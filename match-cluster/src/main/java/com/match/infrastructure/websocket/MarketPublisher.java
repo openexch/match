@@ -146,6 +146,10 @@ public class MarketPublisher implements MarketEventHandler {
     // Change detection - use engine version numbers to detect any book change
     private long lastBidVersion = -1;
     private long lastAskVersion = -1;
+    // Book-version chain (v4): version of the last PUBLISHED state; each
+    // delta carries fromVersion=lastPublishedBookVersion -> bookVersion so
+    // clients can stitch snapshots and deltas and detect gaps.
+    private long lastPublishedBookVersion;
 
     // Delta tracking - last sent book state for computing incremental changes
     private final long[] lastBidPrices = new long[MAX_BOOK_LEVELS];
@@ -443,6 +447,7 @@ public class MarketPublisher implements MarketEventHandler {
                 sentInitialSnapshot = false;
                 lastBidVersion = -1;
                 lastAskVersion = -1;
+                lastPublishedBookVersion = 0;
                 lastBidCount = 0;
                 lastAskCount = 0;
             }
@@ -627,6 +632,7 @@ public class MarketPublisher implements MarketEventHandler {
         // Get versions that were captured at collection time (after memory barrier)
         long collectedBidVersion = engine.getCollectedBidVersion();
         long collectedAskVersion = engine.getCollectedAskVersion();
+        long collectedBookVersion = engine.getCollectedBookVersion();
 
         boolean changed = (collectedBidVersion != lastBidVersion) ||
                           (collectedAskVersion != lastAskVersion);
@@ -645,13 +651,16 @@ public class MarketPublisher implements MarketEventHandler {
         if (!sentInitialSnapshot) {
             encodedLength = encodeFullSnapshot(bidPrices, bidQuantities, bidOrderCounts, bidCount,
                                                askPrices, askQuantities, askOrderCounts, askCount,
-                                               collectedBidVersion, collectedAskVersion);
+                                               collectedBidVersion, collectedAskVersion,
+                                               collectedBookVersion);
             sentInitialSnapshot = true;
         } else {
             encodedLength = encodeBookDelta(bidPrices, bidQuantities, bidOrderCounts, bidCount,
                                             askPrices, askQuantities, askOrderCounts, askCount,
-                                            collectedBidVersion, collectedAskVersion);
+                                            collectedBidVersion, collectedAskVersion,
+                                            collectedBookVersion, lastPublishedBookVersion);
         }
+        lastPublishedBookVersion = collectedBookVersion;
 
         // Store current state as last sent
         System.arraycopy(bidPrices, 0, lastBidPrices, 0, bidCount);
@@ -672,7 +681,7 @@ public class MarketPublisher implements MarketEventHandler {
      */
     private int encodeFullSnapshot(long[] bidPrices, long[] bidQuantities, int[] bidOrderCounts, int bidCount,
                                    long[] askPrices, long[] askQuantities, int[] askOrderCounts, int askCount,
-                                   long bidVersion, long askVersion) {
+                                   long bidVersion, long askVersion, long bookVersion) {
         // Encode header
         headerEncoder.wrap(encodeBuffer, 0)
             .blockLength(BookSnapshotEncoder.BLOCK_LENGTH)
@@ -685,7 +694,8 @@ public class MarketPublisher implements MarketEventHandler {
             .marketId(marketId)
             .timestamp(System.currentTimeMillis())
             .bidVersion(bidVersion)
-            .askVersion(askVersion);
+            .askVersion(askVersion)
+            .bookVersion(bookVersion);
 
         // Encode bids group
         BookSnapshotEncoder.BidsEncoder bidsGroup = bookSnapshotEncoder.bidsCount(bidCount);
@@ -742,7 +752,7 @@ public class MarketPublisher implements MarketEventHandler {
      */
     private int encodeBookDelta(long[] bidPrices, long[] bidQuantities, int[] bidOrderCounts, int bidCount,
                                 long[] askPrices, long[] askQuantities, int[] askOrderCounts, int askCount,
-                                long bidVersion, long askVersion) {
+                                long bidVersion, long askVersion, long bookVersion, long fromVersion) {
         deltaChanges.clear();
         int poolIdx = 0;
 
@@ -772,7 +782,9 @@ public class MarketPublisher implements MarketEventHandler {
             .marketId(marketId)
             .timestamp(System.currentTimeMillis())
             .bidVersion(bidVersion)
-            .askVersion(askVersion);
+            .askVersion(askVersion)
+            .bookVersion(bookVersion)
+            .fromVersion(fromVersion);
 
         // Encode changes group
         BookDeltaEncoder.ChangesEncoder changesGroup = bookDeltaEncoder.changesCount(deltaChanges.size());

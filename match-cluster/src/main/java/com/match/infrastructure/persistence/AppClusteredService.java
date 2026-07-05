@@ -638,6 +638,10 @@ public class AppClusteredService implements ClusteredService {
 
         context.setSessionContext(session, timestamp);
 
+        // Book-version source for market data: the log position of this
+        // message (deterministic across replicas, monotonic across leaders).
+        engine.setCurrentLogPosition(header.position());
+
         // match#33: sampled latency (1-in-16) — two nanoTime calls only on
         // sampled messages; recording is plain-long writes on this thread.
         final boolean sampled = nodeMetrics.shouldSample();

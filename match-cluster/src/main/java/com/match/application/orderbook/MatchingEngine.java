@@ -91,6 +91,24 @@ public interface MatchingEngine {
     long getCollectedAskVersion();
     long getCollectedVersion();
 
+    // ==================== Book version (market-data chain) ====================
+
+    /**
+     * Set the single monotonic per-book version. Written on the cluster/writer thread before each
+     * mutating command, derived from the Aeron log position ({@code max(current+1, logPosition)}),
+     * so it is deterministic across replicas and never regresses across restarts or failovers.
+     * Published together with the top-of-book snapshot; chains market-data snapshots and deltas
+     * for client-side stitching (a client can buffer deltas, fetch a snapshot, and replay the
+     * deltas whose {@code fromVersion} continues the snapshot's version).
+     */
+    void setBookVersion(long version);
+
+    /** Current book version (writer thread). */
+    long getBookVersion();
+
+    /** Book version captured by the last {@link #collectTopLevels} (flush thread). */
+    long getCollectedBookVersion();
+
     // ==================== Snapshot ====================
 
     /** All resting bid orders as flat [orderId, userId, price, qty] 4-tuples. */

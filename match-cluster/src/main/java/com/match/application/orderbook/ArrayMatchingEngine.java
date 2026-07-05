@@ -233,6 +233,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     private int pubAskCount;
     private long pubBidVersion;
     private long pubAskVersion;
+    private long pubBookVersion;
 
     // Seqlock sequence: even = stable, odd = write in progress. Single writer.
     private volatile long publishSeq = 0;
@@ -250,6 +251,10 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     private volatile int topAskCount;
     private volatile long collectedBidVersion;
     private volatile long collectedAskVersion;
+    private volatile long collectedBookVersion;
+
+    // Single monotonic per-book version (writer thread; see MatchingEngine.setBookVersion).
+    private long bookVersion;
 
     /**
      * Refresh the published top-of-book snapshot. Writer (cluster) thread only. Dirty-gated on book
@@ -272,6 +277,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
         pubAskCount = collectSide(askBook, pubAskPrices, pubAskQuantities, pubAskOrderCounts);
         pubBidVersion = bv;
         pubAskVersion = av;
+        pubBookVersion = bookVersion;
 
         VarHandle.storeStoreFence();
         publishSeq = s + 2;           // even: done (release)
@@ -322,6 +328,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
             System.arraycopy(pubAskOrderCounts, 0, topAskOrderCounts, 0, ac);
             long bv = pubBidVersion;
             long av = pubAskVersion;
+            long bookV = pubBookVersion;
 
             VarHandle.loadLoadFence();
             if (publishSeq == s1) {          // clean read
@@ -329,6 +336,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
                 topAskCount = ac;
                 collectedBidVersion = bv;
                 collectedAskVersion = av;
+                collectedBookVersion = bookV;
                 return;
             }
         }
@@ -345,6 +353,9 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     public int[] getTopAskOrderCounts() { return topAskOrderCounts; }
     public long getCollectedBidVersion() { return collectedBidVersion; }
     public long getCollectedAskVersion() { return collectedAskVersion; }
+    public void setBookVersion(long version) { this.bookVersion = version; }
+    public long getBookVersion() { return bookVersion; }
+    public long getCollectedBookVersion() { return collectedBookVersion; }
     public long getCollectedVersion() { return Math.max(collectedBidVersion, collectedAskVersion); }
 
     // ==================== Snapshot ====================

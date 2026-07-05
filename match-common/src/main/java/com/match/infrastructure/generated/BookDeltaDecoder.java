@@ -10,10 +10,10 @@ import org.agrona.DirectBuffer;
 @SuppressWarnings("all")
 public final class BookDeltaDecoder
 {
-    public static final int BLOCK_LENGTH = 28;
+    public static final int BLOCK_LENGTH = 44;
     public static final int TEMPLATE_ID = 25;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 3;
+    public static final int SCHEMA_VERSION = 4;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -333,6 +333,118 @@ public final class BookDeltaDecoder
     public long askVersion()
     {
         return buffer.getLong(offset + 20, BYTE_ORDER);
+    }
+
+
+    public static int bookVersionId()
+    {
+        return 5;
+    }
+
+    public static int bookVersionSinceVersion()
+    {
+        return 4;
+    }
+
+    public static int bookVersionEncodingOffset()
+    {
+        return 28;
+    }
+
+    public static int bookVersionEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String bookVersionMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long bookVersionNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long bookVersionMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long bookVersionMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public long bookVersion()
+    {
+        if (parentMessage.actingVersion < 4)
+        {
+            return -9223372036854775808L;
+        }
+
+        return buffer.getLong(offset + 28, BYTE_ORDER);
+    }
+
+
+    public static int fromVersionId()
+    {
+        return 6;
+    }
+
+    public static int fromVersionSinceVersion()
+    {
+        return 4;
+    }
+
+    public static int fromVersionEncodingOffset()
+    {
+        return 36;
+    }
+
+    public static int fromVersionEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String fromVersionMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long fromVersionNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long fromVersionMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long fromVersionMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public long fromVersion()
+    {
+        if (parentMessage.actingVersion < 4)
+        {
+            return -9223372036854775808L;
+        }
+
+        return buffer.getLong(offset + 36, BYTE_ORDER);
     }
 
 
@@ -769,6 +881,12 @@ public final class BookDeltaDecoder
         builder.append('|');
         builder.append("askVersion=");
         builder.append(this.askVersion());
+        builder.append('|');
+        builder.append("bookVersion=");
+        builder.append(this.bookVersion());
+        builder.append('|');
+        builder.append("fromVersion=");
+        builder.append(this.fromVersion());
         builder.append('|');
         builder.append("changes=[");
         final int changesOriginalOffset = changes.offset;
