@@ -12,7 +12,12 @@ import java.util.concurrent.locks.StampedLock;
  * Uses StampedLock for optimistic reads.
  */
 public class GatewayOrderBook {
-    private static final int MAX_LEVELS = 20;
+    // Retention depth. Must be comfortably DEEPER than what UIs render
+    // (~20 rows): a level beyond the cap is dropped forever, so with a cap
+    // equal to the render depth every DELETE of a visible level shrank the
+    // displayed book below 20 with nothing to backfill it until the next
+    // full snapshot. At 64 the deeper levels slide up naturally.
+    private static final int MAX_LEVELS = 64;
 
     // Pre-allocated arrays for zero-allocation updates
     private final double[] bidPrices = new double[MAX_LEVELS];
