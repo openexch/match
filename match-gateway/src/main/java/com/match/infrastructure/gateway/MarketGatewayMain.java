@@ -44,6 +44,14 @@ public class MarketGatewayMain implements AutoCloseable {
     }
 
     public void start() throws Exception {
+        // Seed candle rings + ticker from the database BEFORE touching the
+        // cluster: AeronCluster.connect() can already dispatch egress messages
+        // (and thus ring writes) during session establishment, and seed()
+        // must never run after live trades have entered the rings.
+        if (persistence != null) {
+            persistence.hydrate(stateManager.inMemoryCandleProvider());
+        }
+
         // Connect to cluster
         aeronGateway.connect();
 
@@ -51,13 +59,6 @@ public class MarketGatewayMain implements AutoCloseable {
         marketDataWebSocket.start();
 
         clusterStatus.setMarketChannels(marketDataWebSocket.getChannels());
-
-        // Seed candle rings + ticker from the database. Must happen HERE,
-        // before startPolling(): the rings are single-writer and the egress
-        // thread becomes their writer once polling begins.
-        if (persistence != null) {
-            persistence.hydrate(stateManager.inMemoryCandleProvider());
-        }
     }
 
     public void startPolling() {
