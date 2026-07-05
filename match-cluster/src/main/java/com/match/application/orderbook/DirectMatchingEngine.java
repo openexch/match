@@ -341,6 +341,12 @@ public class DirectMatchingEngine implements MatchingEngine {
     // Version tracking for collected data - stores version at collection time
     private volatile long collectedBidVersion;
     private volatile long collectedAskVersion;
+    private volatile long collectedBookVersion;
+
+    // Single monotonic per-book version (writer thread; see MatchingEngine.setBookVersion).
+    // volatile: the direct engine has no writer-published snapshot, so the flush thread
+    // reads it directly under snapshotLock.
+    private volatile long bookVersion;
 
     // Lock for atomic snapshot collection and reading
     // Ensures collectTopLevels and subsequent getters see consistent state
@@ -369,6 +375,7 @@ public class DirectMatchingEngine implements MatchingEngine {
             // Store versions for later use - this prevents compiler from optimizing away the reads
             collectedBidVersion = bidBook.getVersion();
             collectedAskVersion = askBook.getVersion();
+            collectedBookVersion = bookVersion;
 
             // Collect top bids (descending price order)
             topBidCount = 0;
@@ -424,6 +431,9 @@ public class DirectMatchingEngine implements MatchingEngine {
     public long getCollectedBidVersion() { return collectedBidVersion; }
     public long getCollectedAskVersion() { return collectedAskVersion; }
     public long getCollectedVersion() { return Math.max(collectedBidVersion, collectedAskVersion); }
+    public void setBookVersion(long version) { this.bookVersion = version; }
+    public long getBookVersion() { return bookVersion; }
+    public long getCollectedBookVersion() { return collectedBookVersion; }
 
     // ==================== Snapshot Support ====================
 

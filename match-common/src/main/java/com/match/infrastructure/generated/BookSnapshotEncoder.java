@@ -10,10 +10,10 @@ import org.agrona.MutableDirectBuffer;
 @SuppressWarnings("all")
 public final class BookSnapshotEncoder
 {
-    public static final int BLOCK_LENGTH = 28;
+    public static final int BLOCK_LENGTH = 36;
     public static final int TEMPLATE_ID = 22;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 3;
+    public static final int SCHEMA_VERSION = 4;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -301,6 +301,58 @@ public final class BookSnapshotEncoder
     public BookSnapshotEncoder askVersion(final long value)
     {
         buffer.putLong(offset + 20, value, BYTE_ORDER);
+        return this;
+    }
+
+
+    public static int bookVersionId()
+    {
+        return 5;
+    }
+
+    public static int bookVersionSinceVersion()
+    {
+        return 4;
+    }
+
+    public static int bookVersionEncodingOffset()
+    {
+        return 28;
+    }
+
+    public static int bookVersionEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String bookVersionMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long bookVersionNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long bookVersionMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long bookVersionMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public BookSnapshotEncoder bookVersion(final long value)
+    {
+        buffer.putLong(offset + 28, value, BYTE_ORDER);
         return this;
     }
 

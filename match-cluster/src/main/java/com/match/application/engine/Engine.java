@@ -35,6 +35,15 @@ public class Engine {
     // Atomic order ID generator
     private final AtomicLong orderIdGenerator = new AtomicLong(1);
 
+    // Aeron log position of the session message currently being processed
+    // (set by the clustered service before demux; single-threaded).
+    private long currentLogPosition;
+
+    /** Called by the clustered service with Header.position() before dispatching each message. */
+    public void setCurrentLogPosition(long position) {
+        this.currentLogPosition = position;
+    }
+
     // Event sink (optional - set via setEventPublisher). Interface, not the concrete
     // MatchEventPublisher, so matching output can be captured synchronously in tests.
     private MatchEventSink eventPublisher;
@@ -151,6 +160,13 @@ public class Engine {
         if (engine == null) {
             return; // Silently ignore unknown markets in hot path
         }
+
+        // Stamp the market-data book version BEFORE processing so every state
+        // this command publishes carries it. max(current+1, logPosition) is
+        // deterministic across replicas (same log) and never regresses across
+        // restarts/failovers even though the version itself is not part of the
+        // engine snapshot (the next command jumps it to the live log position).
+        engine.setBookVersion(Math.max(engine.getBookVersion() + 1, currentLogPosition));
 
         // Direct int switch - no string comparison
         switch (commandType) {
