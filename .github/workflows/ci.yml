@@ -12,6 +12,24 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Market-data persistence integration tests (TimescaleIntegrationTest) run
+    # against this service; without MARKET_PG_TEST_URL they self-skip (Assume).
+    services:
+      timescaledb:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_DB: marketdata
+          POSTGRES_USER: market
+          POSTGRES_PASSWORD: ci
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U market -d marketdata"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      MARKET_PG_TEST_URL: jdbc:postgresql://localhost:5432/marketdata?user=market&password=ci
     steps:
       - uses: actions/checkout@v7
 

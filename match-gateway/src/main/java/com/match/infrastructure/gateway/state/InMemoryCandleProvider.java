@@ -17,7 +17,7 @@ public class InMemoryCandleProvider implements CandleProvider {
     private static final int MAX_MARKETS = 6; // market IDs 1-5, index 0 unused
 
     // Supported intervals and their durations in milliseconds
-    static final String[] INTERVALS = {"1m", "5m", "15m", "1h", "4h", "1d"};
+    public static final String[] INTERVALS = {"1m", "5m", "15m", "1h", "4h", "1d"};
     private static final long[] INTERVAL_MS = {
         60_000L,        // 1m
         300_000L,       // 5m
@@ -46,7 +46,7 @@ public class InMemoryCandleProvider implements CandleProvider {
     }
 
     @Override
-    public void onTrade(int marketId, double price, double quantity, long timestampMs) {
+    public void onTrade(int marketId, double price, double quantity, int tradeCount, long timestampMs) {
         if (marketId <= 0 || marketId >= MAX_MARKETS) return;
 
         for (int i = 0; i < INTERVALS.length; i++) {
@@ -54,7 +54,7 @@ public class InMemoryCandleProvider implements CandleProvider {
             long bucketMs = (timestampMs / intervalMs) * intervalMs;
             long bucketSec = bucketMs / 1000;
 
-            rings[marketId][i].updateOrCreate(marketId, bucketSec, price, quantity);
+            rings[marketId][i].updateOrCreate(marketId, bucketSec, price, quantity, tradeCount);
         }
     }
 
@@ -65,6 +65,24 @@ public class InMemoryCandleProvider implements CandleProvider {
             return new ArrayList<>();
         }
         return rings[marketId][intervalIdx].getRecent(limit);
+    }
+
+    /**
+     * Seed a ring from persisted history at startup (ascending time order).
+     * MUST be called before egress polling starts: the rings are single-writer
+     * and the seeding thread would otherwise race the polling thread. Seeding
+     * the current in-flight bucket lets post-restart trades continue its
+     * O/H/L/V instead of restarting the candle from the first new trade.
+     */
+    public void seed(int marketId, String interval, List<Candle> ascending) {
+        int intervalIdx = intervalIndex(interval);
+        if (intervalIdx < 0 || marketId <= 0 || marketId >= MAX_MARKETS) {
+            return;
+        }
+        CandleRing ring = rings[marketId][intervalIdx];
+        for (Candle c : ascending) {
+            ring.append(c);
+        }
     }
 
     @Override
@@ -115,7 +133,7 @@ public class InMemoryCandleProvider implements CandleProvider {
          * Update existing candle at bucket time, or create a new one.
          * Called from egress thread only (single writer).
          */
-        void updateOrCreate(int marketId, long bucketSec, double price, double quantity) {
+        void updateOrCreate(int marketId, long bucketSec, double price, double quantity, int tradeCount) {
             // Check if the most recent candle matches this bucket
             if (count > 0) {
                 int lastIdx = (head - 1 + capacity) % capacity;
@@ -126,7 +144,7 @@ public class InMemoryCandleProvider implements CandleProvider {
                     last.low = Math.min(last.low, price);
                     last.close = price;
                     last.volume += quantity;
-                    last.tradeCount++;
+                    last.tradeCount += tradeCount;
                     return;
                 }
             }
@@ -139,9 +157,21 @@ public class InMemoryCandleProvider implements CandleProvider {
             c.low = price;
             c.close = price;
             c.volume = quantity;
-            c.tradeCount = 1;
+            c.tradeCount = tradeCount;
             c.marketId = marketId;
 
+            head = (head + 1) % capacity;
+            if (count < capacity) {
+                count++;
+            }
+        }
+
+        /**
+         * Append a candle at the head position (startup seeding only —
+         * must not run concurrently with the egress writer).
+         */
+        void append(Candle source) {
+            candles[head].copyFrom(source);
             head = (head + 1) % capacity;
             if (count < capacity) {
                 count++;

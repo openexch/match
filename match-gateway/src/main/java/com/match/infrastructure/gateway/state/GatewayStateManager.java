@@ -33,11 +33,15 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
     // Per-market ticker stats (accumulated from trades)
     private final ConcurrentHashMap<Integer, TickerStats> tickerStatsByMarket = new ConcurrentHashMap<>();
 
-    // Candle aggregation
-    private final CandleProvider candleProvider = new InMemoryCandleProvider();
+    // Candle aggregation (concrete type: persistence hydration seeds the rings at startup)
+    private final InMemoryCandleProvider candleProvider = new InMemoryCandleProvider();
 
     // Reference to WebSocket for broadcasting to clients
     private volatile MarketDataWebSocket webSocket;
+
+    // Market-data persistence (TimescaleDB). Null when disabled by env — every
+    // path below then collapses to the pre-persistence in-memory behavior.
+    private volatile com.match.infrastructure.gateway.persistence.MarketDataPersistence persistence;
 
     // Count of stale/duplicate book deltas dropped (switchover-seam dedup, match#19) — observability.
     private final java.util.concurrent.atomic.AtomicLong chainBreaks = new java.util.concurrent.atomic.AtomicLong();
@@ -48,6 +52,20 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
 
     public void setWebSocket(MarketDataWebSocket webSocket) {
         this.webSocket = webSocket;
+    }
+
+    public void setPersistence(com.match.infrastructure.gateway.persistence.MarketDataPersistence persistence) {
+        this.persistence = persistence;
+    }
+
+    /** For /metrics (market_pg_* series). Null when persistence is disabled. */
+    public com.match.infrastructure.gateway.persistence.MarketDataPersistence getPersistence() {
+        return persistence;
+    }
+
+    /** Concrete provider accessor for startup hydration (ring seeding). */
+    public InMemoryCandleProvider inMemoryCandleProvider() {
+        return candleProvider;
     }
 
     @Override
@@ -186,6 +204,7 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             TickerStats tickerStats = getOrCreateTickerStats(marketId, marketName);
 
             // Convert trades to JSON array (convert fixed-point to decimal)
+            com.match.infrastructure.gateway.persistence.MarketDataPersistence p = persistence;
             JsonArray tradesArray = new JsonArray();
             for (TradesBatchDecoder.TradesDecoder trade : decoder.trades()) {
                 double price = (double) trade.price() / SCALE_FACTOR;
@@ -193,6 +212,12 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
 
                 // Update ticker stats from each trade
                 tickerStats.updateFromTrade(price, quantity);
+
+                // Persist the raw trade stream (source of truth for candles).
+                // Lock-free enqueue; the writer thread does the JDBC work.
+                if (p != null) {
+                    p.writer().offer(marketId, price, quantity, trade.tradeCount(), trade.timestamp());
+                }
 
                 JsonObject t = new JsonObject();
                 t.addProperty("price", price);
@@ -205,13 +230,15 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             // Update local state
             trades.addBatch(marketId, marketName, tradesArray);
 
-            // Update candles from each trade
+            // Update candles from each trade (tradeCount-aware so candle
+            // trade counts match the persisted trades, which sum trade_count)
             for (int i = 0; i < tradesArray.size(); i++) {
                 JsonObject t = tradesArray.get(i).getAsJsonObject();
                 candleProvider.onTrade(
                     marketId,
                     t.get("price").getAsDouble(),
                     t.get("quantity").getAsDouble(),
+                    t.get("tradeCount").getAsInt(),
                     t.get("timestamp").getAsLong()
                 );
             }
@@ -359,16 +386,24 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
     }
 
     /**
-     * Build candle history JSON for initial WebSocket state or REST API.
+     * Build candle history JSON from the in-memory rings (fallback path and
+     * pre-persistence behavior; the DB-first path is buildCandleHistoryJsonAsync).
      */
     public String buildCandleHistoryJson(int marketId, String interval, int limit) {
-        String marketName = getMarketName(marketId);
         java.util.List<Candle> candles = candleProvider.getCandles(marketId, interval, limit);
+        return candleHistoryJson(marketId, getMarketName(marketId), interval, candles);
+    }
 
+    /**
+     * Shared CANDLE_HISTORY envelope — the DB path and the memory path must
+     * emit the identical shape, so both build through here.
+     */
+    public static String candleHistoryJson(int marketId, String market, String interval,
+                                           java.util.List<Candle> candles) {
         JsonObject obj = new JsonObject();
         obj.addProperty("type", "CANDLE_HISTORY");
         obj.addProperty("marketId", marketId);
-        obj.addProperty("market", marketName);
+        obj.addProperty("market", market);
         obj.addProperty("interval", interval);
 
         JsonArray arr = new JsonArray();
@@ -379,7 +414,70 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
         return obj.toString();
     }
 
-    private JsonObject candleToJson(Candle c) {
+    /**
+     * Shared TRADES_BATCH envelope for the persisted trade tape — mirrors
+     * TradeRingBuffer.toJsonForMarket (buyCount/sellCount are vestigial zeros;
+     * the aggregated stream does not carry them).
+     */
+    public static String tradesBatchJson(int marketId, String market,
+                                         java.util.List<com.match.infrastructure.gateway.persistence.TimescaleReader.TapeRow> rows) {
+        JsonObject json = new JsonObject();
+        json.addProperty("type", "TRADES_BATCH");
+        json.addProperty("marketId", marketId);
+        json.addProperty("market", market);
+        json.addProperty("timestamp", System.currentTimeMillis());
+
+        JsonArray tradesArray = new JsonArray();
+        for (com.match.infrastructure.gateway.persistence.TimescaleReader.TapeRow t : rows) {
+            JsonObject obj = new JsonObject();
+            obj.addProperty("price", t.price());
+            obj.addProperty("quantity", t.quantity());
+            obj.addProperty("tradeCount", t.tradeCount());
+            obj.addProperty("buyCount", 0);
+            obj.addProperty("sellCount", 0);
+            obj.addProperty("timestamp", t.tsMs());
+            tradesArray.add(obj);
+        }
+        json.add("trades", tradesArray);
+        return json.toString();
+    }
+
+    /**
+     * DB-first candle history (the database is the source of truth); falls
+     * back to the in-memory rings when persistence is disabled or down.
+     * Completed on a persistence read thread — never blocks the caller.
+     */
+    public java.util.concurrent.CompletableFuture<String> buildCandleHistoryJsonAsync(
+            int marketId, String interval, int limit) {
+        com.match.infrastructure.gateway.persistence.MarketDataPersistence p = persistence;
+        if (p == null) {
+            return java.util.concurrent.CompletableFuture.completedFuture(
+                    buildCandleHistoryJson(marketId, interval, limit));
+        }
+        return p.reads().candleHistoryJson(marketId, interval, limit,
+                () -> buildCandleHistoryJson(marketId, interval, limit));
+    }
+
+    /** DB-first recent-trades tape with in-memory fallback. marketId 0 = all markets. */
+    public java.util.concurrent.CompletableFuture<String> recentTradesJsonAsync(int limit, int marketId) {
+        com.match.infrastructure.gateway.persistence.MarketDataPersistence p = persistence;
+        if (p == null) {
+            return java.util.concurrent.CompletableFuture.completedFuture(
+                    trades.toJsonForMarket(limit, marketId));
+        }
+        return p.reads().recentTradesJson(limit, marketId,
+                () -> trades.toJsonForMarket(limit, marketId));
+    }
+
+    /** Push a rolling-24h baseline into a market's ticker (persistence ticker thread). */
+    public void applyTickerBaseline(int marketId,
+                                    com.match.infrastructure.gateway.persistence.TickerBaseline b) {
+        getOrCreateTickerStats(marketId, getMarketName(marketId))
+                .applyDbBaseline(b.open24h(), b.high24h(), b.low24h(),
+                        b.quoteVolume24h(), b.lastClose(), b.asOfMs());
+    }
+
+    private static JsonObject candleToJson(Candle c) {
         JsonObject obj = new JsonObject();
         obj.addProperty("time", c.time);
         obj.addProperty("open", c.open);
