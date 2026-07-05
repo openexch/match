@@ -304,45 +304,68 @@ public class GatewayOrderBookTest {
     // ==================== MAX_LEVELS Boundary ====================
 
     @Test
-    public void testMaxLevels_BidsClampedTo20() {
-        double[][] levels = new double[25][];
-        for (int i = 0; i < 25; i++) {
+    public void testMaxLevels_BidsClampedTo64() {
+        // Retention (64) is deliberately deeper than the rendered depth
+        // (20): with retention == render depth, every DELETE of a visible
+        // level shrank the displayed book because the diffed backfill
+        // NEW_LEVEL was dropped by the full store (match#70).
+        double[][] levels = new double[70][];
+        for (int i = 0; i < 70; i++) {
             levels[i] = new double[]{100.0 - i, 1.0, 1};
         }
         JsonArray bids = makeLevels(levels);
         book.update(1, "BTC-USD", bids, new JsonArray(), 1L, 1L, 1L, 1000L);
 
-        assertEquals(20, book.getBidCount());
+        assertEquals(64, book.getBidCount());
     }
 
     @Test
-    public void testMaxLevels_NewLevelIgnoredIfNotInTop20() {
-        // Fill with 20 bid levels: 120, 119, ..., 101
-        double[][] levels = new double[20][];
-        for (int i = 0; i < 20; i++) {
+    public void testMaxLevels_DeleteBackfillsFromRetainedDepth() {
+        // The match#70 regression scenario: 25 levels live (top-20 visible
+        // to UIs), a visible level is consumed — the retained 21st level
+        // must keep the visible window full.
+        double[][] levels = new double[25][];
+        for (int i = 0; i < 25; i++) {
             levels[i] = new double[]{120.0 - i, 1.0, 1};
+        }
+        book.update(1, "BTC-USD", makeLevels(levels), new JsonArray(), 1L, 1L, 1L, 1000L);
+        assertEquals(25, book.getBidCount());
+
+        book.applyDelta("BID", 115.0, 0.0, 0, "DELETE_LEVEL");
+
+        assertEquals(24, book.getBidCount());
+        // 20 distinct levels still available for the rendered window.
+        assertEquals(100.0, book.getBidPrice(19), 0.0001);
+    }
+
+    @Test
+    public void testMaxLevels_NewLevelIgnoredIfNotInTop64() {
+        // Fill with 64 bid levels: 164, 163, ..., 101
+        double[][] levels = new double[64][];
+        for (int i = 0; i < 64; i++) {
+            levels[i] = new double[]{164.0 - i, 1.0, 1};
         }
         JsonArray bids = makeLevels(levels);
         book.update(1, "BTC-USD", bids, new JsonArray(), 1L, 1L, 1L, 1000L);
 
-        assertEquals(20, book.getBidCount());
+        assertEquals(64, book.getBidCount());
         // Lowest bid is 101.0
 
         // Try to insert bid at 50.0 — lower than all existing, should be ignored
         book.applyDelta("BID", 50.0, 5.0, 1, "NEW_LEVEL");
 
-        // Count should still be 20
-        assertEquals(20, book.getBidCount());
+        // Count should still be 64
+        assertEquals(64, book.getBidCount());
         // Lowest bid should still be 101.0
-        assertEquals(101.0, book.getBidPrice(19), 0.0001);
+        assertEquals(101.0, book.getBidPrice(63), 0.0001);
     }
 
     @Test
     public void testMaxLevels_NewLevelReplacesLowestIfBetter() {
-        // Fill with 20 bid levels: 120, 119, ..., 101
-        double[][] levels = new double[20][];
-        for (int i = 0; i < 20; i++) {
-            levels[i] = new double[]{120.0 - i, 1.0, 1};
+        // Fill with 64 bid levels: 164, 163, ..., 101
+        double[][] levels = new double[64][];
+        for (int i = 0; i < 64; i++) {
+            levels[i] = new double[]{164.0 - i, 1.0, 1};
         }
         JsonArray bids = makeLevels(levels);
         book.update(1, "BTC-USD", bids, new JsonArray(), 1L, 1L, 1L, 1000L);
@@ -350,7 +373,7 @@ public class GatewayOrderBookTest {
         // Insert bid at 115.5 — higher than 101 (lowest), should replace
         book.applyDelta("BID", 115.5, 5.0, 1, "NEW_LEVEL");
 
-        assertEquals(20, book.getBidCount());
+        assertEquals(64, book.getBidCount());
         // The new level should be in the book
         boolean found = false;
         for (int i = 0; i < book.getBidCount(); i++) {
