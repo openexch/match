@@ -60,17 +60,22 @@ public class TradeWriterTest {
         writer = new TradeWriter(db, received::addAll, 1024, 512, 10, false);
         writer.start();
 
-        assertTrue(writer.offer(1, 100.5, 2.25, 3, 1_700_000_000_123L));
-        assertTrue(writer.offer(2, 0.0001, 1_000_000, 1, 1_700_000_000_456L));
+        assertTrue(writer.offer(1, 100.5, 2.25, 3, 1_700_000_000_123L, Boolean.TRUE));
+        assertTrue(writer.offer(2, 0.0001, 1_000_000, 1, 1_700_000_000_456L, Boolean.FALSE));
+        // null-side row: written before the cluster carried takerSide (pre-v5 upstream)
+        assertTrue(writer.offer(3, 42.0, 1.5, 2, 1_700_000_000_789L, null));
 
-        await("rows to reach the sink", () -> received.size() == 2);
+        await("rows to reach the sink", () -> received.size() == 3);
         TradeWriter.TradeRow first = received.get(0);
         assertEquals(1, first.marketId());
         assertEquals(100.5, first.price(), 0);
         assertEquals(2.25, first.quantity(), 0);
         assertEquals(3, first.tradeCount());
         assertEquals(1_700_000_000_123L, first.tsMs());
-        assertEquals(2, db.tradesWritten.get());
+        assertEquals(Boolean.TRUE, first.takerIsBuy());
+        assertEquals(Boolean.FALSE, received.get(1).takerIsBuy());
+        assertNull("unknown taker side must persist as null", received.get(2).takerIsBuy());
+        assertEquals(3, db.tradesWritten.get());
         assertTrue(db.batchFlushes.get() >= 1);
         assertTrue(db.isAvailable());
     }
@@ -81,10 +86,10 @@ public class TradeWriterTest {
         writer = new TradeWriter(db, batch -> {}, 4, 512, 10, false);
 
         for (int i = 0; i < 4; i++) {
-            assertTrue(writer.offer(1, 100, 1, 1, i));
+            assertTrue(writer.offer(1, 100, 1, 1, i, Boolean.TRUE));
         }
         long before = System.nanoTime();
-        assertFalse(writer.offer(1, 100, 1, 1, 99));
+        assertFalse(writer.offer(1, 100, 1, 1, 99, Boolean.TRUE));
         long elapsedMs = (System.nanoTime() - before) / 1_000_000;
 
         assertEquals(1, db.tradesDropped.get());
@@ -105,8 +110,8 @@ public class TradeWriterTest {
         writer = new TradeWriter(db, sink, 1024, 512, 10, false);
         writer.start();
 
-        writer.offer(1, 100, 1, 1, 1000);
-        writer.offer(1, 101, 1, 1, 2000);
+        writer.offer(1, 100, 1, 1, 1000, Boolean.TRUE);
+        writer.offer(1, 101, 1, 1, 2000, Boolean.FALSE);
 
         await("batch to survive transient failures", () -> received.size() == 2);
         assertTrue("no rows may be lost on transient failures", attempts.get() >= 3);
@@ -130,11 +135,11 @@ public class TradeWriterTest {
         writer = new TradeWriter(db, sink, 1024, 512, 10, false);
         writer.start();
 
-        writer.offer(1, 100, 1, 1, 1000); // poison batch: fails twice, then dropped
+        writer.offer(1, 100, 1, 1, 1000, Boolean.TRUE); // poison batch: fails twice, then dropped
 
         await("poison batch to be dropped", () -> db.writeErrors.get() == 1);
 
-        writer.offer(1, 200, 1, 1, 2000); // writer must still be alive
+        writer.offer(1, 200, 1, 1, 2000, Boolean.TRUE); // writer must still be alive
         await("subsequent batch to be written", () -> {
             synchronized (received) {
                 return received.size() == 1;
@@ -152,7 +157,7 @@ public class TradeWriterTest {
         writer = new TradeWriter(db, received::addAll, 1024, 512, 60_000, false); // long linger
         writer.start();
 
-        writer.offer(1, 100, 1, 1, 1000);
+        writer.offer(1, 100, 1, 1, 1000, Boolean.TRUE);
         writer.close(); // shutdown flushes regardless of linger
         assertEquals(1, received.size());
     }

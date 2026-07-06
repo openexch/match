@@ -55,8 +55,8 @@ public class TradeRingBuffer {
             entry.price = trade.get("price").getAsDouble();
             entry.quantity = trade.get("quantity").getAsDouble();
             entry.tradeCount = trade.get("tradeCount").getAsInt();
-            entry.buyCount = trade.has("buyCount") ? trade.get("buyCount").getAsInt() : 0;
-            entry.sellCount = trade.has("sellCount") ? trade.get("sellCount").getAsInt() : 0;
+            entry.side = trade.has("side") && !trade.get("side").isJsonNull()
+                    ? trade.get("side").getAsString() : null;
             entry.timestamp = trade.get("timestamp").getAsLong();
 
             // Advance head (circular)
@@ -146,8 +146,9 @@ public class TradeRingBuffer {
             obj.addProperty("price", t.price);
             obj.addProperty("quantity", t.quantity);
             obj.addProperty("tradeCount", t.tradeCount);
-            obj.addProperty("buyCount", t.buyCount);
-            obj.addProperty("sellCount", t.sellCount);
+            if (t.side != null) {
+                obj.addProperty("side", t.side);
+            }
             obj.addProperty("timestamp", t.timestamp);
             tradesArray.add(obj);
         }

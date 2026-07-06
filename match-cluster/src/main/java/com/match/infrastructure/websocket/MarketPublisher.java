@@ -91,8 +91,11 @@ public class MarketPublisher implements MarketEventHandler {
     // Scheduler for 50ms periodic flush
     private ScheduledExecutorService scheduler;
 
-    // Trade buffer - aggregate by price within flush interval
-    private final Long2ObjectHashMap<AggregatedTrade> tradesByPrice = new Long2ObjectHashMap<>();
+    // Trade buffer - aggregate by (price, taker side) within flush interval.
+    // Key: (price << 1) | takerIsBuy-bit — prices are positive fixed-point longs
+    // (1e8 scale), so the shift is safe. Keying on side keeps each bucket's
+    // taker side uniform, which is what TradesBatch.takerSide (schema v5) carries.
+    private final Long2ObjectHashMap<AggregatedTrade> tradesByPriceSide = new Long2ObjectHashMap<>();
     private final Deque<AggregatedTrade> aggregatedTradePool = new ArrayDeque<>(64);
 
     // Order book buffers - coalesce by price level
@@ -181,29 +184,28 @@ public class MarketPublisher implements MarketEventHandler {
         }
     }
 
-    // Aggregated trade by price - combines all trades at same price in flush interval
+    // Aggregated trade by (price, taker side) - combines all trades at the same
+    // price with the same aggressor side in a flush interval, so takerIsBuy is
+    // uniform per bucket.
     private static class AggregatedTrade {
         long price;
         long totalQuantity;
         int tradeCount;
         long lastTimestamp;
-        int buyCount;  // Count of buy-initiated trades
-        int sellCount; // Count of sell-initiated trades
+        boolean takerIsBuy; // Aggressor side of every trade in this bucket
 
         void reset() {
             price = 0;
             totalQuantity = 0;
             tradeCount = 0;
             lastTimestamp = 0;
-            buyCount = 0;
-            sellCount = 0;
+            takerIsBuy = false;
         }
 
-        void add(long quantity, boolean takerIsBuy, long timestamp) {
+        void add(long quantity, long timestamp) {
             totalQuantity += quantity;
             tradeCount++;
             lastTimestamp = timestamp;
-            if (takerIsBuy) buyCount++; else sellCount++;
         }
     }
 
@@ -326,7 +328,9 @@ public class MarketPublisher implements MarketEventHandler {
         }
 
         long price = event.getPrice();
-        AggregatedTrade agg = tradesByPrice.get(price);
+        // Aggregate per (price, taker side): shift-safe, prices are positive fixed-point longs.
+        long key = (price << 1) | (event.isTakerIsBuy() ? 1L : 0L);
+        AggregatedTrade agg = tradesByPriceSide.get(key);
 
         if (agg == null) {
             agg = aggregatedTradePool.poll();
@@ -335,10 +339,11 @@ public class MarketPublisher implements MarketEventHandler {
             }
             agg.reset();
             agg.price = price;
-            tradesByPrice.put(price, agg);
+            agg.takerIsBuy = event.isTakerIsBuy();
+            tradesByPriceSide.put(key, agg);
         }
 
-        agg.add(event.getQuantity(), event.isTakerIsBuy(), event.getTimestamp());
+        agg.add(event.getQuantity(), event.getTimestamp());
 
         // Buffer individual trade details for OMS TradeExecutionBatch
         TradeExecutionEntry tradeEntry = new TradeExecutionEntry();
@@ -453,7 +458,7 @@ public class MarketPublisher implements MarketEventHandler {
             }
 
             // Flush aggregated trades (SBE encoded)
-            if (!tradesByPrice.isEmpty()) {
+            if (!tradesByPriceSide.isEmpty()) {
                 int length = encodeTradesBatch();
                 if (length > 0) {
                     localBroadcaster.broadcast(encodeBuffer, 0, length);
@@ -518,12 +523,12 @@ public class MarketPublisher implements MarketEventHandler {
 
     private void clearTradesBuffer() {
         // Return aggregated trades to pool
-        Long2ObjectHashMap<AggregatedTrade>.ValueIterator iter = tradesByPrice.values().iterator();
+        Long2ObjectHashMap<AggregatedTrade>.ValueIterator iter = tradesByPriceSide.values().iterator();
         while (iter.hasNext()) {
             AggregatedTrade agg = iter.next();
             aggregatedTradePool.push(agg);
         }
-        tradesByPrice.clear();
+        tradesByPriceSide.clear();
     }
 
     /**
@@ -567,7 +572,7 @@ public class MarketPublisher implements MarketEventHandler {
      * Returns the total encoded length, or 0 if nothing to encode.
      */
     private int encodeTradesBatch() {
-        int tradeCount = tradesByPrice.size();
+        int tradeCount = tradesByPriceSide.size();
         if (tradeCount == 0) {
             return 0;
         }
@@ -586,14 +591,15 @@ public class MarketPublisher implements MarketEventHandler {
 
         // Encode trades group
         TradesBatchEncoder.TradesEncoder tradesGroup = tradesBatchEncoder.tradesCount(tradeCount);
-        Long2ObjectHashMap<AggregatedTrade>.ValueIterator iter = tradesByPrice.values().iterator();
+        Long2ObjectHashMap<AggregatedTrade>.ValueIterator iter = tradesByPriceSide.values().iterator();
         while (iter.hasNext()) {
             AggregatedTrade agg = iter.next();
             tradesGroup.next()
                 .price(agg.price)
                 .quantity(agg.totalQuantity)
                 .tradeCount(agg.tradeCount)
-                .timestamp(agg.lastTimestamp);
+                .timestamp(agg.lastTimestamp)
+                .takerSide(agg.takerIsBuy ? OrderSide.BID : OrderSide.ASK);
         }
 
         // Reset version range for next batch

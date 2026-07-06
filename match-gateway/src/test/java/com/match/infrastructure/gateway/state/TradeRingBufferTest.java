@@ -246,14 +246,13 @@ public class TradeRingBufferTest {
     // ==================== Trade fields ====================
 
     @Test
-    public void testTradeFields_BuyCountSellCount() {
+    public void testTradeFields_Side() {
         JsonArray trades = new JsonArray();
         JsonObject trade = new JsonObject();
         trade.addProperty("price", 100.0);
         trade.addProperty("quantity", 2.0);
         trade.addProperty("tradeCount", 3);
-        trade.addProperty("buyCount", 2);
-        trade.addProperty("sellCount", 1);
+        trade.addProperty("side", "BUY");
         trade.addProperty("timestamp", 5000L);
         trades.add(trade);
 
@@ -264,27 +263,52 @@ public class TradeRingBufferTest {
         assertEquals(100.0, t.price, 0.0001);
         assertEquals(2.0, t.quantity, 0.0001);
         assertEquals(3, t.tradeCount);
-        assertEquals(2, t.buyCount);
-        assertEquals(1, t.sellCount);
+        assertEquals("BUY", t.side);
         assertEquals(5000L, t.timestamp);
     }
 
     @Test
-    public void testTradeFields_MissingBuySellCount_DefaultsToZero() {
+    public void testTradeFields_MissingSide_DefaultsToNull() {
         JsonArray trades = new JsonArray();
         JsonObject trade = new JsonObject();
         trade.addProperty("price", 50.0);
         trade.addProperty("quantity", 1.0);
         trade.addProperty("tradeCount", 1);
         trade.addProperty("timestamp", 1000L);
-        // No buyCount/sellCount
+        // No side (pre-v5 upstream)
         trades.add(trade);
 
         buffer.addBatch(1, "BTC-USD", trades);
 
         List<AggregatedTrade> recent = buffer.getRecent(1);
-        assertEquals(0, recent.get(0).buyCount);
-        assertEquals(0, recent.get(0).sellCount);
+        assertNull(recent.get(0).side);
+    }
+
+    @Test
+    public void testToJson_SideEmittedOnlyWhenKnown() {
+        JsonArray trades = new JsonArray();
+        JsonObject withSide = new JsonObject();
+        withSide.addProperty("price", 100.0);
+        withSide.addProperty("quantity", 1.0);
+        withSide.addProperty("tradeCount", 1);
+        withSide.addProperty("side", "SELL");
+        withSide.addProperty("timestamp", 1000L);
+        trades.add(withSide);
+        JsonObject withoutSide = new JsonObject();
+        withoutSide.addProperty("price", 200.0);
+        withoutSide.addProperty("quantity", 1.0);
+        withoutSide.addProperty("tradeCount", 1);
+        withoutSide.addProperty("timestamp", 2000L);
+        trades.add(withoutSide);
+
+        buffer.addBatch(1, "BTC-USD", trades);
+
+        JsonObject parsed = JsonParser.parseString(buffer.toJson(10)).getAsJsonObject();
+        JsonArray arr = parsed.getAsJsonArray("trades");
+        assertEquals(2, arr.size());
+        // Most recent first: the side-less trade
+        assertFalse(arr.get(0).getAsJsonObject().has("side"));
+        assertEquals("SELL", arr.get(1).getAsJsonObject().get("side").getAsString());
     }
 
     // ==================== Helper ====================

@@ -29,7 +29,8 @@ import static org.junit.Assert.*;
  */
 public class TimescaleIntegrationTest {
 
-    private record TestTrade(int marketId, double price, double quantity, int tradeCount, long tsMs) {}
+    private record TestTrade(int marketId, double price, double quantity, int tradeCount, long tsMs,
+                             Boolean takerIsBuy) {}
 
     private MarketDataDb db;
     private TimescaleReader reader;
@@ -100,11 +101,13 @@ public class TimescaleIntegrationTest {
         double price = 100.0;
         for (int i = 0; i < offsets.length; i++) {
             price += (i % 3 == 0) ? 7.5 : -3.25;         // ups and downs for high/low coverage
-            trades.add(new TestTrade(1, price, 0.5 + (i % 4) * 0.25, 1 + (i % 3), base + offsets[i]));
+            // Mix of buy-taker / sell-taker / unknown (pre-v5) sides
+            Boolean side = (i % 3 == 0) ? Boolean.TRUE : (i % 3 == 1) ? Boolean.FALSE : null;
+            trades.add(new TestTrade(1, price, 0.5 + (i % 4) * 0.25, 1 + (i % 3), base + offsets[i], side));
         }
         // Second market: sparse subset, must not bleed into market 1's candles
-        trades.add(new TestTrade(2, 55.5, 2.0, 2, base + 45_000));
-        trades.add(new TestTrade(2, 54.0, 1.0, 1, base + 61_500));
+        trades.add(new TestTrade(2, 55.5, 2.0, 2, base + 45_000, Boolean.TRUE));
+        trades.add(new TestTrade(2, 54.0, 1.0, 1, base + 61_500, null));
         return trades;
     }
 
@@ -118,7 +121,8 @@ public class TimescaleIntegrationTest {
         writer.start();
         InMemoryCandleProvider memory = new InMemoryCandleProvider();
         for (TestTrade t : trades) {
-            assertTrue(writer.offer(t.marketId(), t.price(), t.quantity(), t.tradeCount(), t.tsMs()));
+            assertTrue(writer.offer(t.marketId(), t.price(), t.quantity(), t.tradeCount(), t.tsMs(),
+                    t.takerIsBuy()));
             memory.onTrade(t.marketId(), t.price(), t.quantity(), t.tradeCount(), t.tsMs());
         }
         long deadline = System.currentTimeMillis() + 10_000;
@@ -157,9 +161,9 @@ public class TimescaleIntegrationTest {
         writer = new TradeWriter(db);
         writer.start();
         long now = System.currentTimeMillis();
-        writer.offer(3, 10.0, 1.0, 1, now - 3_000);
-        writer.offer(3, 11.0, 2.0, 1, now - 2_000);
-        writer.offer(4, 99.0, 1.0, 1, now - 1_000);
+        writer.offer(3, 10.0, 1.0, 1, now - 3_000, Boolean.TRUE);
+        writer.offer(3, 11.0, 2.0, 1, now - 2_000, Boolean.FALSE);
+        writer.offer(4, 99.0, 1.0, 1, now - 1_000, null); // pre-takerSide row
         long deadline = System.currentTimeMillis() + 10_000;
         while (db.tradesWritten.get() < 3) {
             assertTrue(System.currentTimeMillis() < deadline);
@@ -169,6 +173,11 @@ public class TimescaleIntegrationTest {
         List<TimescaleReader.TapeRow> all = reader.getRecentTrades(10, 0);
         assertEquals(3, all.size());
         assertEquals(99.0, all.get(0).price(), 0); // newest first
+
+        // taker_side round-trip: TRUE / FALSE / SQL NULL -> Boolean null
+        assertNull("null taker side must read back as null", all.get(0).takerIsBuy());
+        assertEquals(Boolean.FALSE, all.get(1).takerIsBuy());
+        assertEquals(Boolean.TRUE, all.get(2).takerIsBuy());
 
         List<TimescaleReader.TapeRow> m3 = reader.getRecentTrades(10, 3);
         assertEquals(2, m3.size());
@@ -182,9 +191,9 @@ public class TimescaleIntegrationTest {
         writer.start();
         long now = System.currentTimeMillis();
         // Old trade (outside 24h window) sets open24h; recent trades set high/low/volume
-        writer.offer(5, 200.0, 1.0, 1, now - 25 * 3_600_000L);
-        writer.offer(5, 210.0, 2.0, 1, now - 120_000);
-        writer.offer(5, 190.0, 1.0, 1, now - 60_000);
+        writer.offer(5, 200.0, 1.0, 1, now - 25 * 3_600_000L, Boolean.TRUE);
+        writer.offer(5, 210.0, 2.0, 1, now - 120_000, Boolean.TRUE);
+        writer.offer(5, 190.0, 1.0, 1, now - 60_000, Boolean.FALSE);
         long deadline = System.currentTimeMillis() + 10_000;
         while (db.tradesWritten.get() < 3) {
             assertTrue(System.currentTimeMillis() < deadline);

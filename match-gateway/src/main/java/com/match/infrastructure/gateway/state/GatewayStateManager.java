@@ -209,6 +209,15 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             for (TradesBatchDecoder.TradesDecoder trade : decoder.trades()) {
                 double price = (double) trade.price() / SCALE_FACTOR;
                 double quantity = (double) trade.quantity() / SCALE_FACTOR;
+                OrderSide takerSide = trade.takerSide();
+                Boolean takerIsBuy;
+                if (takerSide == OrderSide.BID) {
+                    takerIsBuy = Boolean.TRUE;
+                } else if (takerSide == OrderSide.ASK) {
+                    takerIsBuy = Boolean.FALSE;
+                } else {
+                    takerIsBuy = null; // pre-v5 upstream (mixed-version rolling update): NULL_VAL
+                }
 
                 // Update ticker stats from each trade
                 tickerStats.updateFromTrade(price, quantity);
@@ -216,7 +225,7 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
                 // Persist the raw trade stream (source of truth for candles).
                 // Lock-free enqueue; the writer thread does the JDBC work.
                 if (p != null) {
-                    p.writer().offer(marketId, price, quantity, trade.tradeCount(), trade.timestamp());
+                    p.writer().offer(marketId, price, quantity, trade.tradeCount(), trade.timestamp(), takerIsBuy);
                 }
 
                 JsonObject t = new JsonObject();
@@ -224,6 +233,9 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
                 t.addProperty("quantity", quantity);
                 t.addProperty("tradeCount", trade.tradeCount());
                 t.addProperty("timestamp", trade.timestamp());
+                if (takerIsBuy != null) {
+                    t.addProperty("side", takerIsBuy ? "BUY" : "SELL");
+                }
                 tradesArray.add(t);
             }
 
@@ -280,38 +292,11 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
 
     @Override
     public void onOrderStatusBatch(OrderStatusBatchDecoder decoder) {
-        try {
-            int marketId = decoder.marketId();
-            long timestamp = decoder.timestamp();
-
-            JsonArray ordersArray = new JsonArray();
-            for (OrderStatusBatchDecoder.OrdersDecoder order : decoder.orders()) {
-                JsonObject o = new JsonObject();
-                o.addProperty("orderId", order.orderId());
-                // As a STRING: Snowflake ids exceed JS 2^53 precision and get
-                // rounded by JSON.parse (trading-ui#25 / oms#39 id contract).
-                o.addProperty("omsOrderId", String.valueOf(order.omsOrderId()));
-                o.addProperty("userId", order.userId());
-                o.addProperty("status", order.status().name());
-                o.addProperty("price", (double) order.price() / SCALE_FACTOR);
-                o.addProperty("remainingQuantity", (double) order.remainingQty() / SCALE_FACTOR);
-                o.addProperty("filledQuantity", (double) order.filledQty() / SCALE_FACTOR);
-                o.addProperty("side", order.side() == OrderSide.BID ? "BID" : "ASK");
-                o.addProperty("timestamp", order.timestamp());
-                ordersArray.add(o);
-            }
-
-            if (webSocket != null && ordersArray.size() > 0) {
-                JsonObject msg = new JsonObject();
-                msg.addProperty("type", "ORDER_STATUS_BATCH");
-                msg.addProperty("marketId", marketId);
-                msg.addProperty("timestamp", timestamp);
-                msg.add("orders", ordersArray);
-                webSocket.broadcastMarketData(msg.toString());
-            }
-        } catch (Exception e) {
-            logger.error("Error processing ORDER_STATUS_BATCH: " + e.getMessage());
-        }
+        // Deliberate no-op: per-user order data now flows only via the OMS's
+        // user-scoped WebSocket. Broadcasting every participant's orders on
+        // the public market feed was a privacy leak, and the trading UI no
+        // longer consumes it. The batch still arrives on this egress (the OMS
+        // consumes it on its own session), so we just decode-and-drop here.
     }
 
     @Override
@@ -416,8 +401,9 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
 
     /**
      * Shared TRADES_BATCH envelope for the persisted trade tape — mirrors
-     * TradeRingBuffer.toJsonForMarket (buyCount/sellCount are vestigial zeros;
-     * the aggregated stream does not carry them).
+     * TradeRingBuffer.toJsonForMarket: "side" ("BUY"/"SELL") is emitted only
+     * when the row carries a taker side (rows persisted before the cluster
+     * carried takerSide have a NULL taker_side and omit it).
      */
     public static String tradesBatchJson(int marketId, String market,
                                          java.util.List<com.match.infrastructure.gateway.persistence.TimescaleReader.TapeRow> rows) {
@@ -433,8 +419,9 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             obj.addProperty("price", t.price());
             obj.addProperty("quantity", t.quantity());
             obj.addProperty("tradeCount", t.tradeCount());
-            obj.addProperty("buyCount", 0);
-            obj.addProperty("sellCount", 0);
+            if (t.takerIsBuy() != null) {
+                obj.addProperty("side", t.takerIsBuy() ? "BUY" : "SELL");
+            }
             obj.addProperty("timestamp", t.tsMs());
             tradesArray.add(obj);
         }

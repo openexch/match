@@ -13,7 +13,7 @@ public final class TradesBatchDecoder
     public static final int BLOCK_LENGTH = 12;
     public static final int TEMPLATE_ID = 23;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 4;
+    public static final int SCHEMA_VERSION = 5;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -313,7 +313,7 @@ public final class TradesBatchDecoder
 
         public static int sbeBlockLength()
         {
-            return 28;
+            return 29;
         }
 
         public int actingBlockLength()
@@ -550,6 +550,57 @@ public final class TradesBatchDecoder
         }
 
 
+        public static int takerSideId()
+        {
+            return 5;
+        }
+
+        public static int takerSideSinceVersion()
+        {
+            return 5;
+        }
+
+        public static int takerSideEncodingOffset()
+        {
+            return 28;
+        }
+
+        public static int takerSideEncodingLength()
+        {
+            return 1;
+        }
+
+        public static String takerSideMetaAttribute(final MetaAttribute metaAttribute)
+        {
+            if (MetaAttribute.PRESENCE == metaAttribute)
+            {
+                return "required";
+            }
+
+            return "";
+        }
+
+        public short takerSideRaw()
+        {
+            if (parentMessage.actingVersion < 5)
+            {
+                return (short)255;
+            }
+
+            return ((short)(buffer.getByte(offset + 28) & 0xFF));
+        }
+
+        public OrderSide takerSide()
+        {
+            if (parentMessage.actingVersion < 5)
+            {
+                return OrderSide.NULL_VAL;
+            }
+
+            return OrderSide.get(((short)(buffer.getByte(offset + 28) & 0xFF)));
+        }
+
+
         public StringBuilder appendTo(final StringBuilder builder)
         {
             if (null == buffer)
@@ -569,6 +620,9 @@ public final class TradesBatchDecoder
             builder.append('|');
             builder.append("timestamp=");
             builder.append(this.timestamp());
+            builder.append('|');
+            builder.append("takerSide=");
+            builder.append(this.takerSide());
             builder.append(')');
 
             return builder;
