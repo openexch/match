@@ -73,3 +73,14 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: "Admin gateway is not scrapable — process management and backup monitoring are blind"
+
+      # The public demo's outage alert: admin_demo_healthy is derived from the
+      # market simulator's end-to-end canary (order round-trip, fills, market
+      # data, CORS incl. the public edge) — sim-down also flips it, so no
+      # separate up{job="market-sim"} rule is needed.
+      - alert: DemoUnhealthy
+        expr: admin_demo_healthy == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "Demo canary failing for 2m — sim down or the order/fill/market-data/CORS path is broken (the public demo is broken)"

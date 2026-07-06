@@ -17,3 +17,9 @@ scrape_configs:
   - job_name: oms                    # Micrometer /metrics (auth-exempt)
     static_configs:
       - targets: ['localhost:8080']
+  - job_name: admin-gateway          # process manager / ops API (hand-rolled /metrics, auth-exempt)
+    static_configs:
+      - targets: ['localhost:8082']
+  - job_name: market-sim             # demo simulator + end-to-end canary (sim_* series)
+    static_configs:
+      - targets: ['localhost:8090']
