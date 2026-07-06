@@ -28,7 +28,9 @@ import java.util.concurrent.locks.LockSupport;
  */
 public final class TradeWriter implements Runnable, AutoCloseable {
 
-    record TradeRow(int marketId, long tsMs, double price, double quantity, int tradeCount) {}
+    /** {@code takerIsBuy}: TRUE = taker bought, FALSE = taker sold, null = unknown (pre-v5 upstream). */
+    record TradeRow(int marketId, long tsMs, double price, double quantity, int tradeCount,
+                    Boolean takerIsBuy) {}
 
     /** Seam for tests: production uses the JDBC sink below. */
     interface BatchSink {
@@ -40,7 +42,8 @@ public final class TradeWriter implements Runnable, AutoCloseable {
     }
 
     private static final String INSERT_SQL =
-            "INSERT INTO trades (time, market_id, price, quantity, trade_count) VALUES (?, ?, ?, ?, ?)";
+            "INSERT INTO trades (time, market_id, price, quantity, trade_count, taker_side)"
+                    + " VALUES (?, ?, ?, ?, ?, ?)";
 
     private static final long IDLE_PARK_NANOS = 50L * 1_000_000;
     private static final long LINGER_PARK_NANOS = 10L * 1_000_000;
@@ -77,8 +80,9 @@ public final class TradeWriter implements Runnable, AutoCloseable {
      * Hot path — called ONLY from the egress (main polling) thread.
      * Lock-free, never blocks; drops and counts when the queue is full.
      */
-    public boolean offer(int marketId, double price, double quantity, int tradeCount, long tsMs) {
-        if (queue.offer(new TradeRow(marketId, tsMs, price, quantity, tradeCount))) {
+    public boolean offer(int marketId, double price, double quantity, int tradeCount, long tsMs,
+                         Boolean takerIsBuy) {
+        if (queue.offer(new TradeRow(marketId, tsMs, price, quantity, tradeCount, takerIsBuy))) {
             return true;
         }
         long dropped = db.tradesDropped.incrementAndGet();
@@ -186,6 +190,8 @@ public final class TradeWriter implements Runnable, AutoCloseable {
                     ps.setDouble(3, row.price());
                     ps.setDouble(4, row.quantity());
                     ps.setInt(5, row.tradeCount());
+                    // null-safe: setObject writes SQL NULL for unknown taker side
+                    ps.setObject(6, row.takerIsBuy(), java.sql.Types.BOOLEAN);
                     ps.addBatch();
                 }
                 ps.executeBatch();

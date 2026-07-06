@@ -18,15 +18,13 @@ public class DataClassTest {
         trade.price = 100.5;
         trade.quantity = 2.0;
         trade.tradeCount = 3;
-        trade.buyCount = 2;
-        trade.sellCount = 1;
+        trade.side = "BUY";
         trade.timestamp = 123456789L;
 
         assertEquals(100.5, trade.price, 0.0001);
         assertEquals(2.0, trade.quantity, 0.0001);
         assertEquals(3, trade.tradeCount);
-        assertEquals(2, trade.buyCount);
-        assertEquals(1, trade.sellCount);
+        assertEquals("BUY", trade.side);
         assertEquals(123456789L, trade.timestamp);
     }
 
@@ -38,8 +36,7 @@ public class DataClassTest {
         trade.price = 100.0;
         trade.quantity = 5.0;
         trade.tradeCount = 10;
-        trade.buyCount = 6;
-        trade.sellCount = 4;
+        trade.side = "SELL";
         trade.timestamp = 999L;
 
         trade.reset();
@@ -47,8 +44,7 @@ public class DataClassTest {
         assertEquals(0.0, trade.price, 0.0);
         assertEquals(0.0, trade.quantity, 0.0);
         assertEquals(0, trade.tradeCount);
-        assertEquals(0, trade.buyCount);
-        assertEquals(0, trade.sellCount);
+        assertNull(trade.side);
         assertEquals(0L, trade.timestamp);
     }
 
@@ -60,8 +56,7 @@ public class DataClassTest {
         source.price = 200.0;
         source.quantity = 3.0;
         source.tradeCount = 5;
-        source.buyCount = 3;
-        source.sellCount = 2;
+        source.side = "SELL";
         source.timestamp = 555L;
 
         AggregatedTrade dest = new AggregatedTrade();
@@ -70,8 +65,7 @@ public class DataClassTest {
         assertEquals(200.0, dest.price, 0.0001);
         assertEquals(3.0, dest.quantity, 0.0001);
         assertEquals(5, dest.tradeCount);
-        assertEquals(3, dest.buyCount);
-        assertEquals(2, dest.sellCount);
+        assertEquals("SELL", dest.side);
         assertEquals(555L, dest.timestamp);
     }
 
@@ -81,8 +75,7 @@ public class DataClassTest {
         source.price = 100.0;
         source.quantity = 1.0;
         source.tradeCount = 1;
-        source.buyCount = 1;
-        source.sellCount = 0;
+        source.side = "BUY";
         source.timestamp = 100L;
 
         AggregatedTrade dest = new AggregatedTrade();

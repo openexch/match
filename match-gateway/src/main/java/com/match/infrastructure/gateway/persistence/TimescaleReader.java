@@ -28,8 +28,13 @@ public class TimescaleReader {
             "4h", "candles_4h",
             "1d", "candles_1d");
 
-    /** One row of the recent-trades tape (newest first). */
-    public record TapeRow(int marketId, double price, double quantity, int tradeCount, long tsMs) {}
+    /**
+     * One row of the recent-trades tape (newest first). {@code takerIsBuy}:
+     * TRUE = taker bought, FALSE = taker sold, null = row persisted before
+     * the cluster carried takerSide (taker_side IS NULL).
+     */
+    public record TapeRow(int marketId, double price, double quantity, int tradeCount, long tsMs,
+                          Boolean takerIsBuy) {}
 
     private final MarketDataDb db;
 
@@ -77,7 +82,7 @@ public class TimescaleReader {
     /** Most recent {@code limit} trades, newest first. marketId 0 = all markets. */
     public List<TapeRow> getRecentTrades(int limit, int marketId) throws SQLException {
         String sql = "SELECT (extract(epoch FROM time) * 1000)::bigint AS ts, market_id, price,"
-                + " quantity, trade_count FROM trades"
+                + " quantity, trade_count, taker_side FROM trades"
                 + (marketId > 0 ? " WHERE market_id = ?" : "")
                 + " ORDER BY time DESC LIMIT ?";
         List<TapeRow> rows = new ArrayList<>();
@@ -90,8 +95,11 @@ public class TimescaleReader {
             ps.setInt(idx, limit);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
+                    boolean b = rs.getBoolean("taker_side");
+                    Boolean takerIsBuy = rs.wasNull() ? null : b;
                     rows.add(new TapeRow(rs.getInt("market_id"), rs.getDouble("price"),
-                            rs.getDouble("quantity"), rs.getInt("trade_count"), rs.getLong("ts")));
+                            rs.getDouble("quantity"), rs.getInt("trade_count"), rs.getLong("ts"),
+                            takerIsBuy));
                 }
             }
         }

@@ -2,7 +2,7 @@
 <sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
                    package="com.match.infrastructure.generated"
                    id="1"
-                   version="4"
+                   version="5"
                    semanticVersion="5.2"
                    description="Match Order Schema - Optimized for Ultra-Low Latency"
 >
@@ -163,6 +163,13 @@
             <field name="quantity" id="2" type="int64"/>
             <field name="tradeCount" id="3" type="int32"/>
             <field name="timestamp" id="4" type="int64"/>
+            <!-- Taker (aggressor) side of the aggregated bucket (v5): trades
+                 are aggregated per (price, taker side), so every entry has a
+                 uniform side. sinceVersion=5 group TAIL extension: old peers
+                 skip it via the on-wire group blockLength (groupSizeEncoding);
+                 new peers reading v4 streams get OrderSide.NULL_VAL. Same
+                 mixed-version pattern as OrderStatusBatch.statusSeq (v3). -->
+            <field name="takerSide" id="5" type="OrderSide" sinceVersion="5"/>
         </group>
     </sbe:message>
 

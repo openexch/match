@@ -209,6 +209,51 @@ public class GatewayStateManagerSbeTest {
         assertNotNull(manager.getTickerStats(2));
     }
 
+    @Test
+    public void testOnTradesBatch_TakerSideMappedToJsonSide() {
+        CapturingWebSocket ws = new CapturingWebSocket();
+        manager.setWebSocket(ws);
+
+        encodeAndProcessTradesBatch(1, System.currentTimeMillis(),
+            new long[][]{
+                {fp(100.0), fp(5.0), 1, 12345L},
+                {fp(101.0), fp(3.0), 2, 12346L}
+            },
+            new OrderSide[]{OrderSide.BID, OrderSide.ASK}
+        );
+
+        // Broadcast JSON carries the taker side per trade
+        String batch = ws.messages.stream()
+            .filter(m -> m.contains("TRADES_BATCH")).findFirst().orElseThrow();
+        assertTrue(batch.contains("\"side\":\"BUY\""));
+        assertTrue(batch.contains("\"side\":\"SELL\""));
+
+        // Ring buffer round-trip preserves it too
+        String json = manager.getRecentTradesJson(10);
+        assertTrue(json.contains("\"side\":\"BUY\""));
+        assertTrue(json.contains("\"side\":\"SELL\""));
+    }
+
+    @Test
+    public void testOnTradesBatch_PreV5Header_SideOmitted() {
+        // Mixed-version rolling update: a v4 (pre-takerSide) upstream. Encode a
+        // v5 message, then stamp the header's version back to 4 — the decoder
+        // must return OrderSide.NULL_VAL for takerSide while price/quantity/
+        // timestamp still parse, and the gateway must omit "side".
+        encodeAndProcessTradesBatchWithHeaderVersion(1, System.currentTimeMillis(),
+            new long[][]{{fp(123.0), fp(2.0), 4, 98765L}},
+            new OrderSide[]{OrderSide.BID},
+            4
+        );
+
+        assertEquals(1, manager.getTrades().getCount());
+        String json = manager.getRecentTradesJson(10);
+        assertFalse("pre-v5 upstream must not produce a side", json.contains("\"side\""));
+        assertTrue(json.contains("123.0"));   // price still parses
+        assertTrue(json.contains("98765"));   // timestamp still parses
+        assertTrue(json.contains("\"tradeCount\":4"));
+    }
+
     // ==================== BookDelta ====================
 
     @Test
@@ -280,12 +325,26 @@ public class GatewayStateManagerSbeTest {
         assertNotNull(book);
     }
 
-    // ==================== OrderStatusBatch (no-op) ====================
+    // ==================== OrderStatusBatch (decode no-op) ====================
 
     @Test
     public void testOnOrderStatusBatch_NoCrash() {
-        encodeAndProcessOrderStatusBatch(1, System.currentTimeMillis());
+        encodeAndProcessOrderStatusBatch(1, System.currentTimeMillis(), 0);
         // No exception = pass
+    }
+
+    @Test
+    public void testOnOrderStatusBatch_DoesNotBroadcast() {
+        // Per-user order data flows only via the OMS's user-scoped WebSocket;
+        // broadcasting every participant's orders on the public market feed
+        // was a privacy leak. A non-empty batch must produce NO broadcast.
+        CapturingWebSocket ws = new CapturingWebSocket();
+        manager.setWebSocket(ws);
+
+        encodeAndProcessOrderStatusBatch(1, System.currentTimeMillis(), 2);
+
+        assertTrue("ORDER_STATUS_BATCH must not be broadcast to market WS clients",
+            ws.messages.isEmpty());
     }
 
     // ==================== onNewLeader ====================
@@ -328,18 +387,41 @@ public class GatewayStateManagerSbeTest {
     }
 
     private void encodeAndProcessTradesBatch(int marketId, long timestamp, long[][] trades) {
+        encodeAndProcessTradesBatch(marketId, timestamp, trades, null);
+    }
+
+    private void encodeAndProcessTradesBatch(int marketId, long timestamp, long[][] trades,
+                                             OrderSide[] takerSides) {
+        encodeAndProcessTradesBatchWithHeaderVersion(marketId, timestamp, trades, takerSides,
+            TradesBatchEncoder.SCHEMA_VERSION);
+    }
+
+    /**
+     * Encode a TradesBatch, optionally stamping the message header's version
+     * to an older schema version to simulate a pre-v5 upstream, then decode
+     * and process. {@code takerSides == null} encodes NULL_VAL (unknown).
+     */
+    private void encodeAndProcessTradesBatchWithHeaderVersion(int marketId, long timestamp,
+                                                              long[][] trades, OrderSide[] takerSides,
+                                                              int headerVersion) {
         TradesBatchEncoder encoder = new TradesBatchEncoder();
         encoder.wrapAndApplyHeader(buffer, 0, headerEnc);
         encoder.marketId(marketId);
         encoder.timestamp(timestamp);
 
         TradesBatchEncoder.TradesEncoder tradesEnc = encoder.tradesCount(trades.length);
-        for (long[] trade : trades) {
+        for (int i = 0; i < trades.length; i++) {
+            long[] trade = trades[i];
             tradesEnc.next()
                 .price(trade[0])
                 .quantity(trade[1])
                 .tradeCount((int) trade[2])
-                .timestamp(trade[3]);
+                .timestamp(trade[3])
+                .takerSide(takerSides != null ? takerSides[i] : OrderSide.NULL_VAL);
+        }
+
+        if (headerVersion != TradesBatchEncoder.SCHEMA_VERSION) {
+            headerEnc.wrap(buffer, 0).version(headerVersion);
         }
 
         TradesBatchDecoder decoder = new TradesBatchDecoder();
@@ -373,16 +455,40 @@ public class GatewayStateManagerSbeTest {
         manager.onBookDelta(decoder);
     }
 
-    private void encodeAndProcessOrderStatusBatch(int marketId, long timestamp) {
+    private void encodeAndProcessOrderStatusBatch(int marketId, long timestamp, int orderCount) {
         OrderStatusBatchEncoder encoder = new OrderStatusBatchEncoder();
         encoder.wrapAndApplyHeader(buffer, 0, headerEnc);
         encoder.marketId(marketId);
         encoder.timestamp(timestamp);
-        encoder.ordersCount(0); // Empty batch
+        OrderStatusBatchEncoder.OrdersEncoder ordersEnc = encoder.ordersCount(orderCount);
+        for (int i = 0; i < orderCount; i++) {
+            ordersEnc.next()
+                .orderId(i + 1)
+                .userId(100 + i)
+                .status(OrderStatus.NEW)
+                .price(fp(100.0 + i))
+                .remainingQty(fp(1.0))
+                .filledQty(0)
+                .side(OrderSide.BID)
+                .timestamp(timestamp)
+                .omsOrderId(9000 + i)
+                .statusSeq(i + 1);
+        }
 
         OrderStatusBatchDecoder decoder = new OrderStatusBatchDecoder();
         headerDec.wrap(buffer, 0);
         decoder.wrapAndApplyHeader(buffer, 0, headerDec);
         manager.onOrderStatusBatch(decoder);
+    }
+
+    /** Captures broadcasts without starting a server (channels stay null in the base class). */
+    private static final class CapturingWebSocket
+            extends com.match.infrastructure.websocket.MarketDataWebSocket {
+        final java.util.List<String> messages = new java.util.ArrayList<>();
+
+        @Override
+        public void broadcastMarketData(String jsonMessage) {
+            messages.add(jsonMessage);
+        }
     }
 }

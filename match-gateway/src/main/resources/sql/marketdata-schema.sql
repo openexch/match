@@ -169,3 +169,12 @@ SELECT add_retention_policy('trades', drop_after => INTERVAL '30 days', if_not_e
 -- Follow-up if disk ever matters:
 --   ALTER TABLE trades SET (timescaledb.compress, timescaledb.compress_segmentby = 'market_id', timescaledb.compress_orderby = 'time DESC')
 --   SELECT add_compression_policy('trades', compress_after => INTERVAL '7 days')
+
+-- Taker (aggressor) side of the aggregated trade bucket (schema v5).
+-- NULL means the row was written before the cluster carried takerSide
+-- (or arrived from a pre-v5 upstream during a mixed-version rolling update).
+-- true means the taker bought (BID aggressor), false means the taker sold.
+-- No continuous aggregate references this column, so an idempotent
+-- ALTER at the tail is safe for both fresh and existing databases.
+
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS taker_side BOOLEAN;
