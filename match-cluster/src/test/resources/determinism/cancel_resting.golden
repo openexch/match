@@ -1,2 +1,2 @@
-STATUS m=1 ts=1000 order=1 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=1 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
+STATUS m=1 ts=1000 order=1 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=1 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE

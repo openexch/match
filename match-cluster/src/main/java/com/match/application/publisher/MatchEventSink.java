@@ -34,6 +34,10 @@ public interface MatchEventSink {
     /**
      * Publish an order status update (NEW / PARTIALLY_FILLED / FILLED / CANCELLED / REJECTED).
      *
+     * @param rejectReason raw {@link com.match.application.orderbook.OrderRejectReason} code explaining
+     *                     WHY a REJECTED (or reason-carrying CANCELLED) status fired;
+     *                     {@code OrderRejectReason.NONE} (0) on non-reject statuses. Carried on the
+     *                     order-status egress from SBE v6 (match#75) so the OMS/UI can surface it.
      * @return true if accepted by the sink, false if the market is unknown
      */
     boolean publishOrderStatusUpdate(
@@ -46,5 +50,6 @@ public interface MatchEventSink {
             long filledQty,
             long orderPrice,
             boolean orderIsBuy,
-            long omsOrderId);
+            long omsOrderId,
+            int rejectReason);
 }

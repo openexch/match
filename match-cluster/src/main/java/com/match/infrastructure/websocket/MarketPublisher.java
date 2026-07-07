@@ -122,6 +122,7 @@ public class MarketPublisher implements MarketEventHandler {
         long timestamp;
         long omsOrderId;
         long statusSeq;
+        int rejectReason; // OrderRejectReason code (NONE=0 on non-rejects); carried on egress from SBE v6 (match#75)
     }
 
     // P1.2 (match#31): per-market monotonic sequence over OrderStatus events,
@@ -564,6 +565,7 @@ public class MarketPublisher implements MarketEventHandler {
         entry.timestamp = event.getTimestamp();
         entry.omsOrderId = event.getOmsOrderId();
         entry.statusSeq = seq;
+        entry.rejectReason = event.getRejectReason();
         orderStatusBuffer.add(entry);
     }
 
@@ -909,7 +911,8 @@ public class MarketPublisher implements MarketEventHandler {
                 .side(entry.isBuy ? OrderSide.BID : OrderSide.ASK)
                 .timestamp(entry.timestamp)
                 .omsOrderId(entry.omsOrderId)
-                .statusSeq(entry.statusSeq);
+                .statusSeq(entry.statusSeq)
+                .rejectReason((short) entry.rejectReason);
         }
 
         return MessageHeaderEncoder.ENCODED_LENGTH + orderStatusBatchEncoder.encodedLength();

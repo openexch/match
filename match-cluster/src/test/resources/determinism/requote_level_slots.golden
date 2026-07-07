@@ -1,142 +1,142 @@
-STATUS m=1 ts=1000 order=1 user=999 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=2 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=2 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=3 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=3 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=4 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=4 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=5 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=5 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=6 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=6 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=7 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=7 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=8 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=8 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=9 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=9 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=10 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=10 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=11 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=11 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=12 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=12 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=13 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=13 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=14 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=14 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=15 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=15 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=16 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=16 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=17 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=17 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=18 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=18 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=19 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=19 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=20 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=20 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=21 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=21 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=22 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=22 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=23 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=23 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=24 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=24 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=25 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=25 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=26 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=26 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=27 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=27 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=28 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=28 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=29 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=29 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=30 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=30 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=31 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=31 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=32 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=32 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=33 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=33 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=34 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=34 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=35 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=35 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=36 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=36 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=37 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=37 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=38 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=38 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=39 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=39 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=40 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=40 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=41 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=41 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=42 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=42 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=43 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=43 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=44 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=44 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=45 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=45 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=46 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=46 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=47 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=47 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=48 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=48 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=49 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=49 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=50 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=50 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=51 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=51 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=52 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=52 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=53 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=53 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=54 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=54 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=55 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=55 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=56 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=56 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=57 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=57 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=58 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=58 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=59 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=59 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=60 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=60 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=61 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=61 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=62 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=62 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=63 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=63 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=64 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=64 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=65 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=65 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=66 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=66 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=67 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=67 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=68 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=68 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=69 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=69 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=70 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=70 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=71 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=71 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0
-STATUS m=1 ts=1000 order=72 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0
+STATUS m=1 ts=1000 order=1 user=999 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=2 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=2 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=3 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=3 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=4 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=4 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=5 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=5 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=6 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=6 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=7 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=7 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=8 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=8 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=9 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=9 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=10 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=10 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=11 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=11 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=12 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=12 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=13 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=13 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=14 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=14 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=15 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=15 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=16 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=16 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=17 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=17 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=18 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=18 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=19 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=19 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=20 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=20 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=21 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=21 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=22 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=22 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=23 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=23 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=24 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=24 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=25 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=25 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=26 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=26 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=27 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=27 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=28 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=28 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=29 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=29 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=30 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=30 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=31 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=31 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=32 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=32 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=33 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=33 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=34 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=34 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=35 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=35 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=36 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=36 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=37 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=37 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=38 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=38 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=39 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=39 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=40 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=40 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=41 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=41 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=42 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=42 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=43 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=43 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=44 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=44 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=45 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=45 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=46 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=46 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=47 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=47 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=48 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=48 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=49 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=49 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=50 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=50 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=51 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=51 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=52 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=52 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=53 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=53 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=54 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=54 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=55 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=55 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=56 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=56 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=57 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=57 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=58 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=58 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=59 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=59 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=60 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=60 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=61 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=61 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=62 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=62 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=63 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=63 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=64 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=64 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=65 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=65 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=66 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=66 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=67 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=67 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=68 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=68 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=69 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=69 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=70 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=70 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=71 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=71 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
+STATUS m=1 ts=1000 order=72 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=1 oms=0 reason=NONE

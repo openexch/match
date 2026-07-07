@@ -39,9 +39,9 @@ public final class RecordingEventSink implements MatchEventSink {
     public boolean publishOrderStatusUpdate(
             int marketId, long timestamp, long orderId, long userId,
             int orderStatus, long remainingQty, long filledQty,
-            long orderPrice, boolean orderIsBuy, long omsOrderId) {
+            long orderPrice, boolean orderIsBuy, long omsOrderId, int rejectReason) {
         events.add(new EngineEvent.Status(marketId, timestamp, orderId, userId, orderStatus,
-                remainingQty, filledQty, orderPrice, orderIsBuy, omsOrderId));
+                remainingQty, filledQty, orderPrice, orderIsBuy, omsOrderId, rejectReason));
         return true;
     }
 
