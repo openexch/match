@@ -3,13 +3,17 @@ package com.match.infrastructure.gateway;
 
 import com.match.infrastructure.gateway.state.GatewayStateManager;
 import com.match.infrastructure.gateway.state.GatewayOrderBook;
+import com.match.infrastructure.websocket.MarketDataWebSocket;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.*;
 import io.netty.util.CharsetUtil;
 import org.junit.Before;
 import org.junit.Test;
+
+import java.util.Set;
 
 import static org.junit.Assert.*;
 
@@ -91,6 +95,61 @@ public class GatewayHttpHandlerTest {
         assertTrue(body.contains("\"bids\":[]"));
         assertTrue(body.contains("\"asks\":[]"));
         channel.finish();
+    }
+
+    /**
+     * match#98: the REST empty-book response must include the version fields
+     * (bidVersion/askVersion/version = 0) that a REST-bootstrapping client uses
+     * to seed its chain-continuity check, the same way the WS path already does.
+     */
+    @Test
+    public void testOrderBookEmptyIncludesVersionFields() {
+        EmbeddedChannel channel = createChannel();
+        FullHttpResponse response = sendRequest(channel, HttpMethod.GET, "/api/orderbook");
+        assertEquals(HttpResponseStatus.OK, response.status());
+        String body = getBody(response);
+        JsonObject json = JsonParser.parseString(body).getAsJsonObject();
+
+        assertTrue("bidVersion missing from empty-book REST response", json.has("bidVersion"));
+        assertTrue("askVersion missing from empty-book REST response", json.has("askVersion"));
+        assertTrue("version missing from empty-book REST response", json.has("version"));
+        assertEquals(0, json.get("bidVersion").getAsInt());
+        assertEquals(0, json.get("askVersion").getAsInt());
+        assertEquals(0, json.get("version").getAsInt());
+        channel.finish();
+    }
+
+    /**
+     * match#98: REST and WS must build the empty-book snapshot from the same shared
+     * method, so they can never drift apart again. Compares parsed JSON key-for-key
+     * (excluding "timestamp", which is independently stamped by each call with
+     * System.currentTimeMillis() and so may legitimately differ by a few millis).
+     */
+    @Test
+    public void testOrderBookEmptyMatchesWebSocketEmptySnapshotKeyForKey() {
+        EmbeddedChannel channel = createChannel();
+        FullHttpResponse response = sendRequest(channel, HttpMethod.GET, "/api/orderbook?marketId=2");
+        assertEquals(HttpResponseStatus.OK, response.status());
+        String restBody = getBody(response);
+        channel.finish();
+
+        String wsBody = MarketDataWebSocket.buildEmptyBookSnapshotJson(2);
+
+        JsonObject restJson = JsonParser.parseString(restBody).getAsJsonObject();
+        JsonObject wsJson = JsonParser.parseString(wsBody).getAsJsonObject();
+
+        Set<String> restKeys = restJson.keySet();
+        Set<String> wsKeys = wsJson.keySet();
+        assertEquals("REST and WS empty-book snapshots must expose the same fields", wsKeys, restKeys);
+
+        for (String key : wsKeys) {
+            if ("timestamp".equals(key)) {
+                assertTrue(restJson.get("timestamp").getAsJsonPrimitive().isNumber());
+                assertTrue(wsJson.get("timestamp").getAsJsonPrimitive().isNumber());
+                continue;
+            }
+            assertEquals("Mismatch for field \"" + key + "\"", wsJson.get(key), restJson.get(key));
+        }
     }
 
     @Test

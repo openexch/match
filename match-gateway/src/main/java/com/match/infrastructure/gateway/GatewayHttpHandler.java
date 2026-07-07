@@ -84,10 +84,12 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
         int marketId = parseQueryParam(uri, "marketId", 1); // Default to market 1 (BTC-USD)
         var book = stateManager.getOrderBook(marketId);
         if (book == null || !book.hasData()) {
-            // Return empty book structure for this market
-            String emptyJson = "{\"type\":\"BOOK_SNAPSHOT\",\"marketId\":" + marketId +
-                ",\"market\":\"UNKNOWN\",\"bids\":[],\"asks\":[],\"timestamp\":" +
-                System.currentTimeMillis() + "}";
+            // Empty book: shared builder (match#98) keeps this identical to the WS
+            // path's buildEmptyBookSnapshot, including bidVersion/askVersion/version = 0
+            // so a REST-bootstrapping client's chain-continuity check behaves the same
+            // as a WS-bootstrapped one.
+            String emptyJson = com.match.infrastructure.websocket.MarketDataWebSocket
+                .buildEmptyBookSnapshotJson(marketId);
             sendJson(ctx, emptyJson);
             return;
         }
