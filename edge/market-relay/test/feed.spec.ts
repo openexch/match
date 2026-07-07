@@ -236,3 +236,17 @@ describe('health surface', () => {
     expect(body.markets['1'].market).toBe('BTC-USD');
   });
 });
+
+describe('publisher displacement', () => {
+  it('a new publisher closes the previous one', async () => {
+    const pub1 = await connectPublisher();
+    const closed = new Promise<number>((res) => pub1.addEventListener('close', (e) => res((e as CloseEvent).code)));
+    const pub2 = await connectPublisher();
+    expect(await closed).toBe(1000);
+    pub2.send(bundle(SNAP_1));
+    await sleep(50);
+    const res = await SELF.fetch('https://relay.test/healthz');
+    const body = (await res.json()) as { publishers: number };
+    expect(body.publishers).toBe(1);
+  });
+});

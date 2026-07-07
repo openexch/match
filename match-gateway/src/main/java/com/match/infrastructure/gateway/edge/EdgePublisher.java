@@ -15,6 +15,7 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketClientProtocolConfig;
 import io.netty.handler.codec.http.websocketx.WebSocketClientProtocolHandler;
@@ -22,6 +23,9 @@ import io.netty.handler.codec.http.websocketx.WebSocketClientProtocolHandler.Cli
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.timeout.IdleState;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.handler.timeout.IdleStateHandler;
 
 import java.net.URI;
 import java.nio.file.Files;
@@ -60,6 +64,14 @@ public final class EdgePublisher implements AutoCloseable {
     private static final long RECONNECT_MIN_MS = 1_000;
     private static final long RECONNECT_MAX_MS = 30_000;
     private static final long STATS_INTERVAL_MS = 60_000;
+    // Liveness watchdog (learned live 2026-07-07: a Worker redeploy severed
+    // the socket without a TCP close; the publisher kept queueing into a
+    // half-open connection for minutes and the public feed froze). We ping
+    // every PING_INTERVAL_S; the edge answers pongs even while the DO
+    // hibernates. READ_IDLE_S of silence means the connection is dead:
+    // close it, which triggers the normal reconnect path.
+    private static final int PING_INTERVAL_S = 10;
+    private static final int READ_IDLE_S = 30;
 
     // Surfaced in logs; same pattern as MarketDataWebSocket's counters.
     public final AtomicLong published = new AtomicLong();
@@ -135,6 +147,15 @@ public final class EdgePublisher implements AutoCloseable {
         connect();
         group.scheduleAtFixedRate(this::enqueueCacheBundles, bundleIntervalMs, bundleIntervalMs, TimeUnit.MILLISECONDS);
         group.scheduleAtFixedRate(this::logStats, STATS_INTERVAL_MS, STATS_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        // Fixed-schedule liveness pings (NOT write-idle-driven: a busy
+        // publisher never goes write-idle, yet reads nothing on a healthy
+        // connection unless something solicits pongs).
+        group.scheduleAtFixedRate(() -> {
+            Channel ch = channel;
+            if (ch != null && handshaken) {
+                ch.writeAndFlush(new PingWebSocketFrame());
+            }
+        }, PING_INTERVAL_S, PING_INTERVAL_S, TimeUnit.SECONDS);
     }
 
     /**
@@ -191,6 +212,7 @@ public final class EdgePublisher implements AutoCloseable {
                     }
                     p.addLast(new HttpClientCodec());
                     p.addLast(new HttpObjectAggregator(65536));
+                    p.addLast(new IdleStateHandler(READ_IDLE_S, 0, 0));
                     p.addLast(wsHandler);
                     p.addLast(new EdgeHandler());
                 }
@@ -225,6 +247,14 @@ public final class EdgePublisher implements AutoCloseable {
                 System.out.println("[EDGE] Connected to " + uri.getHost());
                 enqueueCacheBundles(); // seed the relay immediately
                 scheduleDrain();
+                return;
+            }
+            if (evt instanceof IdleStateEvent idle && idle.state() == IdleState.READER_IDLE) {
+                // Pings go out on a fixed schedule (start()), so a healthy
+                // connection reads a pong at least every PING_INTERVAL_S.
+                // Silence this long means the pipe is dead.
+                System.err.println("[EDGE] No pong/read for " + READ_IDLE_S + "s — connection is dead, reconnecting");
+                ctx.close(); // channelInactive triggers the reconnect
             }
         }
 
