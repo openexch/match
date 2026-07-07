@@ -305,6 +305,28 @@ public class MarketDataWebSocket implements AutoCloseable {
         return 0;
     }
 
+    /**
+     * Shared empty-book snapshot builder (match#98): the single source of truth for
+     * both the WS getOrderBook/sendInitialState paths (below) and the REST
+     * GatewayHttpHandler.handleOrderBook path, so they can never drift apart again.
+     * Version fields are 0 (no deltas have ever applied to this market yet) so a
+     * REST-bootstrapping client's chain-continuity check behaves the same as a
+     * WS-bootstrapped one instead of comparing against undefined.
+     */
+    public static String buildEmptyBookSnapshotJson(int marketId) {
+        Map<String, Object> book = new HashMap<>();
+        book.put("type", "BOOK_SNAPSHOT");
+        book.put("marketId", marketId);
+        book.put("market", MARKET_NAMES.getOrDefault(marketId, "UNKNOWN"));
+        book.put("timestamp", System.currentTimeMillis());
+        book.put("bidVersion", 0);
+        book.put("askVersion", 0);
+        book.put("version", 0);
+        book.put("bids", new ArrayList<>());
+        book.put("asks", new ArrayList<>());
+        return gson.toJson(book);
+    }
+
     // ==================== WebSocket Handler ====================
 
     @ChannelHandler.Sharable
@@ -555,17 +577,7 @@ public class MarketDataWebSocket implements AutoCloseable {
         }
 
         private String buildEmptyBookSnapshot(int marketId) {
-            Map<String, Object> book = new HashMap<>();
-            book.put("type", "BOOK_SNAPSHOT");
-            book.put("marketId", marketId);
-            book.put("market", MARKET_NAMES.getOrDefault(marketId, "UNKNOWN"));
-            book.put("timestamp", System.currentTimeMillis());
-            book.put("bidVersion", 0);
-            book.put("askVersion", 0);
-            book.put("version", 0);
-            book.put("bids", new ArrayList<>());
-            book.put("asks", new ArrayList<>());
-            return gson.toJson(book);
+            return MarketDataWebSocket.buildEmptyBookSnapshotJson(marketId);
         }
 
         @Override

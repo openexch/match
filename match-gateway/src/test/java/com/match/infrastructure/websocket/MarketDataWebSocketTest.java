@@ -4,10 +4,14 @@ package com.match.infrastructure.websocket;
 import com.match.infrastructure.gateway.state.GatewayStateManager;
 import com.match.infrastructure.generated.*;
 import com.match.domain.FixedPoint;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.agrona.ExpandableDirectByteBuffer;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+
+import java.util.Set;
 
 import static org.junit.Assert.*;
 
@@ -199,5 +203,42 @@ public class MarketDataWebSocketTest {
 
         // Verify delta was applied
         assertEquals(1, stateManager.getOrderBook(1).getAskCount());
+    }
+
+    // ==================== buildEmptyBookSnapshotJson (match#98) ====================
+
+    /**
+     * Regression: buildEmptyBookSnapshotJson is the shared builder now used by both the
+     * WS getOrderBook/sendInitialState paths and the REST GatewayHttpHandler.handleOrderBook
+     * path (match#98). Pins the exact field set/values it produced before the extraction so
+     * existing WS clients see no behavior change.
+     */
+    @Test
+    public void testBuildEmptyBookSnapshotJson_Shape() {
+        String json = MarketDataWebSocket.buildEmptyBookSnapshotJson(1);
+        JsonObject parsed = JsonParser.parseString(json).getAsJsonObject();
+
+        Set<String> expectedKeys = Set.of(
+            "type", "marketId", "market", "timestamp",
+            "bidVersion", "askVersion", "version", "bids", "asks");
+        assertEquals(expectedKeys, parsed.keySet());
+
+        assertEquals("BOOK_SNAPSHOT", parsed.get("type").getAsString());
+        assertEquals(1, parsed.get("marketId").getAsInt());
+        assertEquals("BTC-USD", parsed.get("market").getAsString());
+        assertTrue(parsed.get("timestamp").getAsJsonPrimitive().isNumber());
+        assertEquals(0, parsed.get("bidVersion").getAsInt());
+        assertEquals(0, parsed.get("askVersion").getAsInt());
+        assertEquals(0, parsed.get("version").getAsInt());
+        assertTrue(parsed.get("bids").getAsJsonArray().isEmpty());
+        assertTrue(parsed.get("asks").getAsJsonArray().isEmpty());
+    }
+
+    @Test
+    public void testBuildEmptyBookSnapshotJson_UnknownMarketFallsBackToUNKNOWN() {
+        String json = MarketDataWebSocket.buildEmptyBookSnapshotJson(999);
+        JsonObject parsed = JsonParser.parseString(json).getAsJsonObject();
+        assertEquals("UNKNOWN", parsed.get("market").getAsString());
+        assertEquals(999, parsed.get("marketId").getAsInt());
     }
 }
