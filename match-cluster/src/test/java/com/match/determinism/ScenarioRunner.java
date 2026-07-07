@@ -35,7 +35,7 @@ import java.util.Map;
  *   CLOCK 1000                             set absolute logical timestamp
  *   CREATE u=100 side=BID type=LIMIT px=60000.0 qty=1.0 [budget=..] [oms=..]
  *   CANCEL u=100 order=1
- *   UPDATE u=100 order=1 side=BID px=61000.0 qty=2.0
+ *   UPDATE u=100 order=1 side=BID px=61000.0 qty=2.0 [type=LIMIT|LIMIT_MAKER]  (default LIMIT)
  *   SNAPSHOT                               serialize → restore into a fresh engine
  * </pre>
  */
@@ -168,6 +168,9 @@ public final class ScenarioRunner {
         cmd.setUserId(reqLong(kv, "u"));
         cmd.setOrderId(reqLong(kv, "order"));
         cmd.setOrderSide(side(req(kv, "side")));
+        // Optional order type on the amend, matching CREATE's type= (default LIMIT = prior behavior).
+        // LIMIT_MAKER routes the replacement through the post-only no-cross path (match#92).
+        cmd.setOrderType(type(kv.getOrDefault("type", "LIMIT")));
         cmd.setPrice(FixedPoint.fromDouble(reqDouble(kv, "px")));
         cmd.setQuantity(FixedPoint.fromDouble(reqDouble(kv, "qty")));
         return cmd;
