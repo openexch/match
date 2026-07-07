@@ -1,0 +1,22 @@
+// Market data edge relay: the gateway publishes each frame ONCE over an
+// outbound WebSocket; a Durable Object fans it out to every viewer at the
+// edge. Cuts origin upload from O(viewers) to O(1).
+//
+// Rollout: deployed on workers.dev first; the production cutover is the
+// `routes` entry below (market.openexch.io/ws*), which intercepts ONLY the
+// WebSocket path. REST (/api/candles etc.) keeps flowing through the
+// cloudflared tunnel untouched. Rollback = remove the route and redeploy.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "market-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-10-11",
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "name": "FEED", "class_name": "MarketFeed" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MarketFeed"] }]
+  // Production route, enabled at cutover:
+  // "routes": [{ "pattern": "market.openexch.io/ws*", "zone_name": "openexch.io" }]
+}

@@ -105,6 +105,14 @@ public class MarketDataWebSocket implements AutoCloseable {
         this.aeronGateway = aeronGateway;
     }
 
+    // Optional edge fan-out (edge/market-relay): every broadcast frame is
+    // teed once to the relay, which serves the actual viewers.
+    private volatile com.match.infrastructure.gateway.edge.EdgePublisher edgePublisher;
+
+    public void setEdgePublisher(com.match.infrastructure.gateway.edge.EdgePublisher edgePublisher) {
+        this.edgePublisher = edgePublisher;
+    }
+
     public ChannelGroup getChannels() {
         return channels;
     }
@@ -152,6 +160,13 @@ public class MarketDataWebSocket implements AutoCloseable {
      * Parses marketId from JSON to filter recipients.
      */
     public void broadcastMarketData(String jsonMessage) {
+        // Tee to the edge relay BEFORE the local-viewer early-outs: the edge
+        // must stay fed even when nobody is connected directly.
+        com.match.infrastructure.gateway.edge.EdgePublisher edge = edgePublisher;
+        if (edge != null) {
+            edge.publish(jsonMessage);
+        }
+
         if (channels == null || channels.isEmpty()) {
             return;
         }
