@@ -4,6 +4,7 @@ import {
   RECENT_TRADES_CAP,
   emptyBookSnapshot,
   frameMarketId,
+  mergeRecentTrades,
   type Frame,
   type ViewerMessage,
 } from './protocol';
@@ -26,8 +27,11 @@ interface MarketState {
 
 /** BOOK_DELTAs since the cached snapshot, in arrival order. Replayed to a
  *  joining viewer after the snapshot so the version chain has no hole
- *  (the UI stitches: drops deltas <= snapshot version, verifies the rest). */
+ *  (the UI stitches: drops deltas <= snapshot version, verifies the rest).
+ *  `from` lets the relay detect a hole between the snapshot and the earliest
+ *  surviving delta (from > snapshotVersion) and serve snapshot-only instead. */
 interface DeltaEntry {
+  from: number;
   to: number;
   raw: string;
 }
@@ -166,8 +170,9 @@ export class MarketFeed extends DurableObject<Env> {
       }
       case 'BOOK_DELTA': {
         const to = frame.bookVersion ?? 0;
+        const from = frame.fromVersion ?? to - 1;
         const buf = this.deltas.get(marketId) ?? [];
-        buf.push({ to, raw: JSON.stringify(frame) });
+        buf.push({ from, to, raw: JSON.stringify(frame) });
         if (buf.length > DELTA_BUFFER_CAP) buf.shift();
         this.deltas.set(marketId, buf);
         return; // deltas are never persisted
@@ -180,9 +185,14 @@ export class MarketFeed extends DurableObject<Env> {
         break;
       case 'TRADES_BATCH': {
         if (!Array.isArray(frame.trades)) break;
-        // Bundles carry the gateway's authoritative recent tape: replace.
+        // A bundle carries the gateway's authoritative recent tape, but it is
+        // snapshotted on another thread and can land just AFTER a newer live
+        // trade was teed in: a wholesale replace would clobber that trade
+        // (match#99 item 4). Merge by trade key instead so the newest survives.
         // Live batches append (oldest-first order matches the ring buffer).
-        state.trades = bundle ? [...frame.trades] : [...state.trades, ...frame.trades];
+        state.trades = bundle
+          ? mergeRecentTrades(state.trades, frame.trades)
+          : [...state.trades, ...frame.trades];
         if (state.trades.length > RECENT_TRADES_CAP) {
           state.trades = state.trades.slice(state.trades.length - RECENT_TRADES_CAP);
         }
@@ -256,8 +266,40 @@ export class MarketFeed extends DurableObject<Env> {
 
   private sendBook(ws: WebSocket, marketId: number): void {
     const state = this.markets.get(marketId);
-    ws.send(state?.snapshot ?? emptyBookSnapshot(marketId, state?.market ?? ''));
+    if (!state?.snapshot) {
+      // Cold start: no REAL snapshot cached yet (match#99 item 3). Serve the
+      // empty synthetic book alone; never replay buffered deltas onto it — the
+      // UI's bookVersion===0 branch applies them blindly with no chain gate, so
+      // UPDATE/DELETE for pre-relay levels no-op and the book stays wrong with
+      // no resync ever firing. Wait for a real snapshot.
+      ws.send(emptyBookSnapshot(marketId, state?.market ?? ''));
+      return;
+    }
+    if (this.bufferHasGap(marketId, state.snapshotVersion)) {
+      // The earliest surviving delta does not chain from the snapshot: replaying
+      // it just makes the client re-refresh (match#99 items 1 & 2). Drop the
+      // known-gapped buffer and serve snapshot-only; the next clean bundle or a
+      // chaining live delta re-establishes the chain.
+      this.deltas.delete(marketId);
+      ws.send(state.snapshot);
+      return;
+    }
+    ws.send(state.snapshot);
     for (const d of this.deltas.get(marketId) ?? []) ws.send(d.raw);
+  }
+
+  /** True when the buffer holds a delta the client would keep (to >
+   *  snapshotVersion) whose `from` is past the snapshot, i.e. a hole the replay
+   *  can't bridge. Deltas already covered by the snapshot (to <= version) are
+   *  skipped: the client drops them, so they are not a gap. */
+  private bufferHasGap(marketId: number, snapshotVersion: number): boolean {
+    const buf = this.deltas.get(marketId);
+    if (!buf) return false;
+    for (const d of buf) {
+      if (d.to <= snapshotVersion) continue;
+      return d.from > snapshotVersion;
+    }
+    return false;
   }
 
   private sendTrades(ws: WebSocket, marketId: number): void {
