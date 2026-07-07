@@ -47,14 +47,16 @@ public sealed interface EngineEvent permits EngineEvent.Trade, EngineEvent.Statu
             long filledQty,
             long orderPrice,
             boolean orderIsBuy,
-            long omsOrderId) implements EngineEvent {
+            long omsOrderId,
+            int rejectReason) implements EngineEvent {
 
         @Override
         public String render() {
             return String.format(
-                    "STATUS m=%d ts=%d order=%d user=%d status=%s rem=%d filled=%d px=%d buy=%d oms=%d",
+                    "STATUS m=%d ts=%d order=%d user=%d status=%s rem=%d filled=%d px=%d buy=%d oms=%d reason=%s",
                     marketId, timestamp, orderId, userId, statusName(orderStatus), remainingQty,
-                    filledQty, orderPrice, orderIsBuy ? 1 : 0, omsOrderId);
+                    filledQty, orderPrice, orderIsBuy ? 1 : 0, omsOrderId,
+                    com.match.application.orderbook.OrderRejectReason.describe(rejectReason));
         }
     }
 

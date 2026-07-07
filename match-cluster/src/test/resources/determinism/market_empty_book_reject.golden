@@ -1,1 +1,1 @@
-STATUS m=1 ts=1000 order=1 user=200 status=REJECTED rem=0 filled=0 px=0 buy=1 oms=0
+STATUS m=1 ts=1000 order=1 user=200 status=REJECTED rem=0 filled=0 px=0 buy=1 oms=0 reason=NO_LIQUIDITY

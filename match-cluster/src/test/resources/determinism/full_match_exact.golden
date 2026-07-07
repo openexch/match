@@ -1,3 +1,3 @@
-STATUS m=1 ts=1000 order=1 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=0 oms=0
+STATUS m=1 ts=1000 order=1 user=100 status=NEW rem=100000000 filled=0 px=6000000000000 buy=0 oms=0 reason=NONE
 TRADE  m=1 ts=1000 tradeId=1 taker=2 takerUser=200 maker=1 makerUser=100 px=6000000000000 qty=100000000 takerBuy=1 takerOms=0 makerOms=0
-STATUS m=1 ts=1000 order=2 user=200 status=FILLED rem=0 filled=100000000 px=6000000000000 buy=1 oms=0
+STATUS m=1 ts=1000 order=2 user=200 status=FILLED rem=0 filled=100000000 px=6000000000000 buy=1 oms=0 reason=NONE

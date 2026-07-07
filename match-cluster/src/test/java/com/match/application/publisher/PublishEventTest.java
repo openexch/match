@@ -125,7 +125,7 @@ public class PublishEventTest {
 
     @Test
     public void setOrderStatusUpdateSetsAllFields() {
-        event.setOrderStatusUpdate(2, 7000L, 55L, 300L, OrderStatusType.NEW, 500L, 0L, 4000L, true, 0L);
+        event.setOrderStatusUpdate(2, 7000L, 55L, 300L, OrderStatusType.NEW, 500L, 0L, 4000L, true, 0L, 0);
 
         assertEquals(PublishEventType.ORDER_STATUS_UPDATE, event.getEventType());
         assertEquals(2, event.getMarketId());
@@ -141,7 +141,7 @@ public class PublishEventTest {
 
     @Test
     public void setOrderStatusUpdateSellSide() {
-        event.setOrderStatusUpdate(1, 8000L, 66L, 400L, OrderStatusType.FILLED, 0L, 1000L, 5000L, false, 0L);
+        event.setOrderStatusUpdate(1, 8000L, 66L, 400L, OrderStatusType.FILLED, 0L, 1000L, 5000L, false, 0L, 0);
 
         assertFalse(event.isOrderIsBuy());
         assertEquals(OrderStatusType.FILLED, event.getOrderStatus());
@@ -201,7 +201,7 @@ public class PublishEventTest {
 
     @Test
     public void clearAfterOrderStatusUpdate() {
-        event.setOrderStatusUpdate(1, 100L, 10L, 20L, OrderStatusType.CANCELLED, 0L, 500L, 3000L, true, 0L);
+        event.setOrderStatusUpdate(1, 100L, 10L, 20L, OrderStatusType.CANCELLED, 0L, 500L, 3000L, true, 0L, 0);
 
         event.clear();
 

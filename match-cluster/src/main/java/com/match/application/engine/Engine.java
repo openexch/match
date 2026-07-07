@@ -223,7 +223,7 @@ public class Engine {
                 logger.warn("Market order rejected: market={} userId={} isBuy={} reason={}",
                     marketId, userId, isBuy, OrderRejectReason.describe(OrderRejectReason.INVALID_QUANTITY));
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
-                    0, 0, price, isBuy, omsOrderId);
+                    0, 0, price, isBuy, omsOrderId, OrderRejectReason.INVALID_QUANTITY);
                 if (omsOrderId != 0) {
                     orderIdToOmsOrderId.remove(orderId);
                 }
@@ -241,7 +241,7 @@ public class Engine {
             if (matchCount == 0) {
                 // Market order with no matches — reject (no liquidity)
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
-                    0, 0, price, isBuy, omsOrderId);
+                    0, 0, price, isBuy, omsOrderId, OrderRejectReason.NO_LIQUIDITY);
             } else if (engine.wasMatchLimitReached()) {
                 // match#93: the per-order match cap truncated the sweep while crossing liquidity
                 // remained. This is a genuine PARTIAL, not a full fill — publish CANCELLED with the
@@ -251,11 +251,11 @@ public class Engine {
                 logger.warn("Market order capped mid-sweep (match#93): market={} orderId={} userId={} filled={}",
                     marketId, orderId, userId, filledQty);
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
-                    0, filledQty, price, isBuy, omsOrderId);
+                    0, filledQty, price, isBuy, omsOrderId, OrderRejectReason.MATCH_LIMIT);
             } else {
                 // Market orders otherwise fully execute (natural exhaustion — no remaining on book)
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.FILLED,
-                    0, filledQty, price, isBuy, omsOrderId);
+                    0, filledQty, price, isBuy, omsOrderId, OrderRejectReason.NONE);
             }
             // Clean up mapping for fully consumed market orders
             if (omsOrderId != 0) {
@@ -277,7 +277,7 @@ public class Engine {
                 logger.warn("Order rejected: market={} userId={} price={} reason={}",
                     marketId, userId, price, OrderRejectReason.describe(validity));
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
-                    quantity, 0, price, isBuy, omsOrderId);
+                    quantity, 0, price, isBuy, omsOrderId, validity);
                 if (omsOrderId != 0) {
                     orderIdToOmsOrderId.remove(orderId);
                 }
@@ -293,7 +293,7 @@ public class Engine {
             if (remainingQty == 0 && matchCount > 0) {
                 // Fully filled
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.FILLED,
-                    0, filledQty, price, isBuy, omsOrderId);
+                    0, filledQty, price, isBuy, omsOrderId, OrderRejectReason.NONE);
                 // Clean up mapping for fully filled orders
                 if (omsOrderId != 0) {
                     orderIdToOmsOrderId.remove(orderId);
@@ -305,11 +305,11 @@ public class Engine {
                     marketId, orderId, userId, price, OrderRejectReason.describe(restReason));
                 if (matchCount == 0) {
                     publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
-                        remainingQty, 0, price, isBuy, omsOrderId);
+                        remainingQty, 0, price, isBuy, omsOrderId, restReason);
                 } else {
-                    // Filled what it could; remainder cancelled (terminal)
+                    // Filled what it could; remainder cancelled (terminal) — carry the rest-fail reason
                     publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
-                        0, filledQty, price, isBuy, omsOrderId);
+                        0, filledQty, price, isBuy, omsOrderId, restReason);
                 }
                 if (omsOrderId != 0) {
                     orderIdToOmsOrderId.remove(orderId);
@@ -317,11 +317,11 @@ public class Engine {
             } else if (matchCount > 0 && remainingQty > 0) {
                 // Partially filled, rest on book — keep mapping for future maker matches
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.PARTIALLY_FILLED,
-                    remainingQty, filledQty, price, isBuy, omsOrderId);
+                    remainingQty, filledQty, price, isBuy, omsOrderId, OrderRejectReason.NONE);
             } else if (matchCount == 0 && remainingQty > 0) {
                 // No match, order added to book — keep mapping for future maker matches
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.NEW,
-                    remainingQty, 0, price, isBuy, omsOrderId);
+                    remainingQty, 0, price, isBuy, omsOrderId, OrderRejectReason.NONE);
             }
         } else if (type == OrderType.LIMIT_MAKER) {
             // Loud-limits: validate price before book checks
@@ -339,7 +339,7 @@ public class Engine {
                 logger.warn("LIMIT_MAKER rejected: market={} userId={} price={} reason={}",
                     marketId, userId, price, OrderRejectReason.describe(validity));
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
-                    quantity, 0, price, isBuy, omsOrderId);
+                    quantity, 0, price, isBuy, omsOrderId, validity);
                 if (omsOrderId != 0) {
                     orderIdToOmsOrderId.remove(orderId);
                 }
@@ -357,7 +357,7 @@ public class Engine {
                     logger.warn("LIMIT_MAKER could not rest: market={} orderId={} userId={} price={} reason={}",
                         marketId, orderId, userId, price, OrderRejectReason.describe(addResult));
                     publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
-                        quantity, 0, price, isBuy, omsOrderId);
+                        quantity, 0, price, isBuy, omsOrderId, addResult);
                     if (omsOrderId != 0) {
                         orderIdToOmsOrderId.remove(orderId);
                     }
@@ -365,11 +365,11 @@ public class Engine {
                 }
                 // Order added to book — keep mapping for future maker matches
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.NEW,
-                    quantity, 0, price, isBuy, omsOrderId);
+                    quantity, 0, price, isBuy, omsOrderId, OrderRejectReason.NONE);
             } else {
-                // Order would cross spread - rejected
+                // Order would cross spread - rejected (post-only guarantee)
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
-                    0, 0, price, isBuy, omsOrderId);
+                    0, 0, price, isBuy, omsOrderId, OrderRejectReason.WOULD_CROSS);
                 if (omsOrderId != 0) {
                     orderIdToOmsOrderId.remove(orderId);
                 }
@@ -506,7 +506,7 @@ public class Engine {
                 omsOrderId = 0;
             }
             publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
-                0, 0, 0, isBuy, omsOrderId);
+                0, 0, 0, isBuy, omsOrderId, OrderRejectReason.NONE);
         } else {
             // Order not in book (already cancelled/filled, or unknown). Emit a CANCELLED ack anyway
             // so a reconciling OMS (re-cancelling after a leader-switchover seam where the original
@@ -517,8 +517,9 @@ public class Engine {
             if (omsOrderId == -1) {
                 omsOrderId = 0;
             }
+            // Reconciliation ack (order already gone) is a successful CANCELLED, not a reject: NONE.
             publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
-                0, 0, 0, isBuy, omsOrderId);
+                0, 0, 0, isBuy, omsOrderId, OrderRejectReason.NONE);
         }
     }
 
@@ -556,7 +557,7 @@ public class Engine {
             logger.warn("Update rejected: market={} orderId={} userId={} newPrice={} reason={}",
                 marketId, oldOrderId, userId, newPrice, OrderRejectReason.describe(validity));
             publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.REJECTED,
-                0, 0, newPrice, isBuy, omsOrderId);
+                0, 0, newPrice, isBuy, omsOrderId, validity);
             return;
         }
 
@@ -571,7 +572,7 @@ public class Engine {
             logger.warn("LIMIT_MAKER amend rejected (would cross): market={} orderId={} userId={} newPrice={}",
                 marketId, oldOrderId, userId, newPrice);
             publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.REJECTED,
-                0, 0, newPrice, isBuy, omsOrderId);
+                0, 0, newPrice, isBuy, omsOrderId, OrderRejectReason.WOULD_CROSS);
             return;
         }
 
@@ -580,16 +581,16 @@ public class Engine {
         if (!cancelled) {
             // Order not found on expected side — reject the update
             publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.REJECTED,
-                0, 0, newPrice, isBuy, omsOrderId);
+                0, 0, newPrice, isBuy, omsOrderId, OrderRejectReason.ORDER_NOT_FOUND);
             return;
         }
 
         // Clean up old mapping
         orderIdToOmsOrderId.remove(oldOrderId);
 
-        // Publish cancel for old order
+        // Publish cancel for old order (the successful half of an accepted amend, not a reject)
         publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.CANCELLED,
-            0, 0, 0, isBuy, omsOrderId);
+            0, 0, 0, isBuy, omsOrderId, OrderRejectReason.NONE);
 
         // 2. Place new order with updated price/quantity
         long newOrderId = orderIdGenerator.getAndIncrement();
@@ -609,7 +610,7 @@ public class Engine {
                 logger.warn("LIMIT_MAKER amend could not rest: market={} orderId={} userId={} price={} reason={}",
                     marketId, newOrderId, userId, newPrice, OrderRejectReason.describe(addResult));
                 publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.REJECTED,
-                    newQuantity, 0, newPrice, isBuy, omsOrderId);
+                    newQuantity, 0, newPrice, isBuy, omsOrderId, addResult);
                 if (omsOrderId != 0) {
                     orderIdToOmsOrderId.remove(newOrderId);
                 }
@@ -617,7 +618,7 @@ public class Engine {
             }
             // Rested post-only — NEW for the full new quantity (nothing filled).
             publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.NEW,
-                newQuantity, 0, newPrice, isBuy, omsOrderId);
+                newQuantity, 0, newPrice, isBuy, omsOrderId, OrderRejectReason.NONE);
             return;
         }
 
@@ -630,7 +631,7 @@ public class Engine {
 
         if (remainingQty == 0 && matchCount > 0) {
             publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.FILLED,
-                0, filledQty, newPrice, isBuy, omsOrderId);
+                0, filledQty, newPrice, isBuy, omsOrderId, OrderRejectReason.NONE);
             if (omsOrderId != 0) {
                 orderIdToOmsOrderId.remove(newOrderId);
             }
@@ -640,34 +641,40 @@ public class Engine {
                 marketId, newOrderId, userId, newPrice, OrderRejectReason.describe(restReason));
             if (matchCount == 0) {
                 publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.REJECTED,
-                    remainingQty, 0, newPrice, isBuy, omsOrderId);
+                    remainingQty, 0, newPrice, isBuy, omsOrderId, restReason);
             } else {
                 publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.CANCELLED,
-                    0, filledQty, newPrice, isBuy, omsOrderId);
+                    0, filledQty, newPrice, isBuy, omsOrderId, restReason);
             }
             if (omsOrderId != 0) {
                 orderIdToOmsOrderId.remove(newOrderId);
             }
         } else if (matchCount > 0 && remainingQty > 0) {
             publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.PARTIALLY_FILLED,
-                remainingQty, filledQty, newPrice, isBuy, omsOrderId);
+                remainingQty, filledQty, newPrice, isBuy, omsOrderId, OrderRejectReason.NONE);
         } else {
             publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.NEW,
-                remainingQty, 0, newPrice, isBuy, omsOrderId);
+                remainingQty, 0, newPrice, isBuy, omsOrderId, OrderRejectReason.NONE);
         }
     }
 
     /**
      * Publish order status update.
+     *
+     * @param rejectReason raw {@link OrderRejectReason} code explaining a REJECTED (or a
+     *                     reason-carrying CANCELLED) status; {@link OrderRejectReason#NONE} on
+     *                     accepted statuses (NEW / PARTIALLY_FILLED / FILLED / plain CANCELLED).
+     *                     Carried on the order-status egress from SBE v6 (match#75).
      */
     private void publishOrderStatus(int marketId, long timestamp, long orderId, long userId,
-            int orderStatus, long remainingQty, long filledQty, long orderPrice, boolean isBuy, long omsOrderId) {
+            int orderStatus, long remainingQty, long filledQty, long orderPrice, boolean isBuy, long omsOrderId,
+            int rejectReason) {
         if (eventPublisher == null) {
             return;
         }
         eventPublisher.publishOrderStatusUpdate(
             marketId, timestamp, orderId, userId,
-            orderStatus, remainingQty, filledQty, orderPrice, isBuy, omsOrderId
+            orderStatus, remainingQty, filledQty, orderPrice, isBuy, omsOrderId, rejectReason
         );
     }
 

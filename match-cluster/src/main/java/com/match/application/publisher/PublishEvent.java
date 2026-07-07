@@ -59,6 +59,7 @@ public class PublishEvent {
     private long orderPrice;      // Original order price
     private boolean orderIsBuy;
     private long omsOrderId;      // OMS correlation ID
+    private int rejectReason;     // OrderRejectReason code (NONE=0 on non-rejects); match#75
 
     // Padding to avoid false sharing (occupy full cache line)
     @SuppressWarnings("unused")
@@ -97,6 +98,7 @@ public class PublishEvent {
         orderPrice = 0;
         orderIsBuy = false;
         omsOrderId = 0;
+        rejectReason = 0;
     }
 
     // === Setters for Trade Execution ===
@@ -199,7 +201,8 @@ public class PublishEvent {
             long filledQty,
             long orderPrice,
             boolean orderIsBuy,
-            long omsOrderId) {
+            long omsOrderId,
+            int rejectReason) {
         this.eventType = PublishEventType.ORDER_STATUS_UPDATE;
         this.marketId = marketId;
         this.timestamp = timestamp;
@@ -211,6 +214,7 @@ public class PublishEvent {
         this.orderPrice = orderPrice;
         this.orderIsBuy = orderIsBuy;
         this.omsOrderId = omsOrderId;
+        this.rejectReason = rejectReason;
     }
 
     // === Getters (all inline for JIT optimization) ===
@@ -257,4 +261,5 @@ public class PublishEvent {
     public long getOrderPrice() { return orderPrice; }
     public boolean isOrderIsBuy() { return orderIsBuy; }
     public long getOmsOrderId() { return omsOrderId; }
+    public int getRejectReason() { return rejectReason; }
 }

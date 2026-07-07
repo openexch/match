@@ -1,2 +1,2 @@
-STATUS m=1 ts=1000 order=1 user=100 status=REJECTED rem=100000000 filled=0 px=6000050000000 buy=1 oms=0
-STATUS m=1 ts=1000 order=2 user=101 status=REJECTED rem=100000000 filled=0 px=20000000000000 buy=1 oms=0
+STATUS m=1 ts=1000 order=1 user=100 status=REJECTED rem=100000000 filled=0 px=6000050000000 buy=1 oms=0 reason=PRICE_OFF_TICK
+STATUS m=1 ts=1000 order=2 user=101 status=REJECTED rem=100000000 filled=0 px=20000000000000 buy=1 oms=0 reason=PRICE_OUT_OF_RANGE

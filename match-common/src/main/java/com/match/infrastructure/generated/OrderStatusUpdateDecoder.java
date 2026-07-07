@@ -10,10 +10,10 @@ import org.agrona.DirectBuffer;
 @SuppressWarnings("all")
 public final class OrderStatusUpdateDecoder
 {
-    public static final int BLOCK_LENGTH = 62;
+    public static final int BLOCK_LENGTH = 63;
     public static final int TEMPLATE_ID = 5;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 5;
+    public static final int SCHEMA_VERSION = 6;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -622,6 +622,62 @@ public final class OrderStatusUpdateDecoder
     }
 
 
+    public static int rejectReasonId()
+    {
+        return 11;
+    }
+
+    public static int rejectReasonSinceVersion()
+    {
+        return 6;
+    }
+
+    public static int rejectReasonEncodingOffset()
+    {
+        return 62;
+    }
+
+    public static int rejectReasonEncodingLength()
+    {
+        return 1;
+    }
+
+    public static String rejectReasonMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "optional";
+        }
+
+        return "";
+    }
+
+    public static short rejectReasonNullValue()
+    {
+        return (short)255;
+    }
+
+    public static short rejectReasonMinValue()
+    {
+        return (short)0;
+    }
+
+    public static short rejectReasonMaxValue()
+    {
+        return (short)254;
+    }
+
+    public short rejectReason()
+    {
+        if (parentMessage.actingVersion < 6)
+        {
+            return (short)255;
+        }
+
+        return ((short)(buffer.getByte(offset + 62) & 0xFF));
+    }
+
+
     public String toString()
     {
         if (null == buffer)
@@ -692,6 +748,9 @@ public final class OrderStatusUpdateDecoder
         builder.append('|');
         builder.append("omsOrderId=");
         builder.append(this.omsOrderId());
+        builder.append('|');
+        builder.append("rejectReason=");
+        builder.append(this.rejectReason());
 
         limit(originalLimit);
 

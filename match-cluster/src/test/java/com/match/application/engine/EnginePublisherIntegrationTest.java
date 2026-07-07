@@ -441,6 +441,81 @@ public class EnginePublisherIntegrationTest {
             engine.getEngine(MARKET_ID).isBidEmpty());
     }
 
+    // ==================== match#75: reject reason carried through the publish chain ====================
+    // These assert the reason the engine hands to the sink (PublishEvent.getRejectReason()), which is
+    // the exact byte MarketPublisher.encodeOrderStatusBatch writes to the SBE wire. The SBE encode/decode
+    // + mixed-version survival is covered by MarketPublisherOrderStatusReasonTest.
+
+    private CapturedEvent firstStatus() {
+        List<CapturedEvent> statuses = findByType(PublishEventType.ORDER_STATUS_UPDATE);
+        assertFalse("Should have order status", statuses.isEmpty());
+        return statuses.get(0);
+    }
+
+    @Test
+    public void offTickRejectCarriesPriceOffTickReason() throws Exception {
+        // BTC tick is $1; $60,000.50 is off-tick -> REJECTED with PRICE_OFF_TICK on the wire.
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(100L, OrderSide.BID, 60_000.50, 1.0), System.nanoTime());
+        waitForEvents();
+
+        CapturedEvent s = firstStatus();
+        assertEquals(OrderStatusType.REJECTED, s.orderStatus);
+        assertEquals("Off-tick reject must carry PRICE_OFF_TICK",
+            com.match.application.orderbook.OrderRejectReason.PRICE_OFF_TICK, s.rejectReason);
+    }
+
+    @Test
+    public void outOfRangeRejectCarriesPriceOutOfRangeReason() throws Exception {
+        // BTC range is $50K-$150K; $200K is out of range.
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(100L, OrderSide.BID, 200_000.0, 1.0), System.nanoTime());
+        waitForEvents();
+
+        CapturedEvent s = firstStatus();
+        assertEquals(OrderStatusType.REJECTED, s.orderStatus);
+        assertEquals("Out-of-range reject must carry PRICE_OUT_OF_RANGE",
+            com.match.application.orderbook.OrderRejectReason.PRICE_OUT_OF_RANGE, s.rejectReason);
+    }
+
+    @Test
+    public void limitMakerWouldCrossCarriesWouldCrossReason() throws Exception {
+        // Resting ask at 60000; a LIMIT_MAKER bid at 60000 would cross -> REJECTED with WOULD_CROSS.
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(100L, OrderSide.ASK, 60000.0, 1.0), System.nanoTime());
+        waitForEvents();
+        handler.events.clear();
+
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitMakerCmd(200L, OrderSide.BID, 60000.0, 1.0), System.nanoTime());
+        waitForEvents();
+
+        CapturedEvent s = firstStatus();
+        assertEquals(OrderStatusType.REJECTED, s.orderStatus);
+        assertEquals("Post-only would-cross reject must carry WOULD_CROSS",
+            com.match.application.orderbook.OrderRejectReason.WOULD_CROSS, s.rejectReason);
+    }
+
+    @Test
+    public void marketOrderNoLiquidityCarriesNoLiquidityReason() throws Exception {
+        // Market buy on an empty book -> REJECTED with NO_LIQUIDITY.
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, marketBuyCmd(200L, 60000.0), System.nanoTime());
+        waitForEvents();
+
+        CapturedEvent s = firstStatus();
+        assertEquals(OrderStatusType.REJECTED, s.orderStatus);
+        assertEquals("Market no-liquidity reject must carry NO_LIQUIDITY",
+            com.match.application.orderbook.OrderRejectReason.NO_LIQUIDITY, s.rejectReason);
+    }
+
+    @Test
+    public void acceptedStatusCarriesNoneReason() throws Exception {
+        // A plain resting NEW is not a reject: reason must be NONE (0), not a stale code.
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(100L, OrderSide.BID, 60000.0, 1.0), System.nanoTime());
+        waitForEvents();
+
+        CapturedEvent s = firstStatus();
+        assertEquals(OrderStatusType.NEW, s.orderStatus);
+        assertEquals("Accepted NEW must carry NONE",
+            com.match.application.orderbook.OrderRejectReason.NONE, s.rejectReason);
+    }
+
     @Test
     public void engineWithoutPublisherDoesNotCrash() {
         // Create a fresh engine without publisher
@@ -461,6 +536,7 @@ public class EnginePublisherIntegrationTest {
         int orderStatus;
         long orderId;
         long userId;
+        int rejectReason;
     }
 
     private static class CapturingHandler implements MarketEventHandler {
@@ -483,6 +559,7 @@ public class EnginePublisherIntegrationTest {
             copy.orderStatus = event.getOrderStatus();
             copy.orderId = event.getOrderId();
             copy.userId = event.getUserId();
+            copy.rejectReason = event.getRejectReason();
             events.add(copy);
         }
 

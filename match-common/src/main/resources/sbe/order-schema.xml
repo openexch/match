@@ -2,7 +2,7 @@
 <sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
                    package="com.match.infrastructure.generated"
                    id="1"
-                   version="5"
+                   version="6"
                    semanticVersion="5.2"
                    description="Match Order Schema - Optimized for Ultra-Low Latency"
 >
@@ -44,6 +44,13 @@
             <type name="blockLength" primitiveType="uint16"/>
             <type name="numInGroup" primitiveType="uint16"/>
         </composite>
+        <!-- Order reject/terminal reason code carried on order-status egress (SBE v6, match#75).
+             Raw OrderRejectReason value (0=NONE on non-rejects; PRICE_OFF_TICK, PRICE_OUT_OF_RANGE,
+             OVERFLOW, INVALID_QUANTITY, MATCH_LIMIT, LEVEL_FULL, BOOK_FULL, WOULD_CROSS,
+             NO_LIQUIDITY, ORDER_NOT_FOUND on rejects/terminals). presence="optional" with
+             nullValue=255 so a pre-v6 stream decodes as 255 = "unknown / upstream too old to say";
+             callers (OMS) map 255 to null. Codes never reach 255, so null is unambiguous. -->
+        <type name="RejectReasonCode" primitiveType="uint8" presence="optional" nullValue="255"/>
     </types>
 
     <!-- Optimized: All numeric fields, no string parsing -->
@@ -104,6 +111,10 @@
         <field name="status" id="8" type="OrderStatus"/>
         <field name="timestamp" id="9" type="int64"/>
         <field name="omsOrderId" id="10" type="int64"/>
+        <!-- match#75: engine reject/terminal reason. Message TAIL extension (sinceVersion=6):
+             old peers skip it via the message blockLength; new peers reading a v5 stream get
+             nullValue 255 (unknown). 0 = NONE on non-rejects. -->
+        <field name="rejectReason" id="11" type="RejectReasonCode" sinceVersion="6"/>
     </sbe:message>
 
     <!-- Order Book Update - Published for level changes -->
@@ -215,6 +226,12 @@
                  reconnect). sinceVersion=3: old peers ignore, new peers reading
                  old streams get the null value. -->
             <field name="statusSeq" id="11" type="int64" sinceVersion="3"/>
+            <!-- match#75: engine reject/terminal reason, per-order. Group TAIL extension
+                 (sinceVersion=6): old peers skip it via the on-wire group blockLength
+                 (groupSizeEncoding), new peers reading a pre-v6 stream get nullValue 255
+                 (unknown). Same mixed-version pattern as statusSeq (v3) and TradesBatch.takerSide
+                 (v5). 0 = NONE on non-rejects. -->
+            <field name="rejectReason" id="12" type="RejectReasonCode" sinceVersion="6"/>
         </group>
     </sbe:message>
 

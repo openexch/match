@@ -280,7 +280,8 @@ public class MatchEventPublisher implements MatchEventSink {
             long filledQty,
             long orderPrice,
             boolean orderIsBuy,
-            long omsOrderId) {
+            long omsOrderId,
+            int rejectReason) {
 
         RingBuffer<PublishEvent> ringBuffer = ringBuffers.get(marketId);
         if (ringBuffer == null) {
@@ -299,7 +300,7 @@ public class MatchEventPublisher implements MatchEventSink {
                 orderId, userId, orderStatus,
                 remainingQty, filledQty,
                 orderPrice, orderIsBuy,
-                omsOrderId
+                omsOrderId, rejectReason
             );
         } finally {
             ringBuffer.publish(sequence);

@@ -219,7 +219,7 @@ public class MatchEventPublisherTest {
         publisher.start();
 
         boolean result = publisher.publishOrderStatusUpdate(
-            MARKET_ID, 4000L, 55L, 300L, OrderStatusType.NEW, 500L, 0L, 4000L, true, 0L);
+            MARKET_ID, 4000L, 55L, 300L, OrderStatusType.NEW, 500L, 0L, 4000L, true, 0L, 0);
 
         assertTrue(result);
         Thread.sleep(200);
@@ -234,7 +234,7 @@ public class MatchEventPublisherTest {
     public void publishOrderStatusUpdateUnknownMarketReturnsFalse() {
         publisher.start();
         boolean result = publisher.publishOrderStatusUpdate(
-            999, 100L, 1L, 1L, OrderStatusType.NEW, 100L, 0L, 50L, true, 0L);
+            999, 100L, 1L, 1L, OrderStatusType.NEW, 100L, 0L, 50L, true, 0L, 0);
         assertFalse(result);
     }
 
@@ -246,7 +246,7 @@ public class MatchEventPublisherTest {
 
         publisher.publishTradeExecution(MARKET_ID, 100L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L);
         publisher.publishOrderBookLevelUpdate(MARKET_ID, 200L, 60L, 20L, 3, false);
-        publisher.publishOrderStatusUpdate(MARKET_ID, 300L, 1L, 1L, OrderStatusType.FILLED, 0L, 10L, 50L, true, 0L);
+        publisher.publishOrderStatusUpdate(MARKET_ID, 300L, 1L, 1L, OrderStatusType.FILLED, 0L, 10L, 50L, true, 0L, 0);
 
         Thread.sleep(200);
 

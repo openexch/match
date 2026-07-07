@@ -45,6 +45,29 @@ public final class OrderRejectReason {
      * (CANCELLED with the true filled quantity) instead of {@code addOrder}.
      */
     public static final int MATCH_LIMIT = 7;
+    /**
+     * A post-only order (LIMIT_MAKER) would have crossed the opposite best and executed as a taker,
+     * violating its maker-only guarantee (match#92). The engine already had this reason "in hand" as
+     * a would-cross REJECTED status but carried no code for it; assigned here so the wire (SBE v6,
+     * match#75) can surface WHY a post-only order was rejected. Fires on both the LIMIT_MAKER create
+     * branch and the LIMIT_MAKER amend branch.
+     */
+    public static final int WOULD_CROSS = 8;
+    /**
+     * A MARKET order found no crossing liquidity (empty opposite book): it matched nothing, so there
+     * is nothing to fill and nothing to rest (market orders never rest). Distinct from
+     * INVALID_QUANTITY (which is a garbage-size reject before the sweep even starts); NO_LIQUIDITY is
+     * a well-formed market order that simply had no counterparties. Carried on the REJECTED egress
+     * (SBE v6, match#75) so a user sees "no liquidity" rather than a bare, reasonless reject.
+     */
+    public static final int NO_LIQUIDITY = 9;
+    /**
+     * A CANCEL/UPDATE referenced an order that is not resting on the book (already filled/cancelled,
+     * or never existed). For an UPDATE (cancel-and-replace) this rejects the amend and leaves nothing
+     * changed. A distinct code (SBE v6, match#75) so the wire distinguishes "your order is gone" from
+     * a validity or crossing reject.
+     */
+    public static final int ORDER_NOT_FOUND = 10;
 
     private OrderRejectReason() {} // Constants only
 
@@ -58,6 +81,9 @@ public final class OrderRejectReason {
             case OVERFLOW: return "OVERFLOW";
             case INVALID_QUANTITY: return "INVALID_QUANTITY";
             case MATCH_LIMIT: return "MATCH_LIMIT";
+            case WOULD_CROSS: return "WOULD_CROSS";
+            case NO_LIQUIDITY: return "NO_LIQUIDITY";
+            case ORDER_NOT_FOUND: return "ORDER_NOT_FOUND";
             default: return "UNKNOWN(" + reason + ")";
         }
     }
