@@ -127,6 +127,15 @@ public class GatewayOrderBook {
         return version;
     }
 
+    /** Per-side versions, for chain-break diagnostics. */
+    public long getBidVersion() {
+        return bidVersion;
+    }
+
+    public long getAskVersion() {
+        return askVersion;
+    }
+
     /**
      * True if an incoming BookDelta is stale or a duplicate — it advances NEITHER side beyond what
      * has already been applied (bidVersion/askVersion are strictly monotonic per side, sourced from
