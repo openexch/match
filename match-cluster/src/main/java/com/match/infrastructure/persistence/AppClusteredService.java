@@ -55,6 +55,18 @@ public class AppClusteredService implements ClusteredService {
     // protocol-level keep-alive (never enters the Raft log) — NOT by this.
     private static final long EGRESS_KEEP_WARM_INTERVAL_MS = 1_000;
     private volatile long lastEgressSendMs = 0;
+
+    // Periodic full-book resnapshot: the lossy market-data egress can shed a
+    // delta under burst (drop-oldest byte budget), after which the gateway's
+    // chain-continuity gate (match#96) rightly stops applying deltas and marks
+    // the book stale. Recovery REQUIRES a fresh BOOK_SNAPSHOT, but snapshots
+    // were only generated on session open, so a mid-session break froze the
+    // book forever (observed live 2026-07-08: sim resume burst -> 5/5 books
+    // stale). Bumping the resnapshot generation periodically bounds staleness
+    // at this interval; the gateway drops equal-version snapshots (match#95),
+    // so steady-state cost is a handful of small frames per market.
+    private static final long PERIODIC_RESNAPSHOT_INTERVAL_MS = 10_000;
+    private long lastPeriodicResnapshotMs = 0;
     private final MessageHeaderEncoder keepWarmHeaderEncoder = new MessageHeaderEncoder();
     private final ClusterHeartbeatEncoder keepWarmEncoder = new ClusterHeartbeatEncoder();
     private final UnsafeBuffer keepWarmBuffer = new UnsafeBuffer(
@@ -496,6 +508,15 @@ public class AppClusteredService implements ClusteredService {
                     && !clientSessions.getAllSessions().isEmpty()) {
                 sendEgressKeepWarm();
                 lastEgressSendMs = now;
+            }
+
+            // Periodic resnapshot (see PERIODIC_RESNAPSHOT_INTERVAL_MS): bounds how
+            // long a consumer whose delta chain broke can stay stale. Egress-side
+            // only (the generation counter never enters replicated state).
+            if (now - lastPeriodicResnapshotMs >= PERIODIC_RESNAPSHOT_INTERVAL_MS
+                    && !clientSessions.getAllSessions().isEmpty()) {
+                aeronBroadcaster.requestResnapshot();
+                lastPeriodicResnapshotMs = now;
             }
 
             // match#25 diag: leader-health heartbeat. The PRESENCE of this line confirms the
