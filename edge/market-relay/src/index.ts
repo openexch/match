@@ -11,6 +11,12 @@ export interface Env {
  *  change here if a single object ever becomes the bottleneck. */
 const FEED_INSTANCE = 'feed';
 
+/** Pin the object near the publisher (the origin box is in Europe): every
+ *  frame enters the edge there, so DO distance from the box is pure added
+ *  latency for everyone. Hints only apply on (re)creation — existing
+ *  objects stay put — this makes the good case deterministic. */
+const FEED_LOCATION: DurableObjectLocationHint = 'weur';
+
 function publishTokenOk(header: string | null, expected: string | undefined): boolean {
   if (!expected || !header?.startsWith('Bearer ')) return false;
   const enc = new TextEncoder();
@@ -23,7 +29,7 @@ function publishTokenOk(header: string | null, expected: string | undefined): bo
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const feed = () => env.FEED.getByName(FEED_INSTANCE);
+    const feed = () => env.FEED.get(env.FEED.idFromName(FEED_INSTANCE), { locationHint: FEED_LOCATION });
 
     switch (url.pathname) {
       case '/ws':
