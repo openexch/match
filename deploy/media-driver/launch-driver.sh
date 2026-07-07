@@ -26,6 +26,11 @@
 # Idempotent: exits 0 if this instance's driver is already running.
 # The script execs into the driver, so the PID the caller sees IS the driver's PID
 # and SIGTERM/SIGKILL propagate directly (required by the admin-gateway process manager).
+#
+# Safety: refuses (exit non-zero) to start over a live driver pid instead of silently
+# proceeding, even for manual/out-of-band runs -- see the IDEMPOTENCY / LIVE-DRIVER
+# GUARD block below. This is what stops a second aeronmd from deleting the first
+# one's aeron.dir out from under it when the first is merely stalled, not dead.
 
 set -euo pipefail
 
@@ -58,7 +63,7 @@ log()  { echo "[launch-driver] $*"; }
 warn() { echo "[launch-driver] WARN: $*" >&2; }
 die()  { echo "[launch-driver] ERROR: $*" >&2; exit 1; }
 
-usage() { sed -n '3,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '3,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -91,12 +96,52 @@ else
 fi
 PID_FILE="${AERON_DIR}.pid"
 
-# ==================== IDEMPOTENCY ====================
+# ==================== IDEMPOTENCY / LIVE-DRIVER GUARD ====================
+# This MUST run before any decision that leads to starting a driver (onload
+# detection, driver selection, property merge, exec, all further down) and nothing
+# below -- including any future --force-style flag -- is allowed to bypass it.
+#
+# Why this exists (match#76, companion to admin-gateway#42/#43/#47): driver.properties
+# sets aeron.dir.delete.on.start=true, which is what makes a crash-and-restart of
+# this instance idempotent -- a *dead* driver's leftover aeron.dir gets wiped and
+# recreated cleanly on the next start. We keep that setting; legitimate restarts
+# depend on it. The danger is a *second* aeronmd starting against a dir whose
+# current occupant is only stalled, not dead (e.g. a conductor thread frozen by
+# host-wide OOM pressure -- admin-gateway#43 measured a 17.38s stall against the
+# driver's own 10s liveness timeout). That second aeronmd judges the dir orphaned
+# from its own cnc.dat heartbeat check and deletes/recreates it out from under the
+# still-live first driver: same end state as admin-gateway#42 (live driver process,
+# missing dir/cnc.dat, node unstartable). The admin-gateway API paths already
+# refuse to launch over a live pid and never delete a dir a live pid owns
+# (admin-gateway#47); this block is the same refusal for direct or manual
+# invocations of this script, which that API-side guard cannot see.
 if [[ -f "${PID_FILE}" ]]; then
     existing_pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
     if [[ -n "${existing_pid}" ]] && kill -0 "${existing_pid}" 2>/dev/null; then
-        log "driver for ${INSTANCE} already running (PID ${existing_pid}, dir ${AERON_DIR})"
-        exit 0
+        # A live PID alone is not proof it is *our* driver -- PIDs get recycled.
+        # Cross-check the process identity via /proc before trusting it.
+        existing_comm="$(cat "/proc/${existing_pid}/comm" 2>/dev/null || true)"
+        case "${existing_comm}" in
+            aeronmd|java|onload)
+                # Confirmed happy path: this instance's driver is already up.
+                # Keep this exit-0 working exactly as before -- it is what makes
+                # repeated/orchestrated launches of the SAME instance idempotent.
+                log "driver for ${INSTANCE} already running (PID ${existing_pid}, dir ${AERON_DIR})"
+                exit 0
+                ;;
+            "")
+                # /proc entry vanished between kill -0 and the comm read: the
+                # process exited in the race window. Fall through to the dead-pid
+                # cleanup below, same as if kill -0 had failed outright.
+                ;;
+            *)
+                die "refusing to start: ${PID_FILE} names live PID ${existing_pid}, but" \
+                    "process '${existing_comm}' does not look like a media driver for" \
+                    "${AERON_DIR}. This may be a reused PID or a wedged manual run racing" \
+                    "a live driver. Investigate before removing ${PID_FILE} by hand -- do" \
+                    "not retry until you have confirmed no driver actually owns ${AERON_DIR}."
+                ;;
+        esac
     fi
     rm -f "${PID_FILE}"
 fi
