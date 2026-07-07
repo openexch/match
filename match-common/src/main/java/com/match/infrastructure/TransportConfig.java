@@ -30,6 +30,7 @@ import java.util.function.Supplier;
  * | TRANSPORT_INTERFACE    | transport.interface    | (unset: bind decided by OS)      |
  * | TRANSPORT_MTU          | transport.mtu          | 8192                             |
  * | TRANSPORT_TERM_LENGTH  | transport.term.length  | 16m                              |
+ * | TRANSPORT_LOG_TERM_LENGTH | transport.log.term.length | 64m                       |
  */
 public final class TransportConfig {
     private static final Logger log = Logger.getLogger(TransportConfig.class);
@@ -143,6 +144,22 @@ public final class TransportConfig {
      */
     public static String termLength() {
         return envOrProp("TRANSPORT_TERM_LENGTH", "transport.term.length", "16m");
+    }
+
+    /**
+     * Term buffer length for the cluster LOG channel (consensus log fan-out and
+     * follower catch-up replay), in Aeron URI syntax. Separate from
+     * {@link #termLength()} because the log channel never goes through
+     * {@link #udpChannel(String)}: without an explicit override, Aeron's own
+     * LOG_CHANNEL_DEFAULT (term-length=64m) applies regardless of
+     * TRANSPORT_TERM_LENGTH, and every catch-up replay maps and zero-faults a
+     * fresh non-sparse 3-term buffer — 192MB at 64m — which starves small
+     * hosts during elections (oms#73). The default preserves prod behavior.
+     *
+     * @return log channel term length string.
+     */
+    public static String logTermLength() {
+        return envOrProp("TRANSPORT_LOG_TERM_LENGTH", "transport.log.term.length", "64m");
     }
 
     /**

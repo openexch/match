@@ -122,6 +122,12 @@ public class AeronCluster {
         // the OMS / market-gateway client ingress channels.
         clusterConfig.consensusModuleContext().ingressChannel(TransportConfig.udpChannel("aeron:udp"));
         clusterConfig.consensusModuleContext().egressChannel(TransportConfig.udpChannel("aeron:udp"));
+        // Cluster LOG channel (consensus log fan-out + follower catch-up replay). Without an
+        // explicit override Aeron's LOG_CHANNEL_DEFAULT (term-length=64m) applies no matter
+        // what TRANSPORT_TERM_LENGTH says; each catch-up replay then maps a fresh non-sparse
+        // 192MB (3x64m) buffer, starving small hosts during elections (oms#73).
+        clusterConfig.consensusModuleContext().logChannel(
+            "aeron:udp?term-length=" + TransportConfig.logTermLength());
 
         // ==================== FAST LEADER ELECTION CONFIG ====================
         // Single source of truth for cluster timing. Aeron defaults are: heartbeat-interval=200ms,
