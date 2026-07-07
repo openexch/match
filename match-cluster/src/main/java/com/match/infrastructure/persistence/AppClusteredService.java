@@ -67,6 +67,12 @@ public class AppClusteredService implements ClusteredService {
     // Store cluster reference for snapshot idle strategy and broadcasting
     private Cluster cluster;
 
+    // match#73: role mirror safe to read from any thread. broadcast()/broadcastReliable()
+    // are invoked from the per-market Disruptor flush thread (MarketPublisher.flushBuffers()),
+    // which must never touch `cluster` directly — Cluster is scoped to the single Aeron
+    // service thread. Updated everywhere nodeMetrics.setRole() is (onStart/onRoleChange).
+    private volatile boolean isLeader = false;
+
     // match#33: hot-path-safe metrics — plain longs written on this (agent)
     // thread, scraped via a JDK HTTP server on its own daemon thread.
     private final com.match.infrastructure.metrics.NodeMetrics nodeMetrics =
@@ -86,6 +92,11 @@ public class AppClusteredService implements ClusteredService {
     private static final int MARKET_DATA_QUEUE_CAPACITY = 10_000;
     private final Queue<QueuedMessage> marketDataQueue = new ArrayBlockingQueue<>(MARKET_DATA_QUEUE_CAPACITY);
     private final AtomicLong droppedMessages = new AtomicLong(0);
+    // match#73: lossy market-data egress skipped on followers, which have no connected
+    // consumer (only the leader's gateway session drains marketDataQueue). Counted
+    // separately from droppedMessages so /metrics can distinguish "shed under load"
+    // (leader, real problem) from "never buffered, wrong role" (follower, by design).
+    private final AtomicLong followerSkipped = new AtomicLong(0);
 
     // OMS-bound settlement egress (OrderStatus + TradeExecution) uses a SEPARATE, much larger
     // queue so it is never evicted by a flood of refreshable UI market data (book snapshots/
@@ -140,6 +151,14 @@ public class AppClusteredService implements ClusteredService {
 
         @Override
         public void broadcast(org.agrona.DirectBuffer buffer, int offset, int length) {
+            // match#73: followers can never publish this (only the leader has a connected
+            // gateway session; flush() below is leader-gated) — buffering it would just fill
+            // the byte budget and trigger the "egress full" WARN for output that can never
+            // drain. Skip the enqueue entirely rather than shed after queuing.
+            if (!isLeader) {
+                followerSkipped.incrementAndGet();
+                return;
+            }
             // Copy the buffer content (since the source buffer is reused)
             byte[] copy = new byte[length];
             buffer.getBytes(offset, copy, 0, length);
@@ -163,6 +182,11 @@ public class AppClusteredService implements ClusteredService {
             // OMS-bound settlement egress (OrderStatus / TradeExecution). MUST NOT be silently
             // dropped under market-data load: uses the separate, large omsEgressQueue, drained
             // with priority in flush(). See OMS_EGRESS_QUEUE_CAPACITY for the never-drop rationale.
+            //
+            // match#73: unlike broadcast() above, followers KEEP buffering this — it is a
+            // deliberate warm standby so a freshly-promoted leader has settlement egress ready
+            // to drain immediately (OMS re-acks are idempotent, so any overlap on takeover is
+            // harmless). Only the "queue full" log is gated to the leader below.
             byte[] copy = new byte[length];
             buffer.getBytes(offset, copy, 0, length);
 
@@ -174,7 +198,9 @@ public class AppClusteredService implements ClusteredService {
                 long dropped = droppedOmsEgress.incrementAndGet();
                 // Only under extreme sustained overload (the byte budget bounds heap, preventing OOM).
                 // Dropped settlement is recoverable via OMS reconciliation against the cluster log.
-                if (dropped == 1 || dropped % 1000 == 0) {
+                // Followers stay quiet (this is expected there under sustained load since nothing
+                // ever drains their queue); the counter still increments for /metrics.
+                if (isLeader && (dropped == 1 || dropped % 1000 == 0)) {
                     System.err.println("CRITICAL: OMS egress full (count or "
                         + (OMS_EGRESS_MAX_BYTES >> 20) + "MB byte budget)! Dropped " + dropped +
                         " OMS-bound settlement message(s). Recoverable via OMS reconciliation.");
@@ -295,6 +321,7 @@ public class AppClusteredService implements ClusteredService {
         }
         nodeMetrics.setMemberId(nodeId);
         nodeMetrics.setRole(cluster.role().code());
+        isLeader = cluster.role() == Cluster.Role.LEADER;
         try {
             String env = System.getenv("METRICS_PORT");
             int port = env != null ? Integer.parseInt(env) : 9500 + nodeId;
@@ -304,6 +331,7 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_overflow_rejects_total", "Orders rejected for fixed-point overflow", engine::getOverflowRejectCount)
                     .counter("match_trades_total", "Trades executed (trade id high-water mark)", eventPublisher::getTradeIdGenerator)
                     .counter("match_dropped_market_msgs_total", "Lossy market-data egress drops", droppedMessages::get)
+                    .counter("match_follower_egress_skipped_total", "Lossy market-data egress skipped on followers (no consumer)", followerSkipped::get)
                     .counter("match_dropped_oms_egress_total", "Reliable OMS egress drops (should stay 0)", droppedOmsEgress::get)
                     .counter("match_unknown_timers_total", "Fired cluster timers with no runnable", timerManager::getUnknownTimerCount)
                     .counter("match_flush_timer_fires_total", "Egress flush timer fires", () -> flushTimerFireCount)
@@ -818,6 +846,7 @@ public class AppClusteredService implements ClusteredService {
                 + " flushFires=" + flushTimerFireCount + "]");
         System.out.flush();
         nodeMetrics.setRole(newRole.code());
+        isLeader = newRole == Cluster.Role.LEADER;
         // Always re-arm the flush timer chain on a role change. The chain is a
         // self-rescheduling cluster timer that only the LEADER schedules (a follower's
         // scheduleTimer is a no-op) and that does NOT survive a snapshot recover-into-leader
