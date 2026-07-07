@@ -243,7 +243,7 @@ This project is **free to use** under the Apache 2.0 license.
 
 For **advanced help**, custom deployments, performance tuning, or consulting — reach out:
 
-- **Email**: emrebulutlar@gmail.com
+- **Email**: info@openexch.io
 - **GitHub Issues**: [openexch/match/issues](https://github.com/openexch/match/issues)
 
 ## License
