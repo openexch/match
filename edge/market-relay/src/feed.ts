@@ -79,6 +79,17 @@ export class MarketFeed extends DurableObject<Env> {
     const [client, server] = Object.values(pair);
     // The Worker authenticates /publish before forwarding; the DO is not
     // directly reachable, so the tag is the trust boundary here.
+    if (path === '/publish') {
+      // Newest displaces: a reconnecting gateway must not leave a half-open
+      // predecessor counted as a live publisher (seen live 2026-07-07).
+      for (const old of this.ctx.getWebSockets('pub')) {
+        try {
+          old.close(1000, 'displaced by a newer publisher');
+        } catch {
+          // already closing
+        }
+      }
+    }
     this.ctx.acceptWebSocket(server, [path === '/publish' ? 'pub' : 'viewer']);
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -301,7 +312,9 @@ export class MarketFeed extends DurableObject<Env> {
     }
     return {
       viewers: this.viewers.size,
-      publishers: this.ctx.getWebSockets('pub').length,
+      // A closing (displaced) socket lingers in getWebSockets until its
+      // close handshake completes; only OPEN sockets are real publishers.
+      publishers: this.ctx.getWebSockets('pub').filter((ws) => ws.readyState === WebSocket.READY_STATE_OPEN).length,
       lastPublishAgeMs: this.lastPublishMs ? Date.now() - this.lastPublishMs : null,
       markets,
     };
