@@ -145,6 +145,11 @@ public class DirectIndexOrderBook {
      *         Loud-limits principle: callers must check this and reject visibly.
      */
     public int addOrder(long orderId, long userId, long price, long quantity) {
+        // Belt-and-suspenders (match#91): a non-positive quantity must never rest — a qty=0 order
+        // poisons the head of its level. Guard ABOVE the compaction/geometry checks so no such order
+        // ever reaches the slot pool. The engine already rejects these at admission.
+        if (quantity <= 0) return OrderRejectReason.INVALID_QUANTITY;
+
         int validity = validatePrice(price);
         if (validity != OrderRejectReason.NONE) return validity;
 
