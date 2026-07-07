@@ -19,9 +19,12 @@ import io.netty.handler.codec.http.websocketx.*;
 import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.GlobalEventExecutor;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -46,6 +49,29 @@ public class MarketDataWebSocket implements AutoCloseable {
     // Attribute to store subscribed marketId per channel
     private static final AttributeKey<Integer> SUBSCRIBED_MARKET =
         AttributeKey.valueOf("subscribedMarket");
+
+    // ==================== INITIAL-STATE / LIVE-BROADCAST ORDERING (see openexch/match#97) ====================
+    // On subscribe the channel joins the market broadcast group synchronously, so live
+    // TRADES_BATCH/CANDLE_UPDATE frames start flowing immediately. But the initial trades
+    // and candle-history snapshots are fetched ASYNC (DB round trip, up to ~1.5s). A live
+    // trade arriving in that window used to be delivered BEFORE the older "initial" trades
+    // snapshot, so a client that renders each TRADES_BATCH as current state showed a trade
+    // then dropped it when the stale snapshot landed (the tape appeared to rewind).
+    //
+    // Fix: while the async initial state is in flight we buffer the deferrable live frame
+    // types (trades/candles) per-channel in arrival order, then flush them AFTER the initial
+    // snapshot. The BOOK snapshot is already synchronous and book deltas are version-chained
+    // on top of it, so book frames are never buffered.
+
+    /** Per-channel buffer of live trades/candle frames held during the async initial-state fetch. */
+    private static final AttributeKey<InitState> INIT_STATE =
+        AttributeKey.valueOf("initState");
+    /**
+     * Upper bound on frames buffered per channel while initializing. A stuck DB read cannot
+     * balloon the heap: past this the oldest buffered frame is dropped (the stream is
+     * conflatable) and a single warning is logged. Package-private for the ordering tests.
+     */
+    static final int MAX_INIT_BUFFER_FRAMES = 512;
 
     // ==================== SLOW-CLIENT BACKPRESSURE (see openexch/match#37) ====================
     // A browser that reads slower than the market-data rate used to grow its Netty
@@ -173,21 +199,52 @@ public class MarketDataWebSocket implements AutoCloseable {
 
         // Extract marketId from message for filtering
         int marketId = extractMarketId(jsonMessage);
+        // Trades/candles whose initial snapshot is fetched async may need to be held
+        // behind a just-subscribed channel's initial state (see INIT_STATE / #97).
+        boolean deferrable = isDeferrableInitFrame(jsonMessage);
 
         if (marketId > 0) {
             // Send only to clients subscribed to this market
             ChannelGroup group = marketChannels.get(marketId);
             if (group != null && !group.isEmpty()) {
                 for (Channel ch : group) {
-                    writeOrConflate(ch, jsonMessage);
+                    deliver(ch, jsonMessage, deferrable);
                 }
             }
         } else {
             // Broadcast to all (e.g., cluster status messages)
             for (Channel ch : channels) {
-                writeOrConflate(ch, jsonMessage);
+                deliver(ch, jsonMessage, deferrable);
             }
         }
+    }
+
+    /**
+     * True for the live broadcast frame types whose "initial" snapshot is fetched
+     * asynchronously on subscribe (recent trades + candle history). Only these are
+     * eligible for initial-state buffering (#97); book frames are excluded because the
+     * book snapshot is synchronous and deltas are version-chained on top of it.
+     */
+    private static boolean isDeferrableInitFrame(String json) {
+        return json != null
+            && (json.contains("\"type\":\"TRADES_BATCH\"")
+                || json.contains("\"type\":\"CANDLE_UPDATE\""));
+    }
+
+    /**
+     * Deliver one broadcast frame to a single client. A deferrable trades/candle frame
+     * destined to a channel that is still receiving its async initial state is buffered in
+     * arrival order (flushed once the snapshot lands, #97); everything else goes straight to
+     * the backpressure-aware writer.
+     */
+    private void deliver(Channel ch, String jsonMessage, boolean deferrable) {
+        if (deferrable) {
+            InitState init = ch.attr(INIT_STATE).get();
+            if (init != null && init.bufferIfInitializing(jsonMessage)) {
+                return;
+            }
+        }
+        writeOrConflate(ch, jsonMessage);
     }
 
     /**
@@ -251,7 +308,7 @@ public class MarketDataWebSocket implements AutoCloseable {
     // ==================== WebSocket Handler ====================
 
     @ChannelHandler.Sharable
-    private class MarketDataHandler extends SimpleChannelInboundHandler<WebSocketFrame> {
+    class MarketDataHandler extends SimpleChannelInboundHandler<WebSocketFrame> {
 
         @Override
         public void handlerAdded(ChannelHandlerContext ctx) {
@@ -325,6 +382,12 @@ public class MarketDataWebSocket implements AutoCloseable {
                         // Client wants to subscribe to a market
                         int marketId = msg.containsKey("marketId")
                             ? ((Number) msg.get("marketId")).intValue() : 1;
+
+                        // Arm the initial-state buffer BEFORE joining the broadcast group so
+                        // that any live trades/candle frame delivered between the join and the
+                        // async initial-state flush is buffered rather than raced ahead of the
+                        // (older) snapshot (#97).
+                        ctx.channel().attr(INIT_STATE).set(new InitState(marketId));
 
                         // Track subscription for filtered broadcasting
                         subscribeToMarket(ctx.channel(), marketId);
@@ -400,6 +463,18 @@ public class MarketDataWebSocket implements AutoCloseable {
 
         private void sendInitialState(ChannelHandlerContext ctx, int requestedMarketId) {
             if (stateManager != null && requestedMarketId > 0) {
+                final Channel channel = ctx.channel();
+                // Arm (or re-arm) the initial-state buffer for this market. subscribe arms it
+                // before the group join; refresh and resync (channelWritabilityChanged) arrive
+                // here already joined, so a fresh arm here holds live frames behind the re-sent
+                // snapshot the same way (#97).
+                InitState existing = channel.attr(INIT_STATE).get();
+                final InitState initState =
+                    (existing != null && existing.marketId == requestedMarketId && existing.isInitializing())
+                        ? existing
+                        : new InitState(requestedMarketId);
+                channel.attr(INIT_STATE).set(initState);
+
                 // Get order book for the requested market
                 var book = stateManager.getOrderBook(requestedMarketId);
                 System.out.println("[WS] sendInitialState: requestedMarketId=" + requestedMarketId +
@@ -424,16 +499,59 @@ public class MarketDataWebSocket implements AutoCloseable {
                 // Recent trades + 1m candle history: DB-first (survives gateway
                 // restarts), in-memory fallback. Completed on a persistence read
                 // thread; the 2s JSON cache absorbs connect/resync storms.
-                stateManager.recentTradesJsonAsync(50, requestedMarketId).thenAccept(json ->
-                        ctx.channel().writeAndFlush(new TextWebSocketFrame(json)));
-                stateManager.buildCandleHistoryJsonAsync(requestedMarketId, "1m", 200).thenAccept(json ->
-                        ctx.channel().writeAndFlush(new TextWebSocketFrame(json)));
+                //
+                // Both fetches settle before we write anything: the initial snapshot goes
+                // out first, then the live frames buffered while they were in flight, in
+                // arrival order (#97). A failed/timed-out fetch still flushes-and-clears so
+                // the channel never wedges permanently buffering.
+                CompletableFuture<String> tradesFuture =
+                    stateManager.recentTradesJsonAsync(50, requestedMarketId);
+                CompletableFuture<String> candlesFuture =
+                    stateManager.buildCandleHistoryJsonAsync(requestedMarketId, "1m", 200);
+                CompletableFuture.allOf(tradesFuture, candlesFuture).whenComplete((v, err) ->
+                    channel.eventLoop().execute(
+                        () -> flushInitialState(channel, initState, tradesFuture, candlesFuture)));
             } else {
                 Map<String, Object> response = new HashMap<>();
                 response.put("type", "REFRESH_PENDING");
                 response.put("message", "State not yet available, waiting for cluster update");
                 ctx.writeAndFlush(new TextWebSocketFrame(gson.toJson(response)));
             }
+        }
+
+        /**
+         * Runs on the channel event loop once both async initial-state fetches settle:
+         * writes the initial trades/candle snapshot (whichever fetch succeeded), then the
+         * live frames buffered while they were in flight in arrival order, then stops
+         * buffering. A superseded initialization (a newer subscribe/resync installed a
+         * different InitState) is dropped so stale data is not written to the channel (#97).
+         */
+        private void flushInitialState(Channel channel, InitState initState,
+                                       CompletableFuture<String> tradesFuture,
+                                       CompletableFuture<String> candlesFuture) {
+            if (channel.attr(INIT_STATE).get() != initState) {
+                // A newer subscribe/resync owns the channel now; it will flush its own buffer.
+                return;
+            }
+            // Initial snapshot first. A failed/timed-out fetch is skipped (preserving the
+            // pre-#97 behavior of writing nothing on failure) but must not block the flush.
+            if (!tradesFuture.isCompletedExceptionally()) {
+                String json = tradesFuture.getNow(null);
+                if (json != null) {
+                    channel.write(new TextWebSocketFrame(json));
+                }
+            }
+            if (!candlesFuture.isCompletedExceptionally()) {
+                String json = candlesFuture.getNow(null);
+                if (json != null) {
+                    channel.write(new TextWebSocketFrame(json));
+                }
+            }
+            // Then the live frames held during the fetch, in arrival order, then stop buffering.
+            for (String frame : initState.drainAndStopBuffering()) {
+                channel.write(new TextWebSocketFrame(frame));
+            }
+            channel.flush();
         }
 
         private String buildEmptyBookSnapshot(int marketId) {
@@ -455,6 +573,75 @@ public class MarketDataWebSocket implements AutoCloseable {
             System.err.println("Market WebSocket error: " + cause.getMessage());
             ctx.close();
         }
+    }
+
+    /**
+     * Per-channel buffer holding live trades/candle frames that arrive between a
+     * subscribe/resync and the completion of the async initial-state fetch, so the older
+     * initial snapshot is written first and the buffered live frames follow it in arrival
+     * order (issue #97). Access is synchronized: {@link #bufferIfInitializing} is called from
+     * the broadcast thread while {@link #drainAndStopBuffering} runs on the channel event
+     * loop, and the two must not interleave (that would drop or reorder frames).
+     */
+    static final class InitState {
+        final int marketId;
+        private final ArrayDeque<String> buffered = new ArrayDeque<>();
+        private boolean initializing = true;
+        private boolean overflowLogged = false;
+
+        InitState(int marketId) {
+            this.marketId = marketId;
+        }
+
+        synchronized boolean isInitializing() {
+            return initializing;
+        }
+
+        /**
+         * Buffer a live frame while this channel is still initializing. Returns true when the
+         * frame was taken (the caller must not also write it). Bounded at
+         * {@link #MAX_INIT_BUFFER_FRAMES}: past the cap the oldest buffered frame is dropped
+         * (the stream is conflatable) and a single warning is logged, so a stuck DB read
+         * cannot balloon the heap.
+         */
+        synchronized boolean bufferIfInitializing(String json) {
+            if (!initializing) {
+                return false;
+            }
+            if (buffered.size() >= MAX_INIT_BUFFER_FRAMES) {
+                buffered.pollFirst();
+                if (!overflowLogged) {
+                    overflowLogged = true;
+                    System.err.println("[WS] initial-state buffer full for market " + marketId
+                        + " (>" + MAX_INIT_BUFFER_FRAMES
+                        + " frames); dropping oldest buffered live frames");
+                }
+            }
+            buffered.addLast(json);
+            return true;
+        }
+
+        /**
+         * Stop buffering and return everything buffered, in arrival order. Setting the flag
+         * and draining under the same lock guarantees no frame is lost to a concurrent
+         * {@link #bufferIfInitializing}: a broadcast that loses the race sees
+         * {@code initializing == false} and writes through instead.
+         */
+        synchronized List<String> drainAndStopBuffering() {
+            initializing = false;
+            List<String> out = new ArrayList<>(buffered);
+            buffered.clear();
+            return out;
+        }
+    }
+
+    // Visible for tests (issue #97): build a handler wired to this instance without binding
+    // the production port. Lazily initializes the shared channel group that broadcast reads.
+    MarketDataHandler newHandlerForTest() {
+        if (channels == null) {
+            channels = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
+        }
+        return new MarketDataHandler();
     }
 
     @Override
