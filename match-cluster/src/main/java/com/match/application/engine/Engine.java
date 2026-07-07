@@ -336,11 +336,9 @@ public class Engine {
                 return;
             }
 
-            // Limit maker - only add if won't match immediately
-            long bestOpposite = isBuy ? engine.getBestAsk() : engine.getBestBid();
-            boolean wouldMatch = isBuy
-                ? (!engine.isAskEmpty() && price >= bestOpposite)
-                : (!engine.isBidEmpty() && price <= bestOpposite);
+            // Limit maker - only add if won't match immediately (post-only). Shared with the
+            // LIMIT_MAKER amend path (match#92) so crossing is decided identically in both.
+            boolean wouldMatch = wouldCrossOpposite(engine, isBuy, price);
 
             if (!wouldMatch) {
                 int addResult = engine.addOrderNoMatch(orderId, userId, isBuy, price, quantity);
@@ -407,6 +405,20 @@ public class Engine {
     /** Orders rejected at admission for a non-positive quantity/market size (diag counter, match#91). */
     public long getInvalidQuantityRejectCount() {
         return invalidQuantityRejectCount;
+    }
+
+    /**
+     * True if a would-be maker resting at {@code price} on the given side would cross the opposite
+     * best and thus execute immediately — violating the post-only (LIMIT_MAKER) guarantee. Shared by
+     * the LIMIT_MAKER create branch and the LIMIT_MAKER amend branch (match#92) so post-only is
+     * decided by the exact same expression in both. Exact for the single-threaded engine: a maker
+     * rests on its OWN side, so placing or cancelling it cannot move the opposite best read here.
+     */
+    private static boolean wouldCrossOpposite(MatchingEngine engine, boolean isBuy, long price) {
+        long bestOpposite = isBuy ? engine.getBestAsk() : engine.getBestBid();
+        return isBuy
+            ? (!engine.isAskEmpty() && price >= bestOpposite)
+            : (!engine.isBidEmpty() && price <= bestOpposite);
     }
 
     /**
@@ -538,6 +550,21 @@ public class Engine {
             return;
         }
 
+        // match#92: honor post-only on amends. processUpdate is cancel-and-replace and used to route
+        // EVERY replacement through the MATCHING processLimitOrder path — so a LIMIT_MAKER amended to a
+        // now-crossing price would silently execute as a taker, stripping the post-only guarantee.
+        // Decide crossing BEFORE cancelling: the old order rests on the SAME side as the replacement,
+        // so cancelling it cannot move the opposite best this reads — the pre-cancel test is exact. If
+        // it would cross, REJECT the amend and leave the old order resting and tradable (same status
+        // semantics as processCreate's post-only reject; OLD orderId+omsOrderId like the rejects above).
+        if (cmd.getOrderType() == OrderType.LIMIT_MAKER && wouldCrossOpposite(engine, isBuy, newPrice)) {
+            logger.warn("LIMIT_MAKER amend rejected (would cross): market={} orderId={} userId={} newPrice={}",
+                marketId, oldOrderId, userId, newPrice);
+            publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.REJECTED,
+                0, 0, newPrice, isBuy, omsOrderId);
+            return;
+        }
+
         // 1. Cancel existing order
         boolean cancelled = engine.cancelOrder(oldOrderId, isBuy);
         if (!cancelled) {
@@ -558,6 +585,30 @@ public class Engine {
         long newOrderId = orderIdGenerator.getAndIncrement();
         if (omsOrderId != 0) {
             orderIdToOmsOrderId.put(newOrderId, omsOrderId);
+        }
+
+        // match#92: a LIMIT_MAKER replacement rests post-only. We already proved it does not cross
+        // (pre-cancel check above), so add it via the NO-MATCH path — never processLimitOrder, which
+        // would match. The engine is single-threaded, so nothing can cross between that check and here.
+        if (cmd.getOrderType() == OrderType.LIMIT_MAKER) {
+            int addResult = engine.addOrderNoMatch(newOrderId, userId, isBuy, newPrice, newQuantity);
+            if (addResult != OrderRejectReason.NONE) {
+                // Replacement could not rest (e.g. LEVEL_FULL/BOOK_FULL). The old order is already
+                // cancelled — FIFO position is forfeit on any amend — so this is terminal: a loud
+                // REJECTED, mirroring processCreate's could-not-rest path (never a phantom NEW).
+                logger.warn("LIMIT_MAKER amend could not rest: market={} orderId={} userId={} price={} reason={}",
+                    marketId, newOrderId, userId, newPrice, OrderRejectReason.describe(addResult));
+                publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.REJECTED,
+                    newQuantity, 0, newPrice, isBuy, omsOrderId);
+                if (omsOrderId != 0) {
+                    orderIdToOmsOrderId.remove(newOrderId);
+                }
+                return;
+            }
+            // Rested post-only — NEW for the full new quantity (nothing filled).
+            publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.NEW,
+                newQuantity, 0, newPrice, isBuy, omsOrderId);
+            return;
         }
 
         int matchCount = engine.processLimitOrder(newOrderId, userId, isBuy, newPrice, newQuantity);

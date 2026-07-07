@@ -95,6 +95,24 @@ public class EngineTest {
         return cmd;
     }
 
+    /** UPDATE command carrying an explicit LIMIT_MAKER order type (post-only amend, match#92). */
+    private UpdateOrderCommand updateLimitMakerCmd(long userId, long orderId, OrderSide side,
+            double price, double quantity) {
+        UpdateOrderCommand cmd = createUpdateCmd(userId, orderId, side, price, quantity);
+        cmd.setOrderType(OrderType.LIMIT_MAKER);
+        return cmd;
+    }
+
+    /** First trade event captured by the sink, or null if none executed. */
+    private EngineEvent.Trade firstTrade(RecordingEventSink sink) {
+        for (EngineEvent e : sink.events()) {
+            if (e instanceof EngineEvent.Trade t) {
+                return t;
+            }
+        }
+        return null;
+    }
+
     /** Last order-status event captured by the sink, or null if none were published. */
     private EngineEvent.Status lastStatus(RecordingEventSink sink) {
         EngineEvent.Status last = null;
@@ -428,6 +446,151 @@ public class EngineTest {
         assertTrue("surviving order should have matched and emptied the book",
             engine.getEngine(Engine.MARKET_BTC_USD).isBidEmpty());
         assertTrue("a trade must have executed against the surviving order", hasTrade(sink));
+    }
+
+    // ==================== Limit Maker Amend — Post-Only (match#92) ====================
+
+    @Test
+    public void testUpdateLimitMakerAmend_WouldCross_Rejected_OldOrderSurvivesAndMatches() {
+        // The core bug: an amended LIMIT_MAKER that now crosses used to execute as a taker,
+        // silently stripping post-only. It must instead REJECT and leave the old order resting.
+        RecordingEventSink sink = new RecordingEventSink();
+        engine.setEventPublisher(sink);
+
+        // Resting SELL ask @60000; post-only BUY @59000 rests (does not cross).
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createLimitCmd(100, OrderSide.ASK, 60000.0, 5.0), 1000L);
+        long makerId = engine.getOrderIdGenerator();
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createLimitMakerCmd(200, OrderSide.BID, 59000.0, 5.0), 1000L);
+        assertFalse("post-only bid should rest", engine.getEngine(Engine.MARKET_BTC_USD).isBidEmpty());
+
+        // Amend the post-only bid UP to 61000 — now it WOULD cross the 60000 ask.
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_UPDATE,
+            updateLimitMakerCmd(200, makerId, OrderSide.BID, 61000.0, 5.0), 1000L);
+
+        EngineEvent.Status s = lastStatus(sink);
+        assertNotNull(s);
+        assertEquals("crossing LIMIT_MAKER amend must REJECT (post-only preserved)",
+            OrderStatusType.REJECTED, s.orderStatus());
+        assertEquals("reject must reference the OLD resting order", makerId, s.orderId());
+        assertFalse("old post-only bid must remain resting after a rejected amend",
+            engine.getEngine(Engine.MARKET_BTC_USD).isBidEmpty());
+        assertFalse("the rejected amend must not have traded", hasTrade(sink));
+
+        // The surviving bid is still tradable at its ORIGINAL price: a market sell fills @59000.
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createMarketSellCmd(300, 5.0), 1000L);
+        EngineEvent.Trade t = firstTrade(sink);
+        assertNotNull("surviving post-only bid must still match", t);
+        assertEquals("must fill at the resting bid's original price",
+            FixedPoint.fromDouble(59000.0), t.price());
+        assertEquals("the surviving order is the maker", makerId, t.makerOrderId());
+    }
+
+    @Test
+    public void testUpdateLimitMakerAmend_NonCrossing_CancelledThenNew_NoTrade() {
+        RecordingEventSink sink = new RecordingEventSink();
+        engine.setEventPublisher(sink);
+
+        // Ask @60000; post-only BUY @59000 rests.
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createLimitCmd(100, OrderSide.ASK, 60000.0, 1.0), 1000L);
+        long makerId = engine.getOrderIdGenerator();
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createLimitMakerCmd(200, OrderSide.BID, 59000.0, 1.0), 1000L);
+        long newId = engine.getOrderIdGenerator(); // the replacement will take this id
+
+        // Amend UP to 59500 — still below the 60000 ask, so it does NOT cross: CANCELLED(old)+NEW(new).
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_UPDATE,
+            updateLimitMakerCmd(200, makerId, OrderSide.BID, 59500.0, 1.0), 1000L);
+
+        assertFalse("a non-crossing post-only amend must not trade", hasTrade(sink));
+
+        boolean cancelledOld = false;
+        for (EngineEvent e : sink.events()) {
+            if (e instanceof EngineEvent.Status st && st.orderId() == makerId
+                    && st.orderStatus() == OrderStatusType.CANCELLED) {
+                cancelledOld = true;
+            }
+        }
+        assertTrue("old order must be CANCELLED by the amend", cancelledOld);
+
+        EngineEvent.Status last = lastStatus(sink);
+        assertNotNull(last);
+        assertEquals("replacement must be published NEW", OrderStatusType.NEW, last.orderStatus());
+        assertEquals("replacement uses the next engine orderId", newId, last.orderId());
+        assertEquals("replacement rests at the amended price",
+            FixedPoint.fromDouble(59500.0), last.orderPrice());
+        assertEquals("replacement rests the full quantity",
+            FixedPoint.fromDouble(1.0), last.remainingQty());
+        assertEquals("NEW carries zero filled", 0L, last.filledQty());
+
+        // Book now has exactly the replacement resting at the amended price.
+        assertFalse(engine.getEngine(Engine.MARKET_BTC_USD).isBidEmpty());
+        assertEquals(FixedPoint.fromDouble(59500.0),
+            engine.getEngine(Engine.MARKET_BTC_USD).getBestBid());
+    }
+
+    @Test
+    public void testUpdateLimitMakerAmend_CannotRest_Rejected() {
+        // The replacement cannot rest → loud REJECTED (old order already gone), never a phantom NEW.
+        // Forced via the direct engine's hard 64-orders/level cap: the array engine can't fail a
+        // same-side amend (cancel frees a slot the re-add reclaims), so this terminal branch is
+        // exercised on the direct impl.
+        Engine directEngine = new Engine("direct");
+        RecordingEventSink sink = new RecordingEventSink();
+        directEngine.setEventPublisher(sink);
+
+        // Fill the 59000 bid level to its 64-order cap (post-only, empty ask book → none cross).
+        for (int i = 0; i < 64; i++) {
+            directEngine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+                createLimitMakerCmd(1000 + i, OrderSide.BID, 59000.0, 1.0), 1000L);
+        }
+        // One more post-only bid at a DIFFERENT level (58000), which we then try to move onto 59000.
+        long movingId = directEngine.getOrderIdGenerator();
+        directEngine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createLimitMakerCmd(200, OrderSide.BID, 58000.0, 1.0), 1000L);
+
+        // Amend it to 59000 (non-crossing: no asks). The cancel frees its 58000 slot, but the 59000
+        // level is already full → addOrderNoMatch returns LEVEL_FULL → loud REJECTED (old gone).
+        directEngine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_UPDATE,
+            updateLimitMakerCmd(200, movingId, OrderSide.BID, 59000.0, 1.0), 1000L);
+
+        EngineEvent.Status s = lastStatus(sink);
+        assertNotNull(s);
+        assertEquals("a replacement that cannot rest must be REJECTED, not a phantom NEW",
+            OrderStatusType.REJECTED, s.orderStatus());
+        assertFalse("the failed amend must not have traded", hasTrade(sink));
+        // The full 59000 level still tops the book (the moved order's 58000 level is now empty).
+        assertEquals(FixedPoint.fromDouble(59000.0),
+            directEngine.getEngine(Engine.MARKET_BTC_USD).getBestBid());
+    }
+
+    @Test
+    public void testUpdatePlainLimitAmend_StillMatches_Unchanged() {
+        // Regression guard: a plain LIMIT amend (absent/LIMIT order type) must keep its
+        // cancel-and-replace-that-MATCHES behavior — match#92 must affect LIMIT_MAKER only.
+        RecordingEventSink sink = new RecordingEventSink();
+        engine.setEventPublisher(sink);
+
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createLimitCmd(100, OrderSide.ASK, 60000.0, 1.0), 1000L);
+        long bidId = engine.getOrderIdGenerator();
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createLimitCmd(200, OrderSide.BID, 59000.0, 1.0), 1000L);
+
+        // Plain LIMIT amend (createUpdateCmd leaves the type absent → LIMIT path) UP to 60000: crosses.
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_UPDATE,
+            createUpdateCmd(200, bidId, OrderSide.BID, 60000.0, 1.0), 1000L);
+
+        assertTrue("plain LIMIT amend that crosses must still execute", hasTrade(sink));
+        EngineEvent.Status s = lastStatus(sink);
+        assertNotNull(s);
+        assertEquals("crossing plain LIMIT amend fills", OrderStatusType.FILLED, s.orderStatus());
+        assertTrue("both sides consumed by the fill",
+            engine.getEngine(Engine.MARKET_BTC_USD).isAskEmpty()
+                && engine.getEngine(Engine.MARKET_BTC_USD).isBidEmpty());
     }
 
     // ==================== Cancel Order ====================

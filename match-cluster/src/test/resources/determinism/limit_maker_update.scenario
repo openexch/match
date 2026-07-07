@@ -1,0 +1,15 @@
+# match#92: a LIMIT_MAKER amend must honor post-only.
+#  (a) an amend that would cross the spread is REJECTED and the old order keeps resting & tradable;
+#  (b) an amend that does not cross is CANCELLED(old) + NEW(new) with zero trades.
+MARKET BTC_USD
+CLOCK 1000
+# Resting ask @60000 and a post-only bid @59000 (rests, no cross).
+CREATE u=100 side=ASK type=LIMIT px=60000.0 qty=5.0
+CREATE u=200 side=BID type=LIMIT_MAKER px=59000.0 qty=5.0
+# (a) Amend the post-only bid up to 61000 -> would cross the 60000 ask -> REJECTED (order 2 stays).
+UPDATE u=200 order=2 side=BID px=61000.0 qty=5.0 type=LIMIT_MAKER
+# Prove order 2 survived and is still tradable at its original 59000: a market sell fills against it.
+CREATE u=300 side=ASK type=MARKET qty=5.0
+# Rebuild a resting post-only bid, then (b) a NON-crossing amend -> CANCELLED(old) + NEW(new), no trade.
+CREATE u=400 side=BID type=LIMIT_MAKER px=59000.0 qty=1.0
+UPDATE u=400 order=4 side=BID px=59500.0 qty=1.0 type=LIMIT_MAKER
