@@ -131,6 +131,123 @@ public class GatewayStateManagerSbeTest {
         assertTrue(manager.getOrderBook(3).toJson().contains("SOL-USD"));
     }
 
+    // ==================== BookSnapshot staleness guard (match#95) ====================
+
+    @Test
+    public void testOnBookSnapshot_StaleAfterNewerSnapshot_BookUnchangedAndCounted() {
+        // Establish a baseline at bookVersion=20.
+        encodeAndProcessBookSnapshot(1, 12345L, 10, 20, 20L,
+            new long[][]{{fp(100.0), fp(5.0), 3}},
+            new long[][]{{fp(101.0), fp(8.0), 2}}
+        );
+        assertEquals(0L, manager.getStaleSnapshotsDropped());
+        String jsonBefore = manager.getOrderBook(1).toJson();
+
+        // Redelivered old-leader snapshot at a lower bookVersion, carrying different (stale) levels.
+        encodeAndProcessBookSnapshot(1, 12346L, 5, 5, 15L,
+            new long[][]{{fp(90.0), fp(1.0), 1}},
+            new long[][]{{fp(95.0), fp(1.0), 1}}
+        );
+
+        assertEquals(jsonBefore, manager.getOrderBook(1).toJson());
+        assertEquals(20L, manager.getOrderBook(1).getVersion());
+        assertEquals(1L, manager.getStaleSnapshotsDropped());
+    }
+
+    @Test
+    public void testOnBookSnapshot_EqualVersionAfterNewerSnapshot_TreatedAsStale() {
+        encodeAndProcessBookSnapshot(1, 12345L, 10, 20, 20L,
+            new long[][]{{fp(100.0), fp(5.0), 3}},
+            new long[][]{{fp(101.0), fp(8.0), 2}}
+        );
+        String jsonBefore = manager.getOrderBook(1).toJson();
+
+        // Duplicate redelivery at the SAME bookVersion — not a genuine advance, must be dropped.
+        encodeAndProcessBookSnapshot(1, 12346L, 10, 20, 20L,
+            new long[][]{{fp(999.0), fp(1.0), 1}},
+            new long[][]{}
+        );
+
+        assertEquals(jsonBefore, manager.getOrderBook(1).toJson());
+        assertEquals(1L, manager.getStaleSnapshotsDropped());
+    }
+
+    @Test
+    public void testOnBookSnapshot_StaleAfterNewerDelta_BookUnchangedAndCounted() {
+        // Baseline snapshot at bookVersion=10.
+        encodeAndProcessBookSnapshot(1, 12345L, 10, 10, 10L,
+            new long[][]{{fp(100.0), fp(5.0), 3}},
+            new long[][]{{fp(101.0), fp(8.0), 2}}
+        );
+
+        // A delta advances the book to version 15 (bidVersion/askVersion fallback, matching how the
+        // existing encodeAndProcessBookDelta helper exercises the delta path elsewhere in this file).
+        encodeAndProcessBookDelta(1, 12346L, 15, 15,
+            new Object[][]{
+                {fp(100.0), fp(7.0), 4, OrderSide.BID, BookUpdateType.UPDATE_LEVEL}
+            }
+        );
+        assertEquals(15L, manager.getOrderBook(1).getVersion());
+        String jsonBefore = manager.getOrderBook(1).toJson();
+
+        // Redelivered old-leader snapshot at a lower bookVersion than the delta already applied.
+        encodeAndProcessBookSnapshot(1, 12347L, 3, 3, 12L,
+            new long[][]{{fp(50.0), fp(1.0), 1}},
+            new long[][]{{fp(60.0), fp(1.0), 1}}
+        );
+
+        assertEquals(jsonBefore, manager.getOrderBook(1).toJson());
+        assertEquals(15L, manager.getOrderBook(1).getVersion());
+        assertEquals(1L, manager.getStaleSnapshotsDropped());
+    }
+
+    @Test
+    public void testOnBookSnapshot_HigherVersionApplied() {
+        encodeAndProcessBookSnapshot(1, 12345L, 10, 20, 20L,
+            new long[][]{{fp(100.0), fp(5.0), 3}},
+            new long[][]{{fp(101.0), fp(8.0), 2}}
+        );
+
+        // A genuine re-snapshot after a gap — HIGHER bookVersion — must be applied.
+        encodeAndProcessBookSnapshot(1, 12346L, 30, 30, 30L,
+            new long[][]{{fp(200.0), fp(9.0), 6}},
+            new long[][]{{fp(201.0), fp(4.0), 3}}
+        );
+
+        GatewayOrderBook book = manager.getOrderBook(1);
+        assertEquals(30L, book.getVersion());
+        assertEquals(200.0, book.getBidPrice(0), 0.0001);
+        assertEquals(201.0, book.getAskPrice(0), 0.0001);
+        assertEquals(0L, manager.getStaleSnapshotsDropped());
+    }
+
+    @Test
+    public void testOnBookSnapshot_LegacyVersionZero_AppliedUnconditionally() {
+        // match#95 regression: a pre-v4 upstream never sends a bookVersion (mixed-version rolling
+        // update), so the fallback-computed version (max(bidVersion, askVersion)) can be numerically
+        // LOWER on a later legacy snapshot than an earlier one without meaning anything is stale.
+        // The guard must not engage when the incoming message carries no real bookVersion — dropping
+        // legacy snapshots would freeze the book forever.
+        encodeAndProcessBookSnapshot(1, 12345L, 100, 100, 0L,
+            new long[][]{{fp(100.0), fp(5.0), 3}},
+            new long[][]{{fp(101.0), fp(8.0), 2}}
+        );
+        assertEquals(100L, manager.getOrderBook(1).getVersion());
+
+        // Later legacy snapshot with a lower per-side version (bookVersion still absent/0) —
+        // today's apply-unconditionally behavior must be preserved.
+        encodeAndProcessBookSnapshot(1, 12346L, 1, 1, 0L,
+            new long[][]{{fp(50.0), fp(2.0), 1}},
+            new long[][]{{fp(51.0), fp(1.0), 1}}
+        );
+
+        GatewayOrderBook book = manager.getOrderBook(1);
+        assertEquals(1L, book.getVersion());
+        assertEquals(50.0, book.getBidPrice(0), 0.0001);
+        assertEquals(51.0, book.getAskPrice(0), 0.0001);
+        assertEquals(0L, manager.getStaleSnapshotsDropped());
+    }
+
     // ==================== TradesBatch ====================
 
     @Test
@@ -363,12 +480,23 @@ public class GatewayStateManagerSbeTest {
 
     private void encodeAndProcessBookSnapshot(int marketId, long timestamp, long bidVersion, long askVersion,
                                                long[][] bids, long[][] asks) {
+        encodeAndProcessBookSnapshot(marketId, timestamp, bidVersion, askVersion, 0L, bids, asks);
+    }
+
+    /**
+     * Encode a BookSnapshot with an explicit bookVersion (the v4 monotonic version, match#95's
+     * staleness guard). {@code bookVersion == 0} means "not present" (pre-v4 upstream) — the encoder
+     * writes it explicitly so a reused buffer never leaks a value from a prior encode in the same test.
+     */
+    private void encodeAndProcessBookSnapshot(int marketId, long timestamp, long bidVersion, long askVersion,
+                                               long bookVersion, long[][] bids, long[][] asks) {
         BookSnapshotEncoder encoder = new BookSnapshotEncoder();
         encoder.wrapAndApplyHeader(buffer, 0, headerEnc);
         encoder.marketId(marketId);
         encoder.timestamp(timestamp);
         encoder.bidVersion(bidVersion);
         encoder.askVersion(askVersion);
+        encoder.bookVersion(bookVersion);
 
         BookSnapshotEncoder.BidsEncoder bidsEnc = encoder.bidsCount(bids.length);
         for (long[] bid : bids) {
@@ -438,6 +566,12 @@ public class GatewayStateManagerSbeTest {
         encoder.timestamp(timestamp);
         encoder.bidVersion(bidVersion);
         encoder.askVersion(askVersion);
+        // BookDelta shares its field prefix (marketId/timestamp/bidVersion/askVersion/bookVersion)
+        // with BookSnapshot, so the shared test buffer can carry a leftover bookVersion from a prior
+        // encodeAndProcessBookSnapshot(..., bookVersion, ...) call into this one unless explicitly
+        // zeroed here — this exercises the legacy (bookVersion absent) fallback path deliberately.
+        encoder.bookVersion(0L);
+        encoder.fromVersion(0L);
 
         BookDeltaEncoder.ChangesEncoder changesEnc = encoder.changesCount(changes.length);
         for (Object[] change : changes) {

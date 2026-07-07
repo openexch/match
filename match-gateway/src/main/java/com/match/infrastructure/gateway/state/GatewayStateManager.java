@@ -47,8 +47,14 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
     private final java.util.concurrent.atomic.AtomicLong chainBreaks = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong staleDeltasDropped = new java.util.concurrent.atomic.AtomicLong(0);
 
+    // Count of stale/duplicate book snapshots dropped (switchover-seam dedup, match#95) — observability.
+    private final java.util.concurrent.atomic.AtomicLong staleSnapshotsDropped = new java.util.concurrent.atomic.AtomicLong(0);
+
     /** match#33: /metrics read. */
     public long getStaleDeltasDropped() { return staleDeltasDropped.get(); }
+
+    /** match#95: /metrics read. */
+    public long getStaleSnapshotsDropped() { return staleSnapshotsDropped.get(); }
 
     public void setWebSocket(MarketDataWebSocket webSocket) {
         this.webSocket = webSocket;
@@ -80,6 +86,21 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
                 bookVersion = 0; // pre-v4 upstream (mixed-version rolling update)
             }
 
+            GatewayOrderBook orderBook = getOrCreateOrderBook(marketId);
+
+            // match#95: drop a stale/redelivered snapshot (old-leader or reordered egress at a
+            // leader-switchover seam) whose book version does not advance the cached book — applying
+            // it would rewind the displayed book and rebroadcast stale state as truth. Mirrors the
+            // fromVersion chain-break gate below (onBookDelta) — guarded only when BOTH the incoming
+            // message and the cached book carry a real (v4+) bookVersion, since a legacy pre-v4
+            // upstream never advances bookVersion and dropping everything would freeze the book.
+            if (bookVersion > 0 && orderBook.getVersion() > 0 && bookVersion <= orderBook.getVersion()) {
+                long n = staleSnapshotsDropped.incrementAndGet();
+                logger.debug("match#95 dedup: dropped " + n + " stale/duplicate book snapshot(s); market="
+                    + marketId + " incoming bookVersion=" + bookVersion + " have=" + orderBook.getVersion());
+                return;
+            }
+
             // Convert bids to JSON array (convert fixed-point to decimal)
             JsonArray bidsArray = new JsonArray();
             for (BookSnapshotDecoder.BidsDecoder bid : decoder.bids()) {
@@ -103,7 +124,6 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             // Update local state (per-market order book)
             String marketName = getMarketName(marketId);
             long version = bookVersion > 0 ? bookVersion : Math.max(bidVersion, askVersion);
-            GatewayOrderBook orderBook = getOrCreateOrderBook(marketId);
             orderBook.update(marketId, marketName, bidsArray, asksArray, bidVersion, askVersion, version, timestamp);
 
             // Build JSON and broadcast to WebSocket
