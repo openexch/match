@@ -142,6 +142,12 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
                 stateManager != null ? stateManager.getStaleDeltasDropped() : 0);
         appendSeries(sb, "gateway_stale_snapshots_total", "counter", "Out-of-order book snapshots dropped",
                 stateManager != null ? stateManager.getStaleSnapshotsDropped() : 0);
+        appendSeries(sb, "gateway_chain_breaks_total", "counter", "Book-version chain breaks (delta dropped, book marked stale)",
+                stateManager != null ? stateManager.getChainBreaks() : 0);
+        appendSeries(sb, "gateway_deltas_dropped_stale_total", "counter", "Book deltas dropped because the local book was stale",
+                stateManager != null ? stateManager.getDeltasDroppedWhileStale() : 0);
+        appendSeries(sb, "gateway_books_stale", "gauge", "Markets whose local order book is currently stale (awaiting resnapshot)",
+                stateManager != null ? stateManager.getStaleBookCount() : 0);
         if (aeronGateway != null) {
             appendSeries(sb, "gateway_cluster_connected", "gauge", "Cluster egress session up (1) / down (0)",
                     aeronGateway.isConnected() ? 1 : 0);

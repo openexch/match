@@ -43,9 +43,19 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
     // path below then collapses to the pre-persistence in-memory behavior.
     private volatile com.match.infrastructure.gateway.persistence.MarketDataPersistence persistence;
 
-    // Count of stale/duplicate book deltas dropped (switchover-seam dedup, match#19) — observability.
+    // Count of book-version chain breaks (a delta's fromVersion != our version — we missed an
+    // update). match#96: the delta is DROPPED and the market's book flagged stale until a
+    // resnapshot re-anchors it. Exposed as gateway_chain_breaks_total.
     private final java.util.concurrent.atomic.AtomicLong chainBreaks = new java.util.concurrent.atomic.AtomicLong();
+
+    // Count of stale/duplicate book deltas dropped (switchover-seam monotonic dedup, match#19) — observability.
     private final java.util.concurrent.atomic.AtomicLong staleDeltasDropped = new java.util.concurrent.atomic.AtomicLong(0);
+
+    // match#96: deltas dropped because the target book was already stale (a prior chain break,
+    // awaiting a resnapshot). Applying a delta onto a stale base is the match#96 drift bug, so we
+    // drop until a snapshot re-anchors. Kept distinct from the match#19 monotonic-dedup counter
+    // above so the two causes stay separable in metrics. Exposed as gateway_deltas_dropped_stale_total.
+    private final java.util.concurrent.atomic.AtomicLong deltasDroppedWhileStale = new java.util.concurrent.atomic.AtomicLong(0);
 
     // Count of stale/duplicate book snapshots dropped (switchover-seam dedup, match#95) — observability.
     private final java.util.concurrent.atomic.AtomicLong staleSnapshotsDropped = new java.util.concurrent.atomic.AtomicLong(0);
@@ -55,6 +65,23 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
 
     /** match#95: /metrics read. */
     public long getStaleSnapshotsDropped() { return staleSnapshotsDropped.get(); }
+
+    /** match#96: /metrics read (gateway_chain_breaks_total). */
+    public long getChainBreaks() { return chainBreaks.get(); }
+
+    /** match#96: /metrics read (gateway_deltas_dropped_stale_total). */
+    public long getDeltasDroppedWhileStale() { return deltasDroppedWhileStale.get(); }
+
+    /** match#96: markets whose local book is currently stale (gateway_books_stale gauge). */
+    public long getStaleBookCount() {
+        long n = 0;
+        for (GatewayOrderBook book : orderBooksByMarket.values()) {
+            if (book.isStale()) {
+                n++;
+            }
+        }
+        return n;
+    }
 
     public void setWebSocket(MarketDataWebSocket webSocket) {
         this.webSocket = webSocket;
@@ -124,7 +151,13 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             // Update local state (per-market order book)
             String marketName = getMarketName(marketId);
             long version = bookVersion > 0 ? bookVersion : Math.max(bidVersion, askVersion);
+            // match#96: a snapshot re-anchors the chain and clears any stale flag (in update()).
+            boolean wasStale = orderBook.isStale();
             orderBook.update(marketId, marketName, bidsArray, asksArray, bidVersion, askVersion, version, timestamp);
+            if (wasStale) {
+                logger.info("match#96: market=" + marketId + " book recovered — snapshot re-anchored"
+                    + " chain at bookVersion=" + version + " (was stale)");
+            }
 
             // Build JSON and broadcast to WebSocket
             if (webSocket != null) {
@@ -154,27 +187,48 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             // Get the order book for this market
             GatewayOrderBook orderBook = getOrCreateOrderBook(marketId);
 
-            // v4 chain continuity: every delta names the published state it
-            // extends. A mismatch means this consumer missed an update
-            // (should not happen on the reliable egress path outside leader
-            // seams, which re-snapshot via onSessionOpen) — count loudly.
-            if (fromVersion > 0 && orderBook.getVersion() > 0 && fromVersion != orderBook.getVersion()) {
-                long n = chainBreaks.incrementAndGet();
-                logger.warn("book-version chain break #" + n + ": market=" + marketId
-                    + " have=" + orderBook.getVersion() + " delta " + fromVersion + "->" + bookVersion
-                    + " (resnapshot will re-establish)");
+            // match#96: a book that broke its version chain (see the continuity gate below) becomes
+            // authoritative again ONLY after a fresh BOOK_SNAPSHOT re-anchors it — never via deltas.
+            // Applying a delta onto a known-stale base is exactly the drift bug (findPriceIndex
+            // silently no-ops UPDATE/DELETE of levels we never saw). Drop it, and count it distinctly
+            // so the chainBreaks counter tracks distinct break events rather than every delta while stale.
+            if (orderBook.isStale()) {
+                long n = deltasDroppedWhileStale.incrementAndGet();
+                if (n == 1 || n % 50 == 0) {
+                    logger.info("match#96: dropped " + n + " book delta(s) while market=" + marketId
+                        + " book is stale (awaiting resnapshot to re-anchor)");
+                }
+                return;
             }
 
             // match#19: drop stale/duplicate deltas (old-leader or re-delivered egress across a
             // leader-switchover seam) — they advance neither side's monotonic version, so applying
-            // (and forwarding) them would corrupt the displayed book / double-apply. The resnapshot
-            // (BookSnapshot) re-establishes the baseline, after which newer deltas apply normally.
+            // (and forwarding) them would corrupt the displayed book / double-apply. Checked BEFORE
+            // the chain-continuity gate below so a benign redelivery (whose fromVersion trivially
+            // mismatches our version) is deduped, NOT mistaken for a real forward gap and flagged stale.
             if (orderBook.isStaleUpdate(bidVersion, askVersion)) {
                 long n = staleDeltasDropped.incrementAndGet();
                 if (n == 1 || n % 50 == 0) {
                     logger.info("match#19 dedup: dropped " + n + " stale/duplicate book delta(s); market="
                         + marketId + " incoming v=(" + bidVersion + "," + askVersion + ")");
                 }
+                return;
+            }
+
+            // v4 chain continuity: every delta names the published state it extends. A mismatch that
+            // survives the dedup above means this consumer genuinely missed a forward update (a
+            // dropped/reordered delta on the egress path). match#96: applying it anyway silently
+            // drifts the book and serves it as clean until the next snapshot — so DROP the delta and
+            // flag the book stale. The next BOOK_SNAPSHOT that passes the match#95 monotonic guard
+            // re-anchors the chain and clears the flag. There is no gateway-side per-market resnapshot
+            // request path (the resnapshot generation is bumped cluster-side on session open / leader
+            // promotion), so recovery rides the cluster's next resnapshot rather than a new command.
+            if (fromVersion > 0 && orderBook.getVersion() > 0 && fromVersion != orderBook.getVersion()) {
+                long n = chainBreaks.incrementAndGet();
+                logger.warn("book-version chain break #" + n + ": market=" + marketId
+                    + " have=" + orderBook.getVersion() + " delta " + fromVersion + "->" + bookVersion
+                    + " — dropping delta, book marked stale until resnapshot");
+                orderBook.markStale(orderBook.getVersion());
                 return;
             }
 
