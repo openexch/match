@@ -566,4 +566,134 @@ public class DirectIndexOrderBookTest {
         long[] active = bidBook.getActiveOrders();
         assertEquals("Should have 60 active orders", 60 * 4, active.length);
     }
+
+    // ==================== Tombstone compaction under allocation pressure (match#94) ====================
+
+    @Test
+    public void testRequotePinnedLevel_NoLevelFull() {
+        // Issue trigger: user B rests ONE live order at P (never trades, pins the level).
+        // User A cancel-then-replaces at P 100 times. Each cancel leaves a tombstone the lazy
+        // head-advance never reaches (the level never trades, so head never moves). Without
+        // compaction the 64-slot cap is exhausted by tombstones and replaces start rejecting
+        // with LEVEL_FULL despite only two orders genuinely resting.
+        long price = FixedPoint.fromDouble(100.0);
+        long qty = FixedPoint.fromDouble(1.0);
+        int priceIdx = (int) ((price - bidBook.getBasePrice()) / bidBook.getTickSize());
+
+        // B's pinning order.
+        assertEquals(OrderRejectReason.NONE, bidBook.addOrder(1L, 999L, price, qty));
+
+        // A's initial order, then 100 requotes at the same price.
+        long aId = 2L;
+        assertEquals(OrderRejectReason.NONE, bidBook.addOrder(aId, 100L, price, qty));
+        for (int i = 0; i < 100; i++) {
+            assertTrue("cancel of A's order on replace " + i, bidBook.cancelOrder(aId));
+            long newId = 1000L + i;
+            assertEquals("replace " + i + " must succeed (no LEVEL_FULL)",
+                OrderRejectReason.NONE, bidBook.addOrder(newId, 100L, price, qty));
+            aId = newId;
+        }
+
+        // Only two orders genuinely rest: B and A's latest.
+        assertEquals("Only B and A's latest rest", 2, bidBook.getOrderCount(priceIdx));
+        assertEquals(FixedPoint.fromDouble(2.0), bidBook.getTotalQuantity(priceIdx));
+        long[] active = bidBook.getActiveOrders();
+        assertEquals("2 live orders x 4 fields", 8, active.length);
+    }
+
+    @Test
+    public void testLevelFull_64LiveOrders_CompactionCannotHelp() {
+        // Boundary: 64 genuinely-live orders (no tombstones) → compaction has nothing to
+        // reclaim, so the 65th is still rejected. This preserves the documented direct-vs-array
+        // divergence (the 'level_full_reject' determinism scenario) for real 64-order levels.
+        long price = FixedPoint.fromDouble(100.0);
+        long qty = FixedPoint.fromDouble(1.0);
+        int priceIdx = (int) ((price - bidBook.getBasePrice()) / bidBook.getTickSize());
+
+        for (long i = 1; i <= 64; i++) {
+            assertEquals("Order " + i + " should be accepted",
+                OrderRejectReason.NONE, bidBook.addOrder(i, 100L, price, qty));
+        }
+        // 65th triggers a compaction attempt that finds no tombstones → still LEVEL_FULL.
+        assertEquals("65th at a genuinely-full level must be rejected",
+            OrderRejectReason.LEVEL_FULL, bidBook.addOrder(65L, 100L, price, qty));
+        assertEquals(64, bidBook.getOrderCount(priceIdx));
+        assertEquals(FixedPoint.fromDouble(64.0), bidBook.getTotalQuantity(priceIdx));
+    }
+
+    @Test
+    public void testFifoPreservedAcrossCompaction() {
+        // Interleave live orders and tombstones, force a compaction, and assert the survivors
+        // still match in exact FIFO order.
+        long price = FixedPoint.fromDouble(100.0);
+        long qty = FixedPoint.fromDouble(1.0);
+        int priceIdx = (int) ((price - bidBook.getBasePrice()) / bidBook.getTickSize());
+
+        // Fill the level (ids 1..64), then cancel every even id → 32 live (odd, FIFO
+        // 1,3,...,63) interleaved with 32 tombstones. Slots are now exhausted, head never
+        // advanced (no trading), so the tombstones are stranded.
+        for (long i = 1; i <= 64; i++) {
+            assertEquals(OrderRejectReason.NONE, bidBook.addOrder(i, 100L, price, qty));
+        }
+        for (long i = 2; i <= 64; i += 2) {
+            assertTrue("cancel even " + i, bidBook.cancelOrder(i));
+        }
+
+        // Next add forces compaction (reclaims the 32 tombstones), then rests order 65 at tail.
+        assertEquals(OrderRejectReason.NONE, bidBook.addOrder(65L, 100L, price, qty));
+        assertEquals("33 live after compaction + add", 33, bidBook.getOrderCount(priceIdx));
+
+        // Drain via matches; survivors must appear as 1,3,5,...,63, then 65.
+        for (int k = 0; k <= 32; k++) {
+            long want = (k < 32) ? (1 + 2L * k) : 65L;
+            assertEquals("FIFO survivor at step " + k, want, bidBook.getHeadOrderId(priceIdx));
+            bidBook.reduceOrderQuantity(want, qty); // fully fill head so it advances
+        }
+        assertTrue("book empty after draining all survivors", bidBook.isEmpty());
+    }
+
+    @Test
+    public void testCompactionNoDoubleFreeAndCleanNotFound() {
+        // Level-total / getActiveOrders consistency after many compaction cycles, and a
+        // compacted-away order id must report a clean not-found (never a double-free/resurrection).
+        long price = FixedPoint.fromDouble(100.0);
+        long qty = FixedPoint.fromDouble(1.0);
+        int priceIdx = (int) ((price - bidBook.getBasePrice()) / bidBook.getTickSize());
+
+        // Pin the level so it never empties (and never trades).
+        assertEquals(OrderRejectReason.NONE, bidBook.addOrder(1L, 999L, price, qty));
+
+        long aId = 2L;
+        assertEquals(OrderRejectReason.NONE, bidBook.addOrder(aId, 100L, price, qty));
+        for (int i = 0; i < 200; i++) {
+            long compactedAwayId = aId;
+            assertTrue(bidBook.cancelOrder(aId));
+            long newId = 1000L + i;
+            assertEquals(OrderRejectReason.NONE, bidBook.addOrder(newId, 100L, price, qty));
+            aId = newId;
+            // The id just cancelled (and possibly slot-reclaimed by compaction) must not
+            // resurrect: its location was already cleared, so re-cancel is a clean not-found.
+            assertFalse("cancelled id must not resurrect", bidBook.cancelOrder(compactedAwayId));
+        }
+
+        // Exactly two live orders remain; totals and snapshot agree.
+        assertEquals(2, bidBook.getOrderCount(priceIdx));
+        assertEquals(FixedPoint.fromDouble(2.0), bidBook.getTotalQuantity(priceIdx));
+        long[] active = bidBook.getActiveOrders();
+        assertEquals("2 live orders x 4 fields", 8, active.length);
+        java.util.Set<Long> ids = new java.util.HashSet<>();
+        for (int i = 0; i < active.length; i += 4) {
+            ids.add(active[i]);
+        }
+        assertTrue("B still live", ids.contains(1L));
+        assertTrue("A's latest still live", ids.contains(aId));
+
+        // Free-slot integrity survives the churn: the level can still be filled to its true
+        // 64-order capacity, and only then does it reject.
+        for (long i = 5000L; i < 5000L + 62; i++) {
+            assertEquals("refill add " + i, OrderRejectReason.NONE, bidBook.addOrder(i, 100L, price, qty));
+        }
+        assertEquals(64, bidBook.getOrderCount(priceIdx));
+        assertEquals(OrderRejectReason.LEVEL_FULL, bidBook.addOrder(9999L, 100L, price, qty));
+    }
 }
