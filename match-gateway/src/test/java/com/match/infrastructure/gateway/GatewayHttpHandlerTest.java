@@ -306,7 +306,24 @@ public class GatewayHttpHandlerTest {
         assertTrue(body.contains("gateway_ws_clients"));
         assertTrue(body.contains("# TYPE gateway_stale_deltas_total counter"));
         assertTrue(body.contains("# TYPE gateway_stale_snapshots_total counter"));
+        // match#96 series.
+        assertTrue(body.contains("# TYPE gateway_chain_breaks_total counter"));
+        assertTrue(body.contains("# TYPE gateway_deltas_dropped_stale_total counter"));
+        assertTrue(body.contains("# TYPE gateway_books_stale gauge"));
         // No AeronGateway wired in this test: relay series are omitted, not broken.
         assertFalse(body.contains("gateway_egress_messages_total"));
+    }
+
+    @Test
+    public void metricsBooksStaleGaugeReflectsChainBrokenBook() {
+        // A chain-broken book must surface in the gateway_books_stale gauge.
+        populateOrderBook(1, "BTC-USD");
+        GatewayOrderBook book = stateManager.getOrderBook(1);
+        book.markStale(book.getVersion());
+
+        EmbeddedChannel channel = createChannel();
+        FullHttpResponse response = sendRequest(channel, HttpMethod.GET, "/metrics");
+        String body = getBody(response);
+        assertTrue(body.contains("gateway_books_stale 1"));
     }
 }

@@ -36,6 +36,15 @@ public class GatewayOrderBook {
     private volatile int marketId;
     private volatile String marketName;
 
+    // match#96: book-version chain break. A delta named a fromVersion that did not match our
+    // current version, so we missed an update and the local levels may have silently drifted
+    // (findPriceIndex no-ops UPDATE/DELETE of levels we never saw). While stale we STOP applying
+    // deltas and keep serving the last good levels, but toJson() advertises "stale":true so REST
+    // callers and new WS subscribers know the book is awaiting a resnapshot. Cleared by update()
+    // when a fresh BOOK_SNAPSHOT re-anchors the chain.
+    private volatile boolean stale;
+    private volatile long staleAtVersion;
+
     // Cached JSON for fast responses (regenerated on update)
     private volatile String cachedJson;
 
@@ -55,6 +64,9 @@ public class GatewayOrderBook {
             this.askVersion = askVersion;
             this.version = version;
             this.lastUpdateMs = timestamp;
+            // match#96: a full snapshot re-anchors the chain — the book is authoritative again.
+            this.stale = false;
+            this.staleAtVersion = 0;
 
             // Copy bids
             this.bidCount = Math.min(bids.size(), MAX_LEVELS);
@@ -127,6 +139,37 @@ public class GatewayOrderBook {
     }
 
     /**
+     * match#96: true while the local book is stale after a book-version chain break — a delta named
+     * a fromVersion that did not match our current version, so we missed an update. Deltas are then
+     * dropped (not applied to a drifting base) and the served JSON carries "stale":true until a
+     * BOOK_SNAPSHOT re-anchors the chain via {@link #update}.
+     */
+    public boolean isStale() {
+        return stale;
+    }
+
+    /** The book version at which the chain broke (diagnostics/logging); 0 when not stale. */
+    public long getStaleAtVersion() {
+        return staleAtVersion;
+    }
+
+    /**
+     * match#96: flag the book stale after a chain break. The last good levels/version are kept
+     * (we keep serving them) but the cached JSON is regenerated so REST reads and new WS
+     * subscribers immediately see "stale":true. Cleared when {@link #update} applies a resnapshot.
+     */
+    public void markStale(long brokeAtVersion) {
+        long stamp = lock.writeLock();
+        try {
+            this.stale = true;
+            this.staleAtVersion = brokeAtVersion;
+            this.cachedJson = buildJson();
+        } finally {
+            lock.unlockWrite(stamp);
+        }
+    }
+
+    /**
      * Build JSON representation (called under write lock).
      */
     private String buildJson() {
@@ -141,6 +184,11 @@ public class GatewayOrderBook {
         // v4 alias: the single monotonic book version chained across
         // snapshots and deltas (equals "version"; explicit name for clients).
         json.addProperty("bookVersion", version);
+        // match#96: present ONLY while the book is stale (chain broken, awaiting a resnapshot);
+        // absent on a healthy book so healthy payloads stay byte-identical (no client churn).
+        if (stale) {
+            json.addProperty("stale", true);
+        }
 
         JsonArray bidsArray = new JsonArray();
         for (int i = 0; i < bidCount; i++) {

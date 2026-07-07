@@ -180,6 +180,11 @@ public class MarketDataWebSocketTest {
         deltaEncoder.timestamp(System.currentTimeMillis());
         deltaEncoder.bidVersion(1);
         deltaEncoder.askVersion(2);
+        // Chain this delta onto the snapshot (version 1). The test buffer is reused across encodes,
+        // so bookVersion/fromVersion must be set explicitly or leftover bytes make the delta look
+        // like a match#96 chain break (now dropped) instead of a clean, well-chained update.
+        deltaEncoder.bookVersion(2);
+        deltaEncoder.fromVersion(1);
         deltaEncoder.changesCount(1).next()
             .price(FixedPoint.fromDouble(101.0))
             .quantity(FixedPoint.fromDouble(8.0))

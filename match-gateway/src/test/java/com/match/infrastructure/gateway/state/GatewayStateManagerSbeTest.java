@@ -442,6 +442,119 @@ public class GatewayStateManagerSbeTest {
         assertNotNull(book);
     }
 
+    // ==================== BookDelta chain-break staleness (match#96) ====================
+
+    @Test
+    public void testOnBookDelta_ChainBreak_DeltaDroppedBookFlaggedStale() {
+        // Baseline snapshot at bookVersion=10: one bid @100 qty 5.
+        encodeAndProcessBookSnapshot(1, 12345L, 10, 10, 10L,
+            new long[][]{{fp(100.0), fp(5.0), 3}},
+            new long[][]{{fp(101.0), fp(8.0), 2}}
+        );
+        assertEquals(0L, manager.getChainBreaks());
+        assertFalse(manager.getOrderBook(1).isStale());
+        assertFalse("healthy book JSON must not carry a stale key",
+            manager.getOrderBook(1).toJson().contains("\"stale\""));
+
+        // A delta that names fromVersion=99 (!= our 10) — a genuine forward gap. If applied it would
+        // set bid @100 to qty 999; it must instead be DROPPED and the book flagged stale.
+        encodeAndProcessBookDelta(1, 12346L, 15, 15, 100L, 99L,
+            new Object[][]{
+                {fp(100.0), fp(999.0), 7, OrderSide.BID, BookUpdateType.UPDATE_LEVEL}
+            }
+        );
+
+        GatewayOrderBook book = manager.getOrderBook(1);
+        assertEquals("chain break counted", 1L, manager.getChainBreaks());
+        assertTrue("book flagged stale", book.isStale());
+        assertEquals("version unchanged (delta dropped)", 10L, book.getVersion());
+        assertEquals("delta NOT applied — bid qty unchanged", 5.0, book.getBidQuantity(0), 0.0001);
+        assertTrue("served JSON advertises stale:true", book.toJson().contains("\"stale\":true"));
+    }
+
+    @Test
+    public void testOnBookDelta_WhileStale_DeltasDroppedNotReCountedAsBreaks() {
+        // Drive the book stale via a chain break.
+        encodeAndProcessBookSnapshot(1, 12345L, 10, 10, 10L,
+            new long[][]{{fp(100.0), fp(5.0), 3}},
+            new long[][]{{fp(101.0), fp(8.0), 2}}
+        );
+        encodeAndProcessBookDelta(1, 12346L, 15, 15, 100L, 99L,
+            new Object[][]{{fp(100.0), fp(999.0), 7, OrderSide.BID, BookUpdateType.UPDATE_LEVEL}}
+        );
+        assertTrue(manager.getOrderBook(1).isStale());
+        assertEquals(1L, manager.getChainBreaks());
+
+        // Further deltas while stale must be dropped and counted separately — NOT re-counted as
+        // chain breaks (chainBreaks tracks distinct break events, not every delta while stale).
+        encodeAndProcessBookDelta(1, 12347L, 20, 20, 200L, 150L,
+            new Object[][]{{fp(100.0), fp(777.0), 9, OrderSide.BID, BookUpdateType.UPDATE_LEVEL}}
+        );
+        encodeAndProcessBookDelta(1, 12348L, 25, 25, 300L, 250L,
+            new Object[][]{{fp(100.0), fp(555.0), 9, OrderSide.BID, BookUpdateType.UPDATE_LEVEL}}
+        );
+
+        GatewayOrderBook book = manager.getOrderBook(1);
+        assertEquals("deltas-while-stale counted distinctly", 2L, manager.getDeltasDroppedWhileStale());
+        assertEquals("chain breaks NOT re-incremented while stale", 1L, manager.getChainBreaks());
+        assertTrue("still stale", book.isStale());
+        assertEquals("still not applied", 5.0, book.getBidQuantity(0), 0.0001);
+    }
+
+    @Test
+    public void testOnBookDelta_RecoverySnapshotClearsStale_ThenChainedDeltaApplies() {
+        encodeAndProcessBookSnapshot(1, 12345L, 10, 10, 10L,
+            new long[][]{{fp(100.0), fp(5.0), 3}},
+            new long[][]{{fp(101.0), fp(8.0), 2}}
+        );
+        encodeAndProcessBookDelta(1, 12346L, 15, 15, 100L, 99L,
+            new Object[][]{{fp(100.0), fp(999.0), 7, OrderSide.BID, BookUpdateType.UPDATE_LEVEL}}
+        );
+        assertTrue(manager.getOrderBook(1).isStale());
+
+        // Recovery: a fresh snapshot at a HIGHER bookVersion (passes the match#95 monotonic guard)
+        // re-anchors the chain and clears the stale flag.
+        encodeAndProcessBookSnapshot(1, 12347L, 200, 200, 200L,
+            new long[][]{{fp(200.0), fp(9.0), 6}},
+            new long[][]{{fp(201.0), fp(4.0), 3}}
+        );
+
+        GatewayOrderBook book = manager.getOrderBook(1);
+        assertFalse("stale flag cleared on recovery", book.isStale());
+        assertEquals(200L, book.getVersion());
+        assertEquals(200.0, book.getBidPrice(0), 0.0001);
+        assertFalse("stale marker gone from JSON after recovery", book.toJson().contains("\"stale\""));
+        assertEquals("recovery snapshot not counted as stale", 0L, manager.getStaleSnapshotsDropped());
+
+        // A chained delta on top of the recovered book (fromVersion == 200) applies normally.
+        encodeAndProcessBookDelta(1, 12348L, 201, 200, 201L, 200L,
+            new Object[][]{{fp(200.0), fp(42.0), 2, OrderSide.BID, BookUpdateType.UPDATE_LEVEL}}
+        );
+        assertEquals("post-recovery delta applied", 42.0, book.getBidQuantity(0), 0.0001);
+        assertEquals(201L, book.getVersion());
+        assertEquals("no new chain break after recovery", 1L, manager.getChainBreaks());
+    }
+
+    @Test
+    public void testOnBookDelta_HealthyChainedDelta_NoStaleKeyByteCompat() {
+        // Byte-compat regression: a well-chained delta (fromVersion == our version) applies cleanly
+        // and the served JSON must carry NO stale key (healthy payloads stay byte-identical).
+        encodeAndProcessBookSnapshot(1, 12345L, 10, 10, 10L,
+            new long[][]{{fp(100.0), fp(5.0), 3}},
+            new long[][]{{fp(101.0), fp(8.0), 2}}
+        );
+        encodeAndProcessBookDelta(1, 12346L, 11, 10, 11L, 10L,
+            new Object[][]{{fp(100.0), fp(7.0), 4, OrderSide.BID, BookUpdateType.UPDATE_LEVEL}}
+        );
+
+        GatewayOrderBook book = manager.getOrderBook(1);
+        assertEquals("chained delta applied", 7.0, book.getBidQuantity(0), 0.0001);
+        assertEquals(11L, book.getVersion());
+        assertFalse("no chain break on a healthy chained delta", book.isStale());
+        assertEquals(0L, manager.getChainBreaks());
+        assertFalse("healthy JSON has no stale key", book.toJson().contains("\"stale\""));
+    }
+
     // ==================== OrderStatusBatch (decode no-op) ====================
 
     @Test
@@ -560,18 +673,28 @@ public class GatewayStateManagerSbeTest {
 
     private void encodeAndProcessBookDelta(int marketId, long timestamp, long bidVersion, long askVersion,
                                             Object[][] changes) {
+        // BookDelta shares its field prefix (marketId/timestamp/bidVersion/askVersion/bookVersion)
+        // with BookSnapshot, so the shared test buffer can carry a leftover bookVersion from a prior
+        // encodeAndProcessBookSnapshot(..., bookVersion, ...) call into this one unless explicitly
+        // zeroed here — this exercises the legacy (bookVersion absent) fallback path deliberately.
+        encodeAndProcessBookDelta(marketId, timestamp, bidVersion, askVersion, 0L, 0L, changes);
+    }
+
+    /**
+     * Encode a BookDelta with an explicit v4 chain (bookVersion + fromVersion). fromVersion names
+     * the published book version this delta extends; a value != the gateway's current version is a
+     * chain break (match#96). bookVersion == 0 (and fromVersion == 0) selects the legacy path.
+     */
+    private void encodeAndProcessBookDelta(int marketId, long timestamp, long bidVersion, long askVersion,
+                                            long bookVersion, long fromVersion, Object[][] changes) {
         BookDeltaEncoder encoder = new BookDeltaEncoder();
         encoder.wrapAndApplyHeader(buffer, 0, headerEnc);
         encoder.marketId(marketId);
         encoder.timestamp(timestamp);
         encoder.bidVersion(bidVersion);
         encoder.askVersion(askVersion);
-        // BookDelta shares its field prefix (marketId/timestamp/bidVersion/askVersion/bookVersion)
-        // with BookSnapshot, so the shared test buffer can carry a leftover bookVersion from a prior
-        // encodeAndProcessBookSnapshot(..., bookVersion, ...) call into this one unless explicitly
-        // zeroed here — this exercises the legacy (bookVersion absent) fallback path deliberately.
-        encoder.bookVersion(0L);
-        encoder.fromVersion(0L);
+        encoder.bookVersion(bookVersion);
+        encoder.fromVersion(fromVersion);
 
         BookDeltaEncoder.ChangesEncoder changesEnc = encoder.changesCount(changes.length);
         for (Object[] change : changes) {
