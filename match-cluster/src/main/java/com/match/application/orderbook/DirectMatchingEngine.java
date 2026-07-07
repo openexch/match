@@ -11,9 +11,15 @@ import com.match.domain.FixedPoint;
  */
 public class DirectMatchingEngine implements MatchingEngine {
 
-    // Match result storage - pre-allocated
-    private static final int MAX_MATCHES_PER_ORDER = 10_000;
+    // Match result storage - pre-allocated.
+    // Prod cap on matches generated per command: bounds per-command work on the single consensus
+    // thread. A hardcoded deterministic constant, NEVER an env var — a divergent cap between replicas
+    // would fork the state machine. Tests inject a small cap via the package-private constructor.
+    static final int MAX_MATCHES_PER_ORDER = 10_000;
     private static final int MATCH_FIELDS = 4; // makerOrderId, makerUserId, price, quantity
+
+    // Effective per-order match cap (defaults to MAX_MATCHES_PER_ORDER; test-injectable).
+    private final int maxMatchesPerOrder;
 
     // Match data: [makerOrderId, makerUserId, price, quantity] per match
     private final long[] matchResults;
@@ -27,6 +33,10 @@ public class DirectMatchingEngine implements MatchingEngine {
     // (OrderRejectReason.NONE when rested successfully or fully filled)
     private int lastRestRejectReason = OrderRejectReason.NONE;
 
+    // match#93: set when the per-order match cap fired mid-sweep with crossing liquidity still
+    // remaining (i.e. the taker was terminated at the cap). Reset at the start of each order.
+    private boolean matchLimitReached;
+
     // Order books (bid and ask sides)
     private final DirectIndexOrderBook askBook;
     private final DirectIndexOrderBook bidBook;
@@ -39,9 +49,19 @@ public class DirectMatchingEngine implements MatchingEngine {
      * @param tickSize  Price increment (fixed-point)
      */
     public DirectMatchingEngine(long basePrice, long maxPrice, long tickSize) {
+        this(basePrice, maxPrice, tickSize, MAX_MATCHES_PER_ORDER);
+    }
+
+    /**
+     * Test seam: construct with an explicit per-order match cap so the cap-termination path
+     * (match#93) can be exercised with a handful of orders instead of 10k+. Production always
+     * uses the public constructor (prod cap).
+     */
+    DirectMatchingEngine(long basePrice, long maxPrice, long tickSize, int maxMatchesPerOrder) {
         this.askBook = new DirectIndexOrderBook(basePrice, maxPrice, tickSize, true);  // ascending
         this.bidBook = new DirectIndexOrderBook(basePrice, maxPrice, tickSize, false); // descending
-        this.matchResults = new long[MAX_MATCHES_PER_ORDER * MATCH_FIELDS]; // 4 fields per match
+        this.maxMatchesPerOrder = maxMatchesPerOrder;
+        this.matchResults = new long[maxMatchesPerOrder * MATCH_FIELDS]; // 4 fields per match
     }
 
     /**
@@ -73,10 +93,15 @@ public class DirectMatchingEngine implements MatchingEngine {
         return lastRestRejectReason;
     }
 
+    public boolean wasMatchLimitReached() {
+        return matchLimitReached;
+    }
+
     public int processLimitOrder(long orderId, long userId, boolean isBuy, long price, long quantity) {
         matchCount = 0;
         takerRemainingQty = quantity;
         lastRestRejectReason = OrderRejectReason.NONE;
+        matchLimitReached = false;
 
         DirectIndexOrderBook makerBook = isBuy ? askBook : bidBook;
         DirectIndexOrderBook takerBook = isBuy ? bidBook : askBook;
@@ -95,6 +120,7 @@ public class DirectMatchingEngine implements MatchingEngine {
 
                 // Match at this level
                 matchAtLevel(makerBook, priceIdx, levelPrice);
+                if (matchLimitReached) break; // cap fired mid-sweep — stop, do not walk further levels
 
                 // Move to next level
                 priceIdx = makerBook.nextPriceIndex(priceIdx);
@@ -102,7 +128,15 @@ public class DirectMatchingEngine implements MatchingEngine {
         }
 
         if (takerRemainingQty > 0) {
-            lastRestRejectReason = takerBook.addOrder(orderId, userId, price, takerRemainingQty);
+            if (matchLimitReached) {
+                // match#93: the cap truncated the sweep with crossing liquidity still on the book.
+                // Resting the remainder would cross the book (a bid above unreached asks). Surface it
+                // through the existing rest-reject path so Engine publishes a terminal CANCELLED with
+                // the true filled quantity — never a resting, crossed remainder.
+                lastRestRejectReason = OrderRejectReason.MATCH_LIMIT;
+            } else {
+                lastRestRejectReason = takerBook.addOrder(orderId, userId, price, takerRemainingQty);
+            }
         }
 
         return matchCount;
@@ -121,6 +155,7 @@ public class DirectMatchingEngine implements MatchingEngine {
      */
     public int processMarketOrder(long orderId, long userId, boolean isBuy, long quantity, long budget) {
         matchCount = 0;
+        matchLimitReached = false;
 
         DirectIndexOrderBook makerBook = isBuy ? askBook : bidBook;
 
@@ -138,6 +173,7 @@ public class DirectMatchingEngine implements MatchingEngine {
                     (long) priceIdx * makerBook.getTickSize();
 
                 matchMarketBuyAtLevel(makerBook, priceIdx, levelPrice);
+                if (matchLimitReached) break; // cap fired mid-sweep
                 priceIdx = makerBook.nextPriceIndex(priceIdx);
             }
         } else {
@@ -150,6 +186,7 @@ public class DirectMatchingEngine implements MatchingEngine {
                     (long) priceIdx * makerBook.getTickSize();
 
                 matchAtLevel(makerBook, priceIdx, levelPrice);
+                if (matchLimitReached) break; // cap fired mid-sweep
                 priceIdx = makerBook.nextPriceIndex(priceIdx);
             }
         }
@@ -163,8 +200,12 @@ public class DirectMatchingEngine implements MatchingEngine {
     private void matchAtLevel(DirectIndexOrderBook book, int priceIdx, long price) {
         while (takerRemainingQty > 0 && book.getOrderCount(priceIdx) > 0) {
             // Stop matching if limit reached to prevent unbounded execution
-            if (matchCount >= MAX_MATCHES_PER_ORDER) {
-                System.err.println("WARNING: Match limit reached (" + MAX_MATCHES_PER_ORDER
+            if (matchCount >= maxMatchesPerOrder) {
+                // match#93: cap fired with crossing liquidity still here (loop guard proved
+                // takerRemainingQty>0 and an order at this level). Flag it so the caller terminates
+                // the taker at the cap instead of resting a crossed remainder.
+                matchLimitReached = true;
+                System.err.println("WARNING: Match limit reached (" + maxMatchesPerOrder
                     + ") for order. Remaining qty: " + takerRemainingQty);
                 return;
             }
@@ -198,8 +239,10 @@ public class DirectMatchingEngine implements MatchingEngine {
     private void matchMarketBuyAtLevel(DirectIndexOrderBook book, int priceIdx, long price) {
         while (takerRemainingBudget > 0 && book.getOrderCount(priceIdx) > 0) {
             // Stop matching if limit reached to prevent unbounded execution
-            if (matchCount >= MAX_MATCHES_PER_ORDER) {
-                System.err.println("WARNING: Match limit reached (" + MAX_MATCHES_PER_ORDER
+            if (matchCount >= maxMatchesPerOrder) {
+                // match#93: cap fired mid-sweep with crossing liquidity still here — terminate at cap.
+                matchLimitReached = true;
+                System.err.println("WARNING: Match limit reached (" + maxMatchesPerOrder
                     + ") for market buy order. Remaining budget: " + takerRemainingBudget);
                 return;
             }
