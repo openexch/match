@@ -225,9 +225,16 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
             // promotion), so recovery rides the cluster's next resnapshot rather than a new command.
             if (fromVersion > 0 && orderBook.getVersion() > 0 && fromVersion != orderBook.getVersion()) {
                 long n = chainBreaks.incrementAndGet();
-                logger.warn("book-version chain break #" + n + ": market=" + marketId
-                    + " have=" + orderBook.getVersion() + " delta " + fromVersion + "->" + bookVersion
-                    + " — dropping delta, book marked stale until resnapshot");
+                // ERROR, not warn: the default log level swallows warns, and this line is the
+                // ONLY evidence for diagnosing systematic breaks (observed 2026-07-08: exactly
+                // one break per market right after the initial snapshot). Includes both sides'
+                // versions so the mismatch shape is readable straight from the log.
+                logger.error("book-version chain break #" + n + ": market=" + marketId
+                    + " have=" + orderBook.getVersion()
+                    + " (bidV=" + orderBook.getBidVersion() + " askV=" + orderBook.getAskVersion() + ")"
+                    + " delta from=" + fromVersion + " to=" + bookVersion
+                    + " (deltaBidV=" + bidVersion + " deltaAskV=" + askVersion + ")"
+                    + " - dropping delta, book marked stale until resnapshot");
                 orderBook.markStale(orderBook.getVersion());
                 return;
             }
