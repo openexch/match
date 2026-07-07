@@ -16,7 +16,8 @@
   "durable_objects": {
     "bindings": [{ "name": "FEED", "class_name": "MarketFeed" }]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MarketFeed"] }]
-  // Production route, enabled at cutover:
-  // "routes": [{ "pattern": "market.openexch.io/ws*", "zone_name": "openexch.io" }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MarketFeed"] }],
+  // The production cutover: intercept ONLY the WebSocket path; REST keeps
+  // flowing through the cloudflared tunnel. Rollback = remove this route.
+  "routes": [{ "pattern": "market.openexch.io/ws*", "zone_name": "openexch.io" }]
 }
