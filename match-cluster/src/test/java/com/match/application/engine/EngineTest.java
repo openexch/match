@@ -2,14 +2,20 @@
 package com.match.application.engine;
 
 import com.match.application.orderbook.MatchingEngine;
+import com.match.application.publisher.OrderStatusType;
+import com.match.determinism.EngineEvent;
+import com.match.determinism.RecordingEventSink;
 import com.match.domain.FixedPoint;
 import com.match.domain.commands.CancelOrderCommand;
 import com.match.domain.commands.CreateOrderCommand;
+import com.match.domain.commands.UpdateOrderCommand;
 import com.match.domain.enums.OrderSide;
 import com.match.domain.enums.OrderType;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.junit.Before;
 import org.junit.Test;
+
+import java.util.List;
 
 import static org.junit.Assert.*;
 
@@ -76,6 +82,37 @@ public class EngineTest {
         cmd.setUserId(userId);
         cmd.setOrderId(orderId);
         return cmd;
+    }
+
+    private UpdateOrderCommand createUpdateCmd(long userId, long orderId, OrderSide side,
+            double price, double quantity) {
+        UpdateOrderCommand cmd = new UpdateOrderCommand();
+        cmd.setUserId(userId);
+        cmd.setOrderId(orderId);
+        cmd.setOrderSide(side);
+        cmd.setPrice(FixedPoint.fromDouble(price));
+        cmd.setQuantity(FixedPoint.fromDouble(quantity));
+        return cmd;
+    }
+
+    /** Last order-status event captured by the sink, or null if none were published. */
+    private EngineEvent.Status lastStatus(RecordingEventSink sink) {
+        EngineEvent.Status last = null;
+        for (EngineEvent e : sink.events()) {
+            if (e instanceof EngineEvent.Status s) {
+                last = s;
+            }
+        }
+        return last;
+    }
+
+    private boolean hasTrade(RecordingEventSink sink) {
+        for (EngineEvent e : sink.events()) {
+            if (e instanceof EngineEvent.Trade) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ==================== Initialization ====================
@@ -265,6 +302,132 @@ public class EngineTest {
         MatchingEngine btcEngine = engine.getEngine(Engine.MARKET_BTC_USD);
         assertTrue(btcEngine.isAskEmpty()); // rejected
         assertFalse(btcEngine.isBidEmpty()); // original bid still there
+    }
+
+    // ==================== Quantity Validation (match#91) ====================
+
+    @Test
+    public void testLimitZeroQuantity_Rejected_StatusPublished_NothingRests() {
+        // Silent-egress gap: a qty=0 LIMIT never matched and never rested, so NO status ever fired.
+        // It must now publish REJECTED so the OMS learns the order's fate.
+        RecordingEventSink sink = new RecordingEventSink();
+        engine.setEventPublisher(sink);
+        long before = engine.getInvalidQuantityRejectCount();
+
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createLimitCmd(100, OrderSide.BID, 60000.0, 0.0), 1000L);
+
+        EngineEvent.Status s = lastStatus(sink);
+        assertNotNull("qty=0 LIMIT must publish a status (no silent loss)", s);
+        assertEquals(OrderStatusType.REJECTED, s.orderStatus());
+        assertTrue("book must not contain the order", engine.getEngine(Engine.MARKET_BTC_USD).isBidEmpty());
+        assertEquals(before + 1, engine.getInvalidQuantityRejectCount());
+    }
+
+    @Test
+    public void testLimitNegativeQuantity_Rejected_StatusPublished_NothingRests() {
+        RecordingEventSink sink = new RecordingEventSink();
+        engine.setEventPublisher(sink);
+        long before = engine.getInvalidQuantityRejectCount();
+
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createLimitCmd(100, OrderSide.ASK, 60000.0, -1.0), 1000L);
+
+        EngineEvent.Status s = lastStatus(sink);
+        assertNotNull("qty<0 LIMIT must publish a status (no silent loss)", s);
+        assertEquals(OrderStatusType.REJECTED, s.orderStatus());
+        assertTrue("book must not contain the order", engine.getEngine(Engine.MARKET_BTC_USD).isAskEmpty());
+        assertEquals(before + 1, engine.getInvalidQuantityRejectCount());
+    }
+
+    @Test
+    public void testLimitMakerZeroQuantity_Rejected_NothingRests() {
+        // The poison-pill case: a qty=0 LIMIT_MAKER would rest at the head of its level and brick it.
+        RecordingEventSink sink = new RecordingEventSink();
+        engine.setEventPublisher(sink);
+        long before = engine.getInvalidQuantityRejectCount();
+
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createLimitMakerCmd(100, OrderSide.BID, 60000.0, 0.0), 1000L);
+
+        EngineEvent.Status s = lastStatus(sink);
+        assertNotNull("qty=0 LIMIT_MAKER must publish a status", s);
+        assertEquals(OrderStatusType.REJECTED, s.orderStatus());
+        assertTrue("nothing may rest", engine.getEngine(Engine.MARKET_BTC_USD).isBidEmpty());
+        assertEquals(before + 1, engine.getInvalidQuantityRejectCount());
+    }
+
+    @Test
+    public void testMarketBuyZeroBudget_RejectedWithInvalidQuantity_LiquidityUntouched() {
+        // Rest an ask so there IS liquidity; a zero-budget market buy must still reject at admission
+        // (INVALID_QUANTITY) and skip the sweep — not silently look like a no-liquidity reject.
+        RecordingEventSink sink = new RecordingEventSink();
+        engine.setEventPublisher(sink);
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createLimitCmd(100, OrderSide.ASK, 60000.0, 1.0), 1000L);
+        long before = engine.getInvalidQuantityRejectCount();
+
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createMarketBuyCmd(200, 0.0), 1000L);
+
+        EngineEvent.Status s = lastStatus(sink);
+        assertNotNull(s);
+        assertEquals(OrderStatusType.REJECTED, s.orderStatus());
+        assertEquals("INVALID_QUANTITY admission reject must fire (not the no-liquidity path)",
+            before + 1, engine.getInvalidQuantityRejectCount());
+        // The resting ask is untouched (the sweep was skipped).
+        assertFalse(engine.getEngine(Engine.MARKET_BTC_USD).isAskEmpty());
+    }
+
+    @Test
+    public void testMarketSellZeroQuantity_RejectedWithInvalidQuantity_LiquidityUntouched() {
+        RecordingEventSink sink = new RecordingEventSink();
+        engine.setEventPublisher(sink);
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createLimitCmd(100, OrderSide.BID, 60000.0, 1.0), 1000L);
+        long before = engine.getInvalidQuantityRejectCount();
+
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createMarketSellCmd(200, 0.0), 1000L);
+
+        EngineEvent.Status s = lastStatus(sink);
+        assertNotNull(s);
+        assertEquals(OrderStatusType.REJECTED, s.orderStatus());
+        assertEquals("INVALID_QUANTITY admission reject must fire (not the no-liquidity path)",
+            before + 1, engine.getInvalidQuantityRejectCount());
+        assertFalse(engine.getEngine(Engine.MARKET_BTC_USD).isBidEmpty());
+    }
+
+    @Test
+    public void testUpdateToZeroQuantity_Rejected_OldOrderSurvivesAndStillMatches() {
+        RecordingEventSink sink = new RecordingEventSink();
+        engine.setEventPublisher(sink);
+
+        // Rest a live bid for 2.0 @ 60000.
+        long startId = engine.getOrderIdGenerator();
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createLimitCmd(100, OrderSide.BID, 60000.0, 2.0), 1000L);
+        assertFalse(engine.getEngine(Engine.MARKET_BTC_USD).isBidEmpty());
+        long before = engine.getInvalidQuantityRejectCount();
+
+        // UPDATE that order to qty=0 — must REJECT the amend and leave the OLD order resting.
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_UPDATE,
+            createUpdateCmd(100, startId, OrderSide.BID, 60000.0, 0.0), 1000L);
+
+        EngineEvent.Status s = lastStatus(sink);
+        assertNotNull(s);
+        assertEquals("UPDATE to qty=0 is a REJECT, never an implicit cancel",
+            OrderStatusType.REJECTED, s.orderStatus());
+        assertEquals(before + 1, engine.getInvalidQuantityRejectCount());
+        assertFalse("old order must survive a rejected amend",
+            engine.getEngine(Engine.MARKET_BTC_USD).isBidEmpty());
+
+        // Prove the surviving order still matches: a market sell of 2.0 fully consumes it.
+        engine.acceptOrder(Engine.MARKET_BTC_USD, Engine.CMD_CREATE,
+            createMarketSellCmd(200, 2.0), 1000L);
+        assertTrue("surviving order should have matched and emptied the book",
+            engine.getEngine(Engine.MARKET_BTC_USD).isBidEmpty());
+        assertTrue("a trade must have executed against the surviving order", hasTrade(sink));
     }
 
     // ==================== Cancel Order ====================

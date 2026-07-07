@@ -57,6 +57,11 @@ public class Engine {
     // surfaced on the EGRESS-DIAG line as overflowRej.
     private long overflowRejectCount;
 
+    // match#91: orders rejected at admission for a non-positive quantity (LIMIT / LIMIT_MAKER /
+    // UPDATE) or a non-positive market size (MARKET buy budget / sell quantity). Plain long:
+    // written and read on the service thread only; surfaced on the EGRESS-DIAG line as invalidQtyRej.
+    private long invalidQuantityRejectCount;
+
     // Market ID constants
     public static final int MARKET_BTC_USD = 1;
     public static final int MARKET_ETH_USD = 2;
@@ -208,6 +213,22 @@ public class Engine {
         int matchCount = 0;
 
         if (type == OrderType.MARKET) {
+            // Loud-limits (match#91): a market order with no economic size (buy budget <= 0,
+            // sell quantity <= 0) can never match. Reject at admission with INVALID_QUANTITY and
+            // skip the matching sweep entirely, rather than silently falling through to the
+            // no-liquidity REJECTED branch (which would misattribute the cause).
+            long marketSize = isBuy ? totalPrice : quantity;
+            if (marketSize <= 0) {
+                invalidQuantityRejectCount++;
+                logger.warn("Market order rejected: market={} userId={} isBuy={} reason={}",
+                    marketId, userId, isBuy, OrderRejectReason.describe(OrderRejectReason.INVALID_QUANTITY));
+                publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
+                    0, 0, price, isBuy, omsOrderId);
+                if (omsOrderId != 0) {
+                    orderIdToOmsOrderId.remove(orderId);
+                }
+                return;
+            }
             // Market order
             if (isBuy) {
                 matchCount = engine.processMarketOrder(orderId, userId, true, 0, totalPrice);
@@ -234,6 +255,11 @@ public class Engine {
             // Loud-limits: validate price before matching — reject the whole
             // order upfront rather than partially matching an invalid price
             int validity = engine.validateLimitPrice(price);
+            // match#91: a non-positive quantity is rejected BEFORE the overflow check, so
+            // INVALID_QUANTITY wins over OVERFLOW for garbage input (both would otherwise fire).
+            if (validity == OrderRejectReason.NONE && invalidQuantity(quantity)) {
+                validity = OrderRejectReason.INVALID_QUANTITY;
+            }
             if (validity == OrderRejectReason.NONE && notionalOverflows(price, quantity)) {
                 validity = OrderRejectReason.OVERFLOW;
             }
@@ -290,6 +316,12 @@ public class Engine {
         } else if (type == OrderType.LIMIT_MAKER) {
             // Loud-limits: validate price before book checks
             int validity = engine.validateLimitPrice(price);
+            // match#91: reject a non-positive quantity before the overflow check (INVALID_QUANTITY
+            // wins over OVERFLOW). A qty=0 LIMIT_MAKER would otherwise rest as a head-of-level
+            // poison pill that permanently abandons the whole price level.
+            if (validity == OrderRejectReason.NONE && invalidQuantity(quantity)) {
+                validity = OrderRejectReason.INVALID_QUANTITY;
+            }
             if (validity == OrderRejectReason.NONE && notionalOverflows(price, quantity)) {
                 validity = OrderRejectReason.OVERFLOW;
             }
@@ -356,6 +388,25 @@ public class Engine {
     /** Orders rejected at admission for notional overflow (diag counter). */
     public long getOverflowRejectCount() {
         return overflowRejectCount;
+    }
+
+    /**
+     * True if {@code quantity} is not strictly positive (match#91). Bumps the diag counter as a
+     * side effect at the point of decision, mirroring {@link #notionalOverflows}. Checked at
+     * ADMISSION (LIMIT / LIMIT_MAKER / UPDATE) so no order with a zero/negative quantity ever
+     * enters the book — such an order silently loses (no status) or poisons its price level.
+     */
+    private boolean invalidQuantity(long quantity) {
+        if (quantity <= 0) {
+            invalidQuantityRejectCount++;
+            return true;
+        }
+        return false;
+    }
+
+    /** Orders rejected at admission for a non-positive quantity/market size (diag counter, match#91). */
+    public long getInvalidQuantityRejectCount() {
+        return invalidQuantityRejectCount;
     }
 
     /**
@@ -470,6 +521,12 @@ public class Engine {
         // Loud-limits: validate the NEW price BEFORE cancelling the old order.
         // An invalid update must reject the update and leave the resting order intact.
         int validity = engine.validateLimitPrice(newPrice);
+        // match#91: an UPDATE to a non-positive quantity is a REJECT, never an implicit cancel.
+        // Checked before the overflow test (INVALID_QUANTITY wins) and before the cancel below,
+        // so the OLD order survives a rejected amend — the existing price-validation pattern.
+        if (validity == OrderRejectReason.NONE && invalidQuantity(newQuantity)) {
+            validity = OrderRejectReason.INVALID_QUANTITY;
+        }
         if (validity == OrderRejectReason.NONE && notionalOverflows(newPrice, newQuantity)) {
             validity = OrderRejectReason.OVERFLOW;
         }

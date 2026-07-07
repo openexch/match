@@ -1,0 +1,17 @@
+# match#91: a qty=0 order is rejected at admission (loud REJECTED), never admitted to the book.
+# Previously a qty=0 LIMIT_MAKER rested at the head of its price level and bricked the WHOLE level
+# (matchAtLevel: makerQty=0 -> matchQty<=0 -> break), and a qty=0 LIMIT published NO status at all
+# (silent egress gap). This replays the issue's poison-pill sequence and proves the level no longer
+# bricks: a real LIMIT_MAKER behind the (now-rejected) zero rests and a MARKET SELL matches it.
+# A/B-convergent: rejection happens in the engine before any book interaction, so the direct and
+# array engines produce identical output.
+MARKET BTC_USD
+CLOCK 1000
+# qty=0 LIMIT_MAKER — now REJECTED (was: silently rested and poisoned the 60000 level). order=1
+CREATE u=200 side=BID type=LIMIT_MAKER px=60000.0 qty=0.0
+# a real LIMIT_MAKER at the same level rests as NEW behind the rejected zero. order=2
+CREATE u=201 side=BID type=LIMIT_MAKER px=60000.0 qty=5.0
+# qty=0 LIMIT — REJECTED; closes the silent-egress gap (a terminal status IS published). order=3
+CREATE u=202 side=BID type=LIMIT px=59000.0 qty=0.0
+# MARKET SELL crosses the real bid and fully matches it — the level did not brick. order=4
+CREATE u=300 side=ASK type=MARKET qty=5.0

@@ -329,6 +329,7 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_orders_submitted_total", "Orders admitted by the engine", sbeDemuxer::createOrderCount)
                     .counter("match_orders_terminal_total", "Terminal order statuses published", eventPublisher::terminalStatusCount)
                     .counter("match_overflow_rejects_total", "Orders rejected for fixed-point overflow", engine::getOverflowRejectCount)
+                    .counter("match_invalid_qty_rejects_total", "Orders rejected for non-positive quantity", engine::getInvalidQuantityRejectCount)
                     .counter("match_trades_total", "Trades executed (trade id high-water mark)", eventPublisher::getTradeIdGenerator)
                     .counter("match_dropped_market_msgs_total", "Lossy market-data egress drops", droppedMessages::get)
                     .counter("match_follower_egress_skipped_total", "Lossy market-data egress skipped on followers (no consumer)", followerSkipped::get)
@@ -510,6 +511,7 @@ public class AppClusteredService implements ClusteredService {
                         + " submitted=" + sbeDemuxer.createOrderCount()
                         + " terminal=" + eventPublisher.terminalStatusCount()
                         + " overflowRej=" + engine.getOverflowRejectCount()
+                        + " invalidQtyRej=" + engine.getInvalidQuantityRejectCount()
                         + " unknownTimers=" + timerManager.getUnknownTimerCount()
                         + " flushFires=" + flushTimerFireCount
                         + " lastEgressAgeMs=" + (now - lastEgressSendMs)
@@ -842,6 +844,7 @@ public class AppClusteredService implements ClusteredService {
                 + " submitted=" + sbeDemuxer.createOrderCount()
                 + " terminal=" + eventPublisher.terminalStatusCount()
                 + " overflowRej=" + engine.getOverflowRejectCount()
+                + " invalidQtyRej=" + engine.getInvalidQuantityRejectCount()
                 + " unknownTimers=" + timerManager.getUnknownTimerCount()
                 + " flushFires=" + flushTimerFireCount + "]");
         System.out.flush();

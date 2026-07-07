@@ -40,6 +40,22 @@ public class DirectIndexOrderBookTest {
     }
 
     @Test
+    public void testAddRejectsNonPositiveQuantity() {
+        // match#91 belt-and-suspenders: a qty<=0 order must never rest (it poisons its level's
+        // head). The guard fires above the price/geometry and compaction checks.
+        long price = FixedPoint.fromDouble(100.0);
+        assertEquals(OrderRejectReason.INVALID_QUANTITY, bidBook.addOrder(1L, 100L, price, 0L));
+        assertEquals(OrderRejectReason.INVALID_QUANTITY,
+            bidBook.addOrder(2L, 100L, price, FixedPoint.fromDouble(-3.0)));
+        assertTrue("rejected orders must not rest", bidBook.isEmpty());
+        assertEquals(0, bidBook.getActiveLevelCount());
+
+        // A positive quantity still rests normally.
+        assertEquals(OrderRejectReason.NONE, bidBook.addOrder(3L, 100L, price, FixedPoint.fromDouble(4.0)));
+        assertEquals(1, bidBook.getActiveLevelCount());
+    }
+
+    @Test
     public void testCancelOrder() {
         long price = FixedPoint.fromDouble(100.0);
         long qty = FixedPoint.fromDouble(10.0);

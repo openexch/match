@@ -152,9 +152,16 @@ public final class ArrayOrderBook {
      * Add a resting order. Price validity (tick/range) is enforced upstream by the market
      * rules layer; this method only fails when the shared pool is exhausted.
      *
-     * @return {@link OrderRejectReason#NONE} on success, {@link OrderRejectReason#BOOK_FULL} if full
+     * @return {@link OrderRejectReason#NONE} on success, {@link OrderRejectReason#INVALID_QUANTITY}
+     *         for a non-positive quantity, {@link OrderRejectReason#BOOK_FULL} if full
      */
     public int addOrder(long orderId, long userId, long price, long quantity) {
+        // Belt-and-suspenders (match#91): a non-positive quantity must never rest — a qty=0 order
+        // poisons the head of its level. The engine rejects these at admission; this is the last
+        // line of defence so the book itself never holds an unmatchable order.
+        if (quantity <= 0) {
+            return OrderRejectReason.INVALID_QUANTITY;
+        }
         if (sFreeTop == 0) {
             return OrderRejectReason.BOOK_FULL;
         }

@@ -26,6 +26,15 @@ public final class OrderRejectReason {
      * detection is wired when FixedPoint.multiply learns to throw.
      */
     public static final int OVERFLOW = 5;
+    /**
+     * The order's quantity (or a market buy's total budget) is not strictly positive
+     * (match#91). {@code quantity} is signed int64 on the wire, so 0/negative are
+     * representable; admitting them silently loses a LIMIT (no status ever fires) and
+     * rests a qty=0 LIMIT_MAKER as a head-of-level poison pill that abandons the whole
+     * price level. Rejecting at admission is the only correct answer. A distinct code
+     * (not a reused one) because reject codes become user-visible wire values.
+     */
+    public static final int INVALID_QUANTITY = 6;
 
     private OrderRejectReason() {} // Constants only
 
@@ -37,6 +46,7 @@ public final class OrderRejectReason {
             case LEVEL_FULL: return "LEVEL_FULL";
             case BOOK_FULL: return "BOOK_FULL";
             case OVERFLOW: return "OVERFLOW";
+            case INVALID_QUANTITY: return "INVALID_QUANTITY";
             default: return "UNKNOWN(" + reason + ")";
         }
     }

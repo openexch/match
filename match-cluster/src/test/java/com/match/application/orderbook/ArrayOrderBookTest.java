@@ -49,6 +49,21 @@ public class ArrayOrderBookTest {
     }
 
     @Test
+    public void addRejectsNonPositiveQuantity() {
+        // match#91 belt-and-suspenders: the book itself must never rest a qty<=0 order
+        // (a qty=0 order poisons the head of its level). Guard fires before the pool check.
+        ArrayOrderBook b = ask();
+        assertEquals(OrderRejectReason.INVALID_QUANTITY, b.addOrder(1, 100, 50_000, 0));
+        assertEquals(OrderRejectReason.INVALID_QUANTITY, b.addOrder(2, 100, 50_000, -5));
+        assertTrue("rejected orders must not rest", b.isEmpty());
+        assertEquals(0, b.getOrderCount());
+
+        // A positive quantity at the same price still rests normally.
+        assertEquals(OrderRejectReason.NONE, b.addOrder(3, 100, 50_000, 4));
+        assertEquals(1, b.getOrderCount());
+    }
+
+    @Test
     public void emptyBestPriceSentinels() {
         assertEquals(Long.MAX_VALUE, ask().getBestPrice()); // ask: lowest is best
         assertEquals(Long.MIN_VALUE, bid().getBestPrice()); // bid: highest is best
