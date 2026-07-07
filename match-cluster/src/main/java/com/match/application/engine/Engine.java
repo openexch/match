@@ -242,8 +242,18 @@ public class Engine {
                 // Market order with no matches — reject (no liquidity)
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
                     0, 0, price, isBuy, omsOrderId);
+            } else if (engine.wasMatchLimitReached()) {
+                // match#93: the per-order match cap truncated the sweep while crossing liquidity
+                // remained. This is a genuine PARTIAL, not a full fill — publish CANCELLED with the
+                // TRUE filled quantity so OMS never sees a capped partial mis-reported as FILLED.
+                // Trust the explicit flag, NOT a leftover-budget heuristic (the budget/price-precision
+                // break also leaves budget>0). matchCount==0 with the flag set is impossible (cap>=1).
+                logger.warn("Market order capped mid-sweep (match#93): market={} orderId={} userId={} filled={}",
+                    marketId, orderId, userId, filledQty);
+                publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
+                    0, filledQty, price, isBuy, omsOrderId);
             } else {
-                // Market orders are always fully executed (no remaining quantity on book)
+                // Market orders otherwise fully execute (natural exhaustion — no remaining on book)
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.FILLED,
                     0, filledQty, price, isBuy, omsOrderId);
             }

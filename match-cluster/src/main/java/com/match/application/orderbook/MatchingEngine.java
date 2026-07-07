@@ -42,6 +42,16 @@ public interface MatchingEngine {
     /** Reason the most recent processLimitOrder remainder failed to rest (NONE if it rested/filled). */
     int getLastRestRejectReason();
 
+    /**
+     * True if the most recent {@code processLimitOrder}/{@code processMarketOrder} hit the per-order
+     * match cap while crossing liquidity still remained, i.e. it was terminated at the cap rather
+     * than exhausting the taker or the book (match#93). Cleared at the start of each order. An order
+     * that fully fills in exactly the cap's matches does NOT set this (nothing was left to do), so it
+     * stays FILLED. Used by {@code Engine} to publish a terminal CANCELLED (with the TRUE filled
+     * quantity) instead of resting a crossed remainder / mis-reporting a market order as FILLED.
+     */
+    boolean wasMatchLimitReached();
+
     // ==================== Match results ====================
 
     int getMatchCount();

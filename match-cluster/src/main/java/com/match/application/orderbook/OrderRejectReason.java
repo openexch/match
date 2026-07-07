@@ -35,6 +35,16 @@ public final class OrderRejectReason {
      * (not a reused one) because reject codes become user-visible wire values.
      */
     public static final int INVALID_QUANTITY = 6;
+    /**
+     * The per-order match cap ({@code MAX_MATCHES_PER_ORDER}) fired mid-sweep while crossing
+     * liquidity still remained, so the taker was terminated at the cap rather than continuing
+     * (match#93). The cap exists to bound per-command work on the single consensus thread; when
+     * it truncates a sweep the leftover taker quantity must NOT rest on the book — doing so would
+     * cross the book (a bid resting above unreached asks) and, for a market order, mis-report a
+     * partial as FILLED. This reason routes the remainder through the loud terminal-status path
+     * (CANCELLED with the true filled quantity) instead of {@code addOrder}.
+     */
+    public static final int MATCH_LIMIT = 7;
 
     private OrderRejectReason() {} // Constants only
 
@@ -47,6 +57,7 @@ public final class OrderRejectReason {
             case BOOK_FULL: return "BOOK_FULL";
             case OVERFLOW: return "OVERFLOW";
             case INVALID_QUANTITY: return "INVALID_QUANTITY";
+            case MATCH_LIMIT: return "MATCH_LIMIT";
             default: return "UNKNOWN(" + reason + ")";
         }
     }
