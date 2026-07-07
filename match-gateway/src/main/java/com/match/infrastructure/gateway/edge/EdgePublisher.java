@@ -61,6 +61,16 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class EdgePublisher implements AutoCloseable {
 
     private static final int QUEUE_CAPACITY = 8192;
+    // A small, separate lane for the frames that reset the relay's cache and
+    // trim its delta buffer: the periodic EDGE_CACHE bundles and any live full
+    // book snapshot. These are the relay's ONLY resync path, so a burst of
+    // deltas must never evict them (match#99 item 2). Sized for many bundle
+    // cycles (4 frames x markets each) well within the 30s liveness watchdog.
+    private static final int PRIORITY_QUEUE_CAPACITY = 256;
+    // Frames are gateway-produced compact JSON with "type" first (Gson keeps
+    // insertion order), so a prefix test classifies them without parsing.
+    private static final String EDGE_CACHE_PREFIX = "{\"type\":\"EDGE_CACHE\"";
+    private static final String BOOK_SNAPSHOT_PREFIX = "{\"type\":\"BOOK_SNAPSHOT\"";
     private static final long RECONNECT_MIN_MS = 1_000;
     private static final long RECONNECT_MAX_MS = 30_000;
     private static final long STATS_INTERVAL_MS = 60_000;
@@ -85,6 +95,8 @@ public final class EdgePublisher implements AutoCloseable {
     private final GatewayStateManager stateManager;
 
     private final ArrayBlockingQueue<String> queue = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
+    // Flushed before `queue` on every drain; a snapshot always beats pending deltas.
+    private final ArrayBlockingQueue<String> priorityQueue = new ArrayBlockingQueue<>(PRIORITY_QUEUE_CAPACITY);
     private final NioEventLoopGroup group = new NioEventLoopGroup(1);
     private final AtomicBoolean drainScheduled = new AtomicBoolean();
     private volatile Channel channel; // non-null AND handshaken when connected
@@ -159,18 +171,33 @@ public final class EdgePublisher implements AutoCloseable {
     }
 
     /**
-     * Enqueue one frame for the edge. Lock-free from broadcast threads; drops
-     * the OLDEST frame under pressure so fresh state wins.
+     * Enqueue one frame for the edge. Lock-free from broadcast threads.
+     *
+     * Snapshot/bundle frames take a separate priority lane that is flushed
+     * first and is never evicted by deltas (match#99 item 2): they are the only
+     * thing that resets the relay's snapshotVersion and trims its replay buffer,
+     * so a delta burst must not starve them. Everything else (live deltas,
+     * ticker, cluster events) keeps the drop-OLDEST-under-pressure semantics so
+     * fresh state wins. Both lanes are bounded, so memory stays bounded.
      */
     public void publish(String jsonFrame) {
         if (closed) {
             return;
         }
-        while (!queue.offer(jsonFrame)) {
-            queue.poll();
+        ArrayBlockingQueue<String> lane = isPriority(jsonFrame) ? priorityQueue : queue;
+        while (!lane.offer(jsonFrame)) {
+            // On the priority lane a full queue means bundles are backing up; the
+            // oldest snapshot is already superseded by a newer one, so dropping it
+            // still leaves the freshest resync frame. Either way, bounded memory.
+            lane.poll();
             dropped.incrementAndGet();
         }
         scheduleDrain();
+    }
+
+    /** Bundle envelopes and live full book snapshots are the relay's resync path. */
+    private static boolean isPriority(String jsonFrame) {
+        return jsonFrame.startsWith(EDGE_CACHE_PREFIX) || jsonFrame.startsWith(BOOK_SNAPSHOT_PREFIX);
     }
 
     // ── connection management ───────────────────────────────────────────────
@@ -298,19 +325,26 @@ public final class EdgePublisher implements AutoCloseable {
         if (ch == null || !handshaken) {
             return;
         }
-        int written = 0;
-        String frame;
-        while (ch.isWritable() && (frame = queue.poll()) != null) {
-            ch.write(new TextWebSocketFrame(frame));
-            written++;
-        }
+        // Priority lane first: a queued snapshot/bundle ships ahead of pending
+        // deltas so the relay's resync frame is never left behind under load.
+        int written = drainLane(ch, priorityQueue) + drainLane(ch, queue);
         if (written > 0) {
             ch.flush();
             published.addAndGet(written);
         }
-        if (!queue.isEmpty() && ch.isWritable()) {
+        if (ch.isWritable() && (!priorityQueue.isEmpty() || !queue.isEmpty())) {
             scheduleDrain();
         }
+    }
+
+    private int drainLane(Channel ch, ArrayBlockingQueue<String> lane) {
+        int written = 0;
+        String frame;
+        while (ch.isWritable() && (frame = lane.poll()) != null) {
+            ch.write(new TextWebSocketFrame(frame));
+            written++;
+        }
+        return written;
     }
 
     // ── periodic EDGE_CACHE bundles ─────────────────────────────────────────
@@ -336,7 +370,7 @@ public final class EdgePublisher implements AutoCloseable {
     private void logStats() {
         System.out.println("[EDGE] published=" + published.get() + " dropped=" + dropped.get()
             + " reconnects=" + reconnects.get() + " queued=" + queue.size()
-            + " connected=" + handshaken);
+            + " priorityQueued=" + priorityQueue.size() + " connected=" + handshaken);
     }
 
     @Override

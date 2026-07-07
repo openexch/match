@@ -225,6 +225,90 @@ describe('viewer actions', () => {
   });
 });
 
+describe('cold start (match#99 item 3)', () => {
+  it('serves the empty snapshot alone and does not replay deltas onto a synthetic book', async () => {
+    const pub = await connectPublisher();
+    // The first frames the relay sees for this market are BOOK_DELTAs: no
+    // bundle or snapshot has populated a real book yet.
+    pub.send(JSON.stringify({ type: 'BOOK_DELTA', marketId: 1, market: 'BTC-USD', bookVersion: 5, fromVersion: 4, changes: [] }));
+    pub.send(JSON.stringify({ type: 'BOOK_DELTA', marketId: 1, market: 'BTC-USD', bookVersion: 6, fromVersion: 5, changes: [] }));
+    await sleep(50);
+
+    const viewer = await connect('/ws');
+    const frames = take(viewer, 3); // confirmed + empty snapshot + (empty) trades; NO deltas
+    viewer.send(JSON.stringify({ action: 'subscribe', marketId: 1 }));
+    const parsed = (await frames).map((f) => JSON.parse(f));
+    expect(parsed.map((p) => p.type)).toEqual(['SUBSCRIPTION_CONFIRMED', 'BOOK_SNAPSHOT', 'TRADES_BATCH']);
+    expect(parsed[1]).toMatchObject({ type: 'BOOK_SNAPSHOT', marketId: 1, version: 0, bids: [], asks: [] });
+    expect(parsed.some((p) => p.type === 'BOOK_DELTA')).toBe(false);
+  });
+});
+
+describe('gapped buffer (match#99 items 1 & 2)', () => {
+  it('refresh serves snapshot-only when the buffer cannot chain from the snapshot', async () => {
+    const pub = await connectPublisher();
+    await seedMarket1(pub); // snapshot @ bookVersion 100
+
+    const viewer = await connect('/ws');
+    const boot = take(viewer, 5);
+    viewer.send(JSON.stringify({ action: 'subscribe', marketId: 1 }));
+    await boot;
+
+    // A delta lands with a hole: fromVersion 105 > snapshotVersion 100 (deltas
+    // 101..105 were dropped upstream). It fans out live to the viewer...
+    const live = take(viewer, 1);
+    pub.send(JSON.stringify({ type: 'BOOK_DELTA', marketId: 1, bookVersion: 106, fromVersion: 105, changes: [] }));
+    expect(JSON.parse((await live)[0]).type).toBe('BOOK_DELTA');
+
+    // ...and the client, seeing the gap, refreshes. The relay must NOT re-serve
+    // the gapped buffer (that just loops the client); it serves snapshot-only.
+    const refreshed = take(viewer, 3);
+    viewer.send(JSON.stringify({ action: 'refresh', marketId: 1 }));
+    const parsed = (await refreshed).map((f) => JSON.parse(f));
+    expect(parsed.map((p) => p.type)).toEqual(['BOOK_SNAPSHOT', 'TRADES_BATCH', 'CANDLE_HISTORY']);
+    expect(parsed[0].bookVersion).toBe(100);
+    expect(parsed.some((p) => p.type === 'BOOK_DELTA')).toBe(false);
+  });
+
+  it('a chaining (non-gapped) buffer still replays after the snapshot', async () => {
+    const pub = await connectPublisher();
+    await seedMarket1(pub); // snapshot @ bookVersion 100
+    pub.send(JSON.stringify({ type: 'BOOK_DELTA', marketId: 1, bookVersion: 101, fromVersion: 100, changes: [] }));
+    await sleep(50);
+
+    const viewer = await connect('/ws');
+    const frames = take(viewer, 6); // confirmed, ticker, snapshot, delta 101, trades, candles
+    viewer.send(JSON.stringify({ action: 'subscribe', marketId: 1 }));
+    const types = (await frames).map((f) => JSON.parse(f).type);
+    expect(types).toEqual(['SUBSCRIPTION_CONFIRMED', 'TICKER_STATS', 'BOOK_SNAPSHOT', 'BOOK_DELTA', 'TRADES_BATCH', 'CANDLE_HISTORY']);
+  });
+});
+
+describe('trades merge (match#99 item 4)', () => {
+  it('an authoritative bundle does not clobber a newer live-teed trade', async () => {
+    const pub = await connectPublisher();
+    const t1 = { price: 100, quantity: 0.5, tradeCount: 1, timestamp: 1, side: 'BUY' };
+    const t2 = { price: 101, quantity: 0.5, tradeCount: 1, timestamp: 2, side: 'SELL' };
+    const t3 = { price: 102, quantity: 0.5, tradeCount: 1, timestamp: 3, side: 'BUY' };
+    const tape = (trades: unknown[]) => ({ type: 'TRADES_BATCH', marketId: 1, market: 'BTC-USD', timestamp: 9, trades });
+
+    pub.send(bundle(SNAP_1));
+    pub.send(bundle(tape([t1, t2]))); // authoritative tape knows ts 1,2
+    pub.send(JSON.stringify(tape([t3]))); // a newer trade is teed live (ts 3)
+    pub.send(bundle(tape([t1, t2]))); // a slightly-older bundle lands AFTER it
+    await sleep(50);
+
+    const viewer = await connect('/ws');
+    const frames = take(viewer, 3); // confirmed, snapshot, trades (no ticker/candles cached)
+    viewer.send(JSON.stringify({ action: 'subscribe', marketId: 1 }));
+    const trades = (await frames).map((f) => JSON.parse(f)).find((p) => p.type === 'TRADES_BATCH');
+    const timestamps = trades.trades.map((t: { timestamp: number }) => t.timestamp);
+    // A wholesale replace would have dropped ts 3; the merge keeps it, de-duped
+    // and oldest-first.
+    expect(timestamps).toEqual([1, 2, 3]);
+  });
+});
+
 describe('health surface', () => {
   it('exposes stats on /healthz', async () => {
     const pub = await connectPublisher();

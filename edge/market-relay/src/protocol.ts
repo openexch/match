@@ -33,6 +33,45 @@ export function frameMarketId(f: Frame): number | undefined {
   return typeof f.marketId === 'number' ? f.marketId : undefined;
 }
 
+function tradeTimestamp(t: unknown): number {
+  const ts = (t as { timestamp?: unknown } | null)?.timestamp;
+  return typeof ts === 'number' ? ts : 0;
+}
+
+/** Identity of a trade for de-dup across a bundle replace and a live append.
+ *  There is no trade id on the wire, so key on the aggregated trade's fields;
+ *  a bundle and a live batch carry byte-equal values for the same trade. */
+function tradeKey(t: unknown): string {
+  const o = (t ?? {}) as Record<string, unknown>;
+  return `${o.timestamp}|${o.price}|${o.quantity}|${o.side ?? ''}|${o.tradeCount ?? ''}`;
+}
+
+/**
+ * Merge an authoritative bundle tape into the live-teed one WITHOUT letting an
+ * older bundle clobber a newer live-appended trade (match#99 item 4). Union +
+ * de-dup by trade key, keep oldest-first by timestamp, retain the newest `cap`.
+ */
+export function mergeRecentTrades(existing: unknown[], incoming: unknown[], cap = RECENT_TRADES_CAP): unknown[] {
+  const seen = new Set<string>();
+  const merged: unknown[] = [];
+  for (const t of existing) {
+    const k = tradeKey(t);
+    if (!seen.has(k)) {
+      seen.add(k);
+      merged.push(t);
+    }
+  }
+  for (const t of incoming) {
+    const k = tradeKey(t);
+    if (!seen.has(k)) {
+      seen.add(k);
+      merged.push(t);
+    }
+  }
+  merged.sort((a, b) => tradeTimestamp(a) - tradeTimestamp(b));
+  return merged.length > cap ? merged.slice(merged.length - cap) : merged;
+}
+
 /** Mirrors the gateway's buildEmptyBookSnapshot (bookVersion omitted). */
 export function emptyBookSnapshot(marketId: number, market: string): string {
   return JSON.stringify({
