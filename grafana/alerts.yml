@@ -76,11 +76,24 @@ groups:
 
       # The public demo's outage alert: admin_demo_healthy is derived from the
       # market simulator's end-to-end canary (order round-trip, fills, market
-      # data, CORS incl. the public edge) — sim-down also flips it, so no
-      # separate up{job="market-sim"} rule is needed.
+      # data, CORS incl. the public edge, and the edge-relay viewer feed) —
+      # sim-down also flips it, so no separate up{job="market-sim"} rule is
+      # needed.
       - alert: DemoUnhealthy
         expr: admin_demo_healthy == 0
         for: 2m
         labels: {severity: critical}
         annotations:
-          summary: "Demo canary failing for 2m — sim down or the order/fill/market-data/CORS path is broken (the public demo is broken)"
+          summary: "Demo canary failing for 2m — sim down or the order/fill/market-data/CORS/edge path is broken (the public demo is broken)"
+
+      # Names the cause when the frozen thing is the edge fan-out rather than
+      # the stack (e.g. the half-open publisher incident, 2026-07-07): the sim
+      # watches the PUBLIC market WS (market-relay Worker path) that real
+      # viewers use. DemoUnhealthy still does the critical paging — the check
+      # is critical in the sim; this rule is the diagnosis label.
+      - alert: EdgeFeedStale
+        expr: sim_check{name="edge_feed_fresh"} == 0
+        for: 3m
+        labels: {severity: warning}
+        annotations:
+          summary: "Public edge market feed stale — market-relay path frozen while the stack may be fine; check relay /healthz lastPublishAgeMs and market.log [EDGE] lines"
