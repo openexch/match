@@ -3,6 +3,7 @@ package com.match.infrastructure.gateway.state;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.locks.StampedLock;
 
 /**
  * In-memory candle aggregation using ring buffers.
@@ -113,13 +114,24 @@ public class InMemoryCandleProvider implements CandleProvider {
     /**
      * Fixed-size ring buffer for candles of a single market+interval.
      * Single writer (egress thread), multiple readers (WebSocket/HTTP threads).
-     * Uses volatile head/count for visibility and copy-on-read for safety.
+     * <p>
+     * The current (most recent) candle is mutated IN PLACE on every trade that
+     * lands in the same bucket (high/low/close/volume/tradeCount), not just on
+     * bucket creation. volatile head/count alone only give a happens-before
+     * edge for the create path, so in-place mutation raced readers' plain
+     * field-by-field copy, producing torn OHLCV reads under concurrent load.
+     * Mirrors the {@link GatewayOrderBook} fix for the identical
+     * single-writer/multi-reader shape: a {@link StampedLock} takes the write
+     * lock around every mutation (including the create branch) and readers
+     * either validate an optimistic read or fall back to the read lock, so a
+     * returned copy is always a consistent snapshot of one write.
      */
     static class CandleRing {
         private final Candle[] candles;
         private final int capacity;
         private volatile int head = 0;   // Next write position
         private volatile int count = 0;  // Number of valid entries
+        private final StampedLock lock = new StampedLock();
 
         CandleRing(int capacity) {
             this.capacity = capacity;
@@ -131,62 +143,88 @@ public class InMemoryCandleProvider implements CandleProvider {
 
         /**
          * Update existing candle at bucket time, or create a new one.
-         * Called from egress thread only (single writer).
+         * Called from egress thread only (single writer). Takes the write
+         * lock so in-place field mutation of the current candle is never
+         * observed torn by a concurrent reader.
          */
         void updateOrCreate(int marketId, long bucketSec, double price, double quantity, int tradeCount) {
-            // Check if the most recent candle matches this bucket
-            if (count > 0) {
-                int lastIdx = (head - 1 + capacity) % capacity;
-                Candle last = candles[lastIdx];
-                if (last.time == bucketSec) {
-                    // Update existing candle
-                    last.high = Math.max(last.high, price);
-                    last.low = Math.min(last.low, price);
-                    last.close = price;
-                    last.volume += quantity;
-                    last.tradeCount += tradeCount;
-                    return;
+            long stamp = lock.writeLock();
+            try {
+                // Check if the most recent candle matches this bucket
+                if (count > 0) {
+                    int lastIdx = (head - 1 + capacity) % capacity;
+                    Candle last = candles[lastIdx];
+                    if (last.time == bucketSec) {
+                        // Update existing candle
+                        last.high = Math.max(last.high, price);
+                        last.low = Math.min(last.low, price);
+                        last.close = price;
+                        last.volume += quantity;
+                        last.tradeCount += tradeCount;
+                        return;
+                    }
                 }
-            }
 
-            // Create new candle at head position
-            Candle c = candles[head];
-            c.time = bucketSec;
-            c.open = price;
-            c.high = price;
-            c.low = price;
-            c.close = price;
-            c.volume = quantity;
-            c.tradeCount = tradeCount;
-            c.marketId = marketId;
+                // Create new candle at head position
+                Candle c = candles[head];
+                c.time = bucketSec;
+                c.open = price;
+                c.high = price;
+                c.low = price;
+                c.close = price;
+                c.volume = quantity;
+                c.tradeCount = tradeCount;
+                c.marketId = marketId;
 
-            head = (head + 1) % capacity;
-            if (count < capacity) {
-                count++;
+                head = (head + 1) % capacity;
+                if (count < capacity) {
+                    count++;
+                }
+            } finally {
+                lock.unlockWrite(stamp);
             }
         }
 
         /**
          * Append a candle at the head position (startup seeding only —
-         * must not run concurrently with the egress writer).
+         * must not run concurrently with the egress writer). Also guarded
+         * by the write lock so it can never race a concurrent reader.
          */
         void append(Candle source) {
-            candles[head].copyFrom(source);
-            head = (head + 1) % capacity;
-            if (count < capacity) {
-                count++;
+            long stamp = lock.writeLock();
+            try {
+                candles[head].copyFrom(source);
+                head = (head + 1) % capacity;
+                if (count < capacity) {
+                    count++;
+                }
+            } finally {
+                lock.unlockWrite(stamp);
             }
         }
 
         /**
          * Get the most recent N candles in ascending time order (oldest first).
-         * Returns copies for thread safety.
+         * Returns copies for thread safety. Tries an optimistic (lock-free)
+         * read first; if a write raced it, falls back to the read lock so the
+         * copies returned are always internally consistent.
          */
         List<Candle> getRecent(int n) {
-            int localHead = head;
-            int localCount = count;
-            int toReturn = Math.min(n, localCount);
+            long stamp = lock.tryOptimisticRead();
+            List<Candle> result = copyRecent(head, count, n);
+            if (!lock.validate(stamp)) {
+                long readStamp = lock.readLock();
+                try {
+                    result = copyRecent(head, count, n);
+                } finally {
+                    lock.unlockRead(readStamp);
+                }
+            }
+            return result;
+        }
 
+        private List<Candle> copyRecent(int localHead, int localCount, int n) {
+            int toReturn = Math.min(n, localCount);
             List<Candle> result = new ArrayList<>(toReturn);
 
             // Read the last toReturn candles, starting from oldest
@@ -202,13 +240,25 @@ public class InMemoryCandleProvider implements CandleProvider {
 
         /**
          * Get the current (most recent) candle.
-         * Returns a copy for thread safety, or null if empty.
+         * Returns a copy for thread safety, or null if empty. Same
+         * optimistic-read-then-lock-fallback protocol as {@link #getRecent}.
          */
         Candle getCurrent() {
-            int localCount = count;
-            if (localCount == 0) return null;
+            long stamp = lock.tryOptimisticRead();
+            Candle copy = copyCurrent(head, count);
+            if (!lock.validate(stamp)) {
+                long readStamp = lock.readLock();
+                try {
+                    copy = copyCurrent(head, count);
+                } finally {
+                    lock.unlockRead(readStamp);
+                }
+            }
+            return copy;
+        }
 
-            int localHead = head;
+        private Candle copyCurrent(int localHead, int localCount) {
+            if (localCount == 0) return null;
             int lastIdx = (localHead - 1 + capacity) % capacity;
             Candle copy = new Candle();
             copy.copyFrom(candles[lastIdx]);

@@ -4,7 +4,12 @@ package com.match.infrastructure.gateway.state;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.*;
 
@@ -354,5 +359,118 @@ public class InMemoryCandleProviderTest {
         provider.seed(1, "2m", java.util.List.of(candle(60, 1, 1, 1, 1, 1, 1)));
         assertTrue(provider.getCandles(1, "1m", 10).isEmpty());
         assertTrue(provider.getCandles(0, "1m", 10).isEmpty());
+    }
+
+    // ==================== Concurrency: torn-read regression ====================
+
+    /**
+     * Regression test for the CandleRing data race: updateOrCreate mutated the
+     * current candle's OHLCV fields (high/low/close/volume/tradeCount) in place
+     * with no lock, while getRecent/getCurrent copied those same fields field by
+     * field. A reader could observe an internally inconsistent candle (e.g. a
+     * high from one trade paired with a volume from an earlier or later trade).
+     * <p>
+     * This hammers one writer thread against several reader threads on a single
+     * ring and asserts, over many iterations, that every observed candle is
+     * internally consistent: high is the max and low is the min across open/
+     * close, and volume/tradeCount never appear to regress within the same
+     * bucket. The StampedLock fix in CandleRing (write lock around mutation,
+     * optimistic-read-with-fallback around reads, copy taken under the same
+     * guard as the mutation) makes this deterministically safe.
+     */
+    @Test(timeout = 30_000)
+    public void testConcurrentUpdateAndRead_NeverTornCandle() throws InterruptedException {
+        final int marketId = 1;
+        final String interval = "1m";
+        final int writeIterations = 200_000;
+        final int readerThreadCount = 3;
+
+        final AtomicBoolean writerDone = new AtomicBoolean(false);
+        final AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        Thread writer = new Thread(() -> {
+            Random rnd = new Random(42);
+            long timestampMs = 60_000L; // 1m bucket starting at t=60s
+            for (int i = 0; i < writeIterations; i++) {
+                double price = 90.0 + rnd.nextDouble() * 20.0;   // [90, 110)
+                double qty = 0.1 + rnd.nextDouble();             // (0.1, 1.1)
+                provider.onTrade(marketId, price, qty, 1, timestampMs);
+                // Advance slowly so most trades land in the same bucket (heavy
+                // in-place mutation) while occasionally rolling into a new one
+                // (exercises the create branch too).
+                timestampMs += 50L;
+            }
+            writerDone.set(true);
+        }, "candle-writer");
+
+        Runnable readerTask = () -> {
+            // Per-thread bucket-time -> last observed volume/tradeCount, to
+            // detect accumulation ever appearing to go backwards.
+            Map<Long, Double> lastVolumeByBucket = new HashMap<>();
+            Map<Long, Integer> lastTradeCountByBucket = new HashMap<>();
+            try {
+                while (!writerDone.get()) {
+                    assertConsistent(provider.getCurrentCandle(marketId, interval),
+                            lastVolumeByBucket, lastTradeCountByBucket);
+                    for (Candle c : provider.getCandles(marketId, interval, 5)) {
+                        assertConsistent(c, lastVolumeByBucket, lastTradeCountByBucket);
+                    }
+                }
+                // One last read after the writer stops, to catch any tear in
+                // the final mutation too.
+                assertConsistent(provider.getCurrentCandle(marketId, interval),
+                        lastVolumeByBucket, lastTradeCountByBucket);
+            } catch (Throwable t) {
+                failure.compareAndSet(null, t);
+            }
+        };
+
+        Thread[] readers = new Thread[readerThreadCount];
+        for (int i = 0; i < readerThreadCount; i++) {
+            readers[i] = new Thread(readerTask, "candle-reader-" + i);
+        }
+
+        writer.start();
+        for (Thread r : readers) r.start();
+
+        writer.join();
+        for (Thread r : readers) r.join();
+
+        if (failure.get() != null) {
+            throw new AssertionError("Torn/inconsistent candle observed under concurrent read+write", failure.get());
+        }
+    }
+
+    private static void assertConsistent(Candle c, Map<Long, Double> lastVolumeByBucket,
+                                         Map<Long, Integer> lastTradeCountByBucket) {
+        if (c == null) return;
+
+        String desc = describe(c);
+        assertTrue("high >= open (" + desc + ")", c.high >= c.open);
+        assertTrue("high >= close (" + desc + ")", c.high >= c.close);
+        assertTrue("high >= low (" + desc + ")", c.high >= c.low);
+        assertTrue("low <= open (" + desc + ")", c.low <= c.open);
+        assertTrue("low <= close (" + desc + ")", c.low <= c.close);
+        assertTrue("volume > 0 (" + desc + ")", c.volume > 0);
+        assertTrue("tradeCount > 0 (" + desc + ")", c.tradeCount > 0);
+
+        Double lastVolume = lastVolumeByBucket.get(c.time);
+        if (lastVolume != null) {
+            assertTrue("volume regressed within bucket " + c.time + ": prev=" + lastVolume + " now=" + c.volume,
+                    c.volume >= lastVolume - 1e-9);
+        }
+        lastVolumeByBucket.put(c.time, c.volume);
+
+        Integer lastTradeCount = lastTradeCountByBucket.get(c.time);
+        if (lastTradeCount != null) {
+            assertTrue("tradeCount regressed within bucket " + c.time + ": prev=" + lastTradeCount + " now=" + c.tradeCount,
+                    c.tradeCount >= lastTradeCount);
+        }
+        lastTradeCountByBucket.put(c.time, c.tradeCount);
+    }
+
+    private static String describe(Candle c) {
+        return "time=" + c.time + " open=" + c.open + " high=" + c.high + " low=" + c.low
+                + " close=" + c.close + " volume=" + c.volume + " tradeCount=" + c.tradeCount;
     }
 }
