@@ -1,0 +1,83 @@
+# match#94: requote at a price level pinned live by ANOTHER user's order.
+# User B (999) rests one bid at $60,000 that never trades, pinning the level.
+# User A (100) then requotes at the SAME price 70 times. Each UPDATE cancel-then-
+# replaces, leaving a tombstone the lazy head-advance never reaches (the level never
+# trades). The direct book's 64-slot/level cap must NOT be exhausted by those
+# tombstones: allocation-pressure compaction reclaims them, so every requote rests as
+# NEW, identical to the array book. This scenario is in the CONVERGENT set of the
+# A/B equivalence test (direct == array); contrast level_full_reject, which uses 64
+# genuinely-live orders and is the one intended divergence.
+MARKET BTC_USD
+CLOCK 1000
+CREATE u=999 side=BID type=LIMIT px=60000.0 qty=1.0
+CREATE u=100 side=BID type=LIMIT px=60000.0 qty=1.0
+UPDATE u=100 order=2 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=3 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=4 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=5 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=6 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=7 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=8 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=9 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=10 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=11 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=12 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=13 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=14 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=15 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=16 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=17 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=18 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=19 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=20 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=21 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=22 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=23 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=24 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=25 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=26 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=27 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=28 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=29 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=30 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=31 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=32 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=33 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=34 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=35 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=36 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=37 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=38 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=39 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=40 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=41 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=42 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=43 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=44 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=45 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=46 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=47 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=48 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=49 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=50 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=51 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=52 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=53 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=54 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=55 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=56 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=57 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=58 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=59 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=60 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=61 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=62 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=63 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=64 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=65 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=66 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=67 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=68 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=69 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=70 side=BID px=60000.0 qty=1.0
+UPDATE u=100 order=71 side=BID px=60000.0 qty=1.0

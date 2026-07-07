@@ -150,8 +150,16 @@ public class DirectIndexOrderBook {
 
         int priceIdx = priceToIndex(price);
 
-        // Get free slot at this price level
-        if (freeSlotCounts[priceIdx] == 0) return OrderRejectReason.LEVEL_FULL;
+        // Get free slot at this price level.
+        // Under allocation pressure, first reclaim tombstoned slots (match#94): cancels and
+        // requotes at a level pinned live by ANOTHER order leave qty=0 tombstones in the chain
+        // that the lazy head-advance never reaches (the head never moves because the level never
+        // trades). Compact once — walk the chain, unlink and free every tombstone — before
+        // declaring the level full. Only a level with 64 genuinely-live orders stays full.
+        if (freeSlotCounts[priceIdx] == 0) {
+            compactLevel(priceIdx);
+            if (freeSlotCounts[priceIdx] == 0) return OrderRejectReason.LEVEL_FULL;
+        }
 
         int slotStackBase = priceIdx * MAX_ORDERS_PER_LEVEL;
         int slot = freeSlots[slotStackBase + --freeSlotCounts[priceIdx]];
@@ -525,6 +533,65 @@ public class DirectIndexOrderBook {
             freeSlots[slotStackBase + freeSlotCounts[priceIdx]++] = currentSlot;
             currentSlot = nextSlot;
         }
+    }
+
+    /**
+     * Reclaim tombstoned slots at a level in place, preserving live-order FIFO order (match#94).
+     *
+     * <p>Walks the level's chain exactly once (≤ MAX_ORDERS_PER_LEVEL nodes): every tombstone
+     * (qty == 0) is unlinked and its slot pushed back onto the free stack, while live orders are
+     * re-stitched into a compact chain in their original order. Head and tail are rebuilt to point
+     * at the first/last surviving live slot. Slots are NOT moved, so {@code orderLocations} entries
+     * for the surviving orders stay valid.</p>
+     *
+     * <p>Called only from {@link #addOrder} when the level's free stack is exhausted. Because a level
+     * whose live count reaches 0 is fully freed via {@link #freeAllSlotsAtLevel}, a full free stack
+     * implies at least one live order pins the level, so the compacted chain is non-empty.</p>
+     *
+     * <p>Every tombstone has already had its {@code orderLocations} entry removed (in
+     * {@link #cancelOrder}/{@link #reduceOrderQuantity}), so freeing its slot cannot orphan a
+     * location. After compaction the chain holds no tombstones, so the lazy head-advance in
+     * getHeadOrder* frees nothing further — no double-free.</p>
+     */
+    private void compactLevel(int priceIdx) {
+        int levelBase = priceIdx * LEVEL_FIELDS;
+        int slotStackBase = priceIdx * MAX_ORDERS_PER_LEVEL;
+
+        int currentSlot = (int) levels[levelBase]; // head
+        int newHead = -1;
+        int newTail = -1;
+
+        // +1 guard: a fully-occupied level has exactly MAX_ORDERS_PER_LEVEL nodes to visit.
+        int guard = MAX_ORDERS_PER_LEVEL + 1;
+        while (currentSlot >= 0 && currentSlot < MAX_ORDERS_PER_LEVEL && --guard > 0) {
+            int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + currentSlot) * ORDER_FIELDS;
+            int nextSlot = (int) orders[orderBase + 3];
+
+            if (orders[orderBase + 2] == 0) {
+                // Tombstone — unlink and reclaim the slot.
+                freeSlots[slotStackBase + freeSlotCounts[priceIdx]++] = currentSlot;
+            } else {
+                // Live order — keep it, appending to the compacted chain in FIFO order.
+                if (newHead < 0) {
+                    newHead = currentSlot;
+                } else {
+                    int newTailBase = (priceIdx * MAX_ORDERS_PER_LEVEL + newTail) * ORDER_FIELDS;
+                    orders[newTailBase + 3] = currentSlot;
+                }
+                newTail = currentSlot;
+            }
+
+            currentSlot = nextSlot;
+        }
+
+        // Terminate the compacted chain.
+        if (newTail >= 0) {
+            int newTailBase = (priceIdx * MAX_ORDERS_PER_LEVEL + newTail) * ORDER_FIELDS;
+            orders[newTailBase + 3] = -1;
+        }
+
+        levels[levelBase] = newHead;     // head
+        levels[levelBase + 1] = newTail; // tail
     }
 
     private long packLocation(int priceIdx, int slot) {
