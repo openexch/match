@@ -140,6 +140,8 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
                 com.match.infrastructure.websocket.MarketDataWebSocket.SLOW_CLIENTS_DISCONNECTED.get());
         appendSeries(sb, "gateway_stale_deltas_total", "counter", "Out-of-order book deltas dropped",
                 stateManager != null ? stateManager.getStaleDeltasDropped() : 0);
+        appendSeries(sb, "gateway_stale_snapshots_total", "counter", "Out-of-order book snapshots dropped",
+                stateManager != null ? stateManager.getStaleSnapshotsDropped() : 0);
         if (aeronGateway != null) {
             appendSeries(sb, "gateway_cluster_connected", "gauge", "Cluster egress session up (1) / down (0)",
                     aeronGateway.isConnected() ? 1 : 0);

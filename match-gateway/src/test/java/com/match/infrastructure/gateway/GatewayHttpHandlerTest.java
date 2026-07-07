@@ -305,6 +305,7 @@ public class GatewayHttpHandlerTest {
         String body = getBody(response);
         assertTrue(body.contains("gateway_ws_clients"));
         assertTrue(body.contains("# TYPE gateway_stale_deltas_total counter"));
+        assertTrue(body.contains("# TYPE gateway_stale_snapshots_total counter"));
         // No AeronGateway wired in this test: relay series are omitted, not broken.
         assertFalse(body.contains("gateway_egress_messages_total"));
     }
