@@ -37,7 +37,7 @@ for convenience and say so in their docs).
 
 Please report vulnerabilities privately. Do not open a public issue.
 
-- Email: **emrebulutlar@gmail.com** (include the repo name, an impact
+- Email: **info@openexch.io** (include the repo name, an impact
   summary, and reproduction steps)
 - Or use GitHub's private reporting if available on this repository
   (Security tab, "Report a vulnerability")
