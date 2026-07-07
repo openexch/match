@@ -31,9 +31,14 @@ public class ClusterStatus {
 
     // WebSocket channel for broadcasting (set by external component)
     private volatile ChannelGroup marketChannels;
+    private volatile java.util.function.Consumer<String> edgeTee;
 
     public void setMarketChannels(ChannelGroup channels) {
         this.marketChannels = channels;
+    }
+
+    public void setEdgeTee(java.util.function.Consumer<String> edgeTee) {
+        this.edgeTee = edgeTee;
     }
 
     public int getLeaderId() {
@@ -108,44 +113,49 @@ public class ClusterStatus {
     }
 
     public synchronized void broadcastStatus() {
-        if (marketChannels != null && !marketChannels.isEmpty()) {
-            Map<String, Object> msg = new HashMap<>();
-            msg.put("type", "CLUSTER_STATUS");
-            msg.put("leaderId", leaderId);
-            msg.put("leadershipTermId", leadershipTermId);
-            msg.put("gatewayConnected", gatewayConnected);
-            msg.put("timestamp", System.currentTimeMillis());
+        Map<String, Object> msg = new HashMap<>();
+        msg.put("type", "CLUSTER_STATUS");
+        msg.put("leaderId", leaderId);
+        msg.put("leadershipTermId", leadershipTermId);
+        msg.put("gatewayConnected", gatewayConnected);
+        msg.put("timestamp", System.currentTimeMillis());
 
-            List<Map<String, Object>> nodes = new ArrayList<>();
-            for (int i = 0; i < 3; i++) {
-                Map<String, Object> node = new HashMap<>();
-                node.put("id", i);
-                node.put("status", nodeStatus.get(i));
-                node.put("healthy", nodeHealthy[i].get());
-                nodes.add(node);
-            }
-            msg.put("nodes", nodes);
-
-            String json = gson.toJson(msg);
-            marketChannels.writeAndFlush(new TextWebSocketFrame(json));
+        List<Map<String, Object>> nodes = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            Map<String, Object> node = new HashMap<>();
+            node.put("id", i);
+            node.put("status", nodeStatus.get(i));
+            node.put("healthy", nodeHealthy[i].get());
+            nodes.add(node);
         }
+        msg.put("nodes", nodes);
+
+        broadcast(gson.toJson(msg));
     }
 
     public synchronized void broadcastClusterEvent(String event, Integer nodeId, String message) {
-        if (marketChannels != null && !marketChannels.isEmpty()) {
-            Map<String, Object> msg = new HashMap<>();
-            msg.put("type", "CLUSTER_EVENT");
-            msg.put("event", event);
-            if (nodeId != null) {
-                msg.put("nodeId", nodeId);
-            }
-            if (event.equals("LEADER_CHANGE")) {
-                msg.put("newLeaderId", leaderId);
-            }
-            msg.put("message", message);
-            msg.put("timestamp", System.currentTimeMillis());
+        Map<String, Object> msg = new HashMap<>();
+        msg.put("type", "CLUSTER_EVENT");
+        msg.put("event", event);
+        if (nodeId != null) {
+            msg.put("nodeId", nodeId);
+        }
+        if (event.equals("LEADER_CHANGE")) {
+            msg.put("newLeaderId", leaderId);
+        }
+        msg.put("message", message);
+        msg.put("timestamp", System.currentTimeMillis());
 
-            String json = gson.toJson(msg);
+        broadcast(gson.toJson(msg));
+    }
+
+    /** Local viewers via the channel group; edge viewers via the tee. The tee
+     *  fires even with zero local channels: edge viewers are still watching. */
+    private void broadcast(String json) {
+        if (edgeTee != null) {
+            edgeTee.accept(json);
+        }
+        if (marketChannels != null && !marketChannels.isEmpty()) {
             marketChannels.writeAndFlush(new TextWebSocketFrame(json));
         }
     }

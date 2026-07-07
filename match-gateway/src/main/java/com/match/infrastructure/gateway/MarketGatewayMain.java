@@ -2,6 +2,7 @@
 package com.match.infrastructure.gateway;
 
 import com.match.infrastructure.admin.ClusterStatus;
+import com.match.infrastructure.gateway.edge.EdgePublisher;
 import com.match.infrastructure.gateway.persistence.MarketDataPersistence;
 import com.match.infrastructure.gateway.state.GatewayStateManager;
 import com.match.infrastructure.websocket.MarketDataWebSocket;
@@ -18,6 +19,7 @@ public class MarketGatewayMain implements AutoCloseable {
     private final GatewayStateManager stateManager;
     private final ClusterStatus clusterStatus;
     private final MarketDataPersistence persistence; // null when disabled by env
+    private final EdgePublisher edgePublisher; // null when MARKET_EDGE_URL unset
 
     public MarketGatewayMain() {
         this.clusterStatus = new ClusterStatus();
@@ -37,6 +39,14 @@ public class MarketGatewayMain implements AutoCloseable {
         this.marketDataWebSocket.setClusterStatus(clusterStatus);
         this.marketDataWebSocket.setStateManager(stateManager);
         this.marketDataWebSocket.setAeronGateway(aeronGateway); // match#33: /metrics relay stats
+
+        // Optional edge fan-out (edge/market-relay): tee broadcasts once to
+        // the relay Worker instead of pushing per-viewer copies upstream.
+        this.edgePublisher = EdgePublisher.startOrNull(stateManager);
+        this.marketDataWebSocket.setEdgePublisher(edgePublisher);
+        if (edgePublisher != null) {
+            this.clusterStatus.setEdgeTee(edgePublisher::publish);
+        }
 
         // Wire state manager as egress listener (handles state updates and broadcasts)
         this.stateManager.setWebSocket(marketDataWebSocket);
@@ -67,6 +77,9 @@ public class MarketGatewayMain implements AutoCloseable {
 
     @Override
     public void close() {
+        if (edgePublisher != null) {
+            edgePublisher.close();
+        }
         if (marketDataWebSocket != null) {
             marketDataWebSocket.close();
         }
