@@ -429,7 +429,8 @@ public class MarketPublisher implements MarketEventHandler {
         }
     }
 
-    private synchronized void flushBuffers() {
+    // Package-private for tests (MarketPublisherBookChainTest drives flush cycles directly).
+    synchronized void flushBuffers() {
         flushCount++;
 
         try {
@@ -668,7 +669,15 @@ public class MarketPublisher implements MarketEventHandler {
                                             collectedBidVersion, collectedAskVersion,
                                             collectedBookVersion, lastPublishedBookVersion);
         }
-        lastPublishedBookVersion = collectedBookVersion;
+        // match#115: advance the chain ONLY when a frame was actually encoded. A mutation below
+        // the visible top-N depth bumps the side versions but yields an EMPTY visible diff
+        // (encodeBookDelta returns 0), so nothing is broadcast — advancing here anyway made the
+        // next visible delta name a fromVersion no consumer ever received, which every gateway
+        // (correctly) treats as a chain break and freezes the book until the next resnapshot.
+        // An unsent version gap is fine: the next delta spans it (visible state to visible state).
+        if (encodedLength > 0) {
+            lastPublishedBookVersion = collectedBookVersion;
+        }
 
         // Store current state as last sent
         System.arraycopy(bidPrices, 0, lastBidPrices, 0, bidCount);

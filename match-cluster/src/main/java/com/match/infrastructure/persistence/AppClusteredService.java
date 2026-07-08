@@ -119,6 +119,12 @@ public class AppClusteredService implements ClusteredService {
     private final Queue<QueuedMessage> omsEgressQueue = new ArrayBlockingQueue<>(OMS_EGRESS_QUEUE_CAPACITY);
     private final AtomicLong droppedOmsEgress = new AtomicLong(0);
 
+    // match#115 audit: drainQueue() gives up on a message for a session after bounded backpressure
+    // retries — a real egress loss the enqueue-side drop counters above can never see. Must stay 0;
+    // if it climbs, frames are vanishing between the queue and the wire (gateway chain breaks are
+    // then EXPECTED and correct — this counter says why).
+    private final AtomicLong egressOfferGiveUps = new AtomicLong(0);
+
     // The queues above are bounded by ENTRY COUNT, but each entry holds a copied batch buffer
     // (up to ~150KB), so a count limit alone is NOT a memory bound — under a backed-up egress
     // consumer (or while replaying a huge log) they can fill the heap and OOM the matching node.
@@ -278,6 +284,17 @@ public class AppClusteredService implements ClusteredService {
                             break;
                         }
                     }
+                    // match#115 audit: retries exhausted = the message was silently LOST for this
+                    // session with no accounting anywhere — the exact "frames skip between emit and
+                    // apply" shape. Count it loudly so egress loss is never invisible again.
+                    if (retries >= 3) {
+                        long n = egressOfferGiveUps.incrementAndGet();
+                        if (n == 1 || n % 1000 == 0) {
+                            System.err.println("CRITICAL: egress offer gave up after " + retries
+                                + " backpressured retries (session=" + session.id() + ", len=" + msg.length
+                                + ", totalGiveUps=" + n + ") — frame lost; gateway will see a chain break");
+                        }
+                    }
                 }
             }
             return sentAny;
@@ -346,6 +363,7 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_dropped_market_msgs_total", "Lossy market-data egress drops", droppedMessages::get)
                     .counter("match_follower_egress_skipped_total", "Lossy market-data egress skipped on followers (no consumer)", followerSkipped::get)
                     .counter("match_dropped_oms_egress_total", "Reliable OMS egress drops (should stay 0)", droppedOmsEgress::get)
+                    .counter("match_egress_offer_giveups_total", "Frames lost to exhausted backpressure retries at session.offer (should stay 0)", egressOfferGiveUps::get)
                     .counter("match_unknown_timers_total", "Fired cluster timers with no runnable", timerManager::getUnknownTimerCount)
                     .counter("match_flush_timer_fires_total", "Egress flush timer fires", () -> flushTimerFireCount)
                     .counter("match_aeron_errors_total", "Aeron error handler invocations", AeronCluster.AERON_ERROR_COUNT::get)
