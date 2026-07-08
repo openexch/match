@@ -47,15 +47,16 @@ entry objects are per-trade at full rate. Pools exist in the same class
 these two entry types and swapping the `HashSet` for an Agrona
 `LongHashSet` is mechanical.
 
-### Reject-path logging (consensus thread, reject/error only)
+### Reject-path logging (consensus thread, reject/error only) — FIXED (post-sprint CONV-1)
 | Where | What |
 |---|---|
-| `Engine.java:216,243,269,289,415,459` | `logger.warn("... {}", int/long)`: the `Object[]` varargs and boxing are allocated at the call site BEFORE the level guard inside `Logger.warn`, so they allocate even at the default ERROR level |
+| `Engine.java` reject/could-not-rest `logger.warn("... {}", …)` sites | The `Object[]` varargs and boxing (and any `OrderRejectReason.describe(...)` string) were allocated at the call site BEFORE the level guard inside `Logger.warn`, so they allocated even at the default ERROR level |
 
 Fires only on rejects, but a reject storm is exactly when you least want
-allocation on the consensus thread. Fix options: guard call sites with
-`if (Logger.getLevel() ...)`, or add primitive-overload `warn(String, long)`
-methods to `Logger`.
+allocation on the consensus thread. **Fixed** by guarding every reject-path
+call site with `if (logger.isWarn()) logger.warn(...)` (new `Logger.isWarn()`
+helper), so the argument list is only built when WARN logging is actually
+enabled. At the default ERROR level these paths now allocate nothing.
 
 ### Edge-only (bounded, acceptable unless they start firing)
 | Where | What |

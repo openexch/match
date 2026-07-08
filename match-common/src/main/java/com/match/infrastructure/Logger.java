@@ -34,6 +34,16 @@ public class Logger {
         return currentLevel;
     }
 
+    /**
+     * True if WARN-level messages will be emitted. Guard a hot-path warn(...)
+     * call with this before the argument list is built: the varargs Object[]
+     * and primitive boxing are allocated at the call site BEFORE warn()'s own
+     * level check, so at the default ERROR level they allocate for nothing.
+     */
+    public boolean isWarn() {
+        return currentLevel.priority <= Level.WARN.priority;
+    }
+
     public void info(String message) {
         log(Level.INFO, message);
     }

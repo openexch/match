@@ -220,7 +220,7 @@ public class Engine {
             long marketSize = isBuy ? totalPrice : quantity;
             if (marketSize <= 0) {
                 invalidQuantityRejectCount++;
-                logger.warn("Market order rejected: market={} userId={} isBuy={} reason={}",
+                if (logger.isWarn()) logger.warn("Market order rejected: market={} userId={} isBuy={} reason={}",
                     marketId, userId, isBuy, OrderRejectReason.describe(OrderRejectReason.INVALID_QUANTITY));
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
                     0, 0, price, isBuy, omsOrderId, OrderRejectReason.INVALID_QUANTITY);
@@ -248,7 +248,7 @@ public class Engine {
                 // TRUE filled quantity so OMS never sees a capped partial mis-reported as FILLED.
                 // Trust the explicit flag, NOT a leftover-budget heuristic (the budget/price-precision
                 // break also leaves budget>0). matchCount==0 with the flag set is impossible (cap>=1).
-                logger.warn("Market order capped mid-sweep (match#93): market={} orderId={} userId={} filled={}",
+                if (logger.isWarn()) logger.warn("Market order capped mid-sweep (match#93): market={} orderId={} userId={} filled={}",
                     marketId, orderId, userId, filledQty);
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
                     0, filledQty, price, isBuy, omsOrderId, OrderRejectReason.MATCH_LIMIT);
@@ -274,7 +274,7 @@ public class Engine {
                 validity = OrderRejectReason.OVERFLOW;
             }
             if (validity != OrderRejectReason.NONE) {
-                logger.warn("Order rejected: market={} userId={} price={} reason={}",
+                if (logger.isWarn()) logger.warn("Order rejected: market={} userId={} price={} reason={}",
                     marketId, userId, price, OrderRejectReason.describe(validity));
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
                     quantity, 0, price, isBuy, omsOrderId, validity);
@@ -301,7 +301,7 @@ public class Engine {
             } else if (restReason != OrderRejectReason.NONE) {
                 // Remainder could not rest on the book — loud terminal status,
                 // never a phantom NEW/PARTIALLY_FILLED for an order that isn't resting
-                logger.warn("Order remainder could not rest: market={} orderId={} userId={} price={} reason={}",
+                if (logger.isWarn()) logger.warn("Order remainder could not rest: market={} orderId={} userId={} price={} reason={}",
                     marketId, orderId, userId, price, OrderRejectReason.describe(restReason));
                 if (matchCount == 0) {
                     publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
@@ -336,7 +336,7 @@ public class Engine {
                 validity = OrderRejectReason.OVERFLOW;
             }
             if (validity != OrderRejectReason.NONE) {
-                logger.warn("LIMIT_MAKER rejected: market={} userId={} price={} reason={}",
+                if (logger.isWarn()) logger.warn("LIMIT_MAKER rejected: market={} userId={} price={} reason={}",
                     marketId, userId, price, OrderRejectReason.describe(validity));
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
                     quantity, 0, price, isBuy, omsOrderId, validity);
@@ -354,7 +354,7 @@ public class Engine {
                 int addResult = engine.addOrderNoMatch(orderId, userId, isBuy, price, quantity);
                 if (addResult != OrderRejectReason.NONE) {
                     // Could not rest (e.g. level full) — loud rejection, not phantom NEW
-                    logger.warn("LIMIT_MAKER could not rest: market={} orderId={} userId={} price={} reason={}",
+                    if (logger.isWarn()) logger.warn("LIMIT_MAKER could not rest: market={} orderId={} userId={} price={} reason={}",
                         marketId, orderId, userId, price, OrderRejectReason.describe(addResult));
                     publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
                         quantity, 0, price, isBuy, omsOrderId, addResult);
@@ -554,7 +554,7 @@ public class Engine {
             validity = OrderRejectReason.OVERFLOW;
         }
         if (validity != OrderRejectReason.NONE) {
-            logger.warn("Update rejected: market={} orderId={} userId={} newPrice={} reason={}",
+            if (logger.isWarn()) logger.warn("Update rejected: market={} orderId={} userId={} newPrice={} reason={}",
                 marketId, oldOrderId, userId, newPrice, OrderRejectReason.describe(validity));
             publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.REJECTED,
                 0, 0, newPrice, isBuy, omsOrderId, validity);
@@ -569,7 +569,7 @@ public class Engine {
         // it would cross, REJECT the amend and leave the old order resting and tradable (same status
         // semantics as processCreate's post-only reject; OLD orderId+omsOrderId like the rejects above).
         if (cmd.getOrderType() == OrderType.LIMIT_MAKER && wouldCrossOpposite(engine, isBuy, newPrice)) {
-            logger.warn("LIMIT_MAKER amend rejected (would cross): market={} orderId={} userId={} newPrice={}",
+            if (logger.isWarn()) logger.warn("LIMIT_MAKER amend rejected (would cross): market={} orderId={} userId={} newPrice={}",
                 marketId, oldOrderId, userId, newPrice);
             publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.REJECTED,
                 0, 0, newPrice, isBuy, omsOrderId, OrderRejectReason.WOULD_CROSS);
@@ -607,7 +607,7 @@ public class Engine {
                 // Replacement could not rest (e.g. LEVEL_FULL/BOOK_FULL). The old order is already
                 // cancelled — FIFO position is forfeit on any amend — so this is terminal: a loud
                 // REJECTED, mirroring processCreate's could-not-rest path (never a phantom NEW).
-                logger.warn("LIMIT_MAKER amend could not rest: market={} orderId={} userId={} price={} reason={}",
+                if (logger.isWarn()) logger.warn("LIMIT_MAKER amend could not rest: market={} orderId={} userId={} price={} reason={}",
                     marketId, newOrderId, userId, newPrice, OrderRejectReason.describe(addResult));
                 publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.REJECTED,
                     newQuantity, 0, newPrice, isBuy, omsOrderId, addResult);
@@ -637,7 +637,7 @@ public class Engine {
             }
         } else if (restReason != OrderRejectReason.NONE) {
             // Remainder could not rest — loud terminal status (see processCreate)
-            logger.warn("Updated order could not rest: market={} orderId={} userId={} price={} reason={}",
+            if (logger.isWarn()) logger.warn("Updated order could not rest: market={} orderId={} userId={} price={} reason={}",
                 marketId, newOrderId, userId, newPrice, OrderRejectReason.describe(restReason));
             if (matchCount == 0) {
                 publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.REJECTED,
