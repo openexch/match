@@ -13,7 +13,7 @@ public final class TradeExecutionBatchEncoder
     public static final int BLOCK_LENGTH = 12;
     public static final int TEMPLATE_ID = 26;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 6;
+    public static final int SCHEMA_VERSION = 7;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -246,7 +246,7 @@ public final class TradeExecutionBatchEncoder
             final int limit = parentMessage.limit();
             initialLimit = limit;
             parentMessage.limit(limit + HEADER_SIZE);
-            buffer.putShort(limit + 0, (short)73, BYTE_ORDER);
+            buffer.putShort(limit + 0, (short)81, BYTE_ORDER);
             buffer.putShort(limit + 2, (short)count, BYTE_ORDER);
         }
 
@@ -289,7 +289,7 @@ public final class TradeExecutionBatchEncoder
 
         public static int sbeBlockLength()
         {
-            return 73;
+            return 81;
         }
 
         public static int tradeIdId()
@@ -792,6 +792,58 @@ public final class TradeExecutionBatchEncoder
         public TradesEncoder makerOmsOrderId(final long value)
         {
             buffer.putLong(offset + 65, value, BYTE_ORDER);
+            return this;
+        }
+
+
+        public static int egressSeqId()
+        {
+            return 11;
+        }
+
+        public static int egressSeqSinceVersion()
+        {
+            return 7;
+        }
+
+        public static int egressSeqEncodingOffset()
+        {
+            return 73;
+        }
+
+        public static int egressSeqEncodingLength()
+        {
+            return 8;
+        }
+
+        public static String egressSeqMetaAttribute(final MetaAttribute metaAttribute)
+        {
+            if (MetaAttribute.PRESENCE == metaAttribute)
+            {
+                return "required";
+            }
+
+            return "";
+        }
+
+        public static long egressSeqNullValue()
+        {
+            return -9223372036854775808L;
+        }
+
+        public static long egressSeqMinValue()
+        {
+            return -9223372036854775807L;
+        }
+
+        public static long egressSeqMaxValue()
+        {
+            return 9223372036854775807L;
+        }
+
+        public TradesEncoder egressSeq(final long value)
+        {
+            buffer.putLong(offset + 73, value, BYTE_ORDER);
             return this;
         }
 

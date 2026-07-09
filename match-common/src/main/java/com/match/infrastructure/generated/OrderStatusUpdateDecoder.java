@@ -13,7 +13,7 @@ public final class OrderStatusUpdateDecoder
     public static final int BLOCK_LENGTH = 63;
     public static final int TEMPLATE_ID = 5;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 6;
+    public static final int SCHEMA_VERSION = 7;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 

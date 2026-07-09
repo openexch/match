@@ -115,7 +115,7 @@ public class MatchEventPublisherTest {
         publisher.start();
 
         boolean result = publisher.publishTradeExecution(
-            MARKET_ID, 12345L, 10L, 100L, 20L, 200L, 5000L, 250L, true, 0L, 0L);
+            MARKET_ID, 12345L, 10L, 100L, 20L, 200L, 5000L, 250L, true, 0L, 0L, 0L);
 
         assertTrue("Publish should succeed", result);
         Thread.sleep(200);
@@ -134,7 +134,7 @@ public class MatchEventPublisherTest {
     public void publishTradeExecutionToUnknownMarketReturnsFalse() {
         publisher.start();
         boolean result = publisher.publishTradeExecution(
-            999, 1000L, 1L, 1L, 2L, 2L, 100L, 10L, true, 0L, 0L);
+            999, 1000L, 1L, 1L, 2L, 2L, 100L, 10L, true, 0L, 0L, 0L);
         assertFalse("Unknown market should return false", result);
     }
 
@@ -143,7 +143,7 @@ public class MatchEventPublisherTest {
         publisher.start();
         long before = publisher.getTradeIdGenerator();
 
-        publisher.publishTradeExecution(MARKET_ID, 100L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L);
+        publisher.publishTradeExecution(MARKET_ID, 100L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L);
         Thread.sleep(200);
 
         // After one publish, generator should have incremented
@@ -219,7 +219,7 @@ public class MatchEventPublisherTest {
         publisher.start();
 
         boolean result = publisher.publishOrderStatusUpdate(
-            MARKET_ID, 4000L, 55L, 300L, OrderStatusType.NEW, 500L, 0L, 4000L, true, 0L, 0);
+            MARKET_ID, 4000L, 55L, 300L, OrderStatusType.NEW, 500L, 0L, 4000L, true, 0L, 0, 0L);
 
         assertTrue(result);
         Thread.sleep(200);
@@ -234,7 +234,7 @@ public class MatchEventPublisherTest {
     public void publishOrderStatusUpdateUnknownMarketReturnsFalse() {
         publisher.start();
         boolean result = publisher.publishOrderStatusUpdate(
-            999, 100L, 1L, 1L, OrderStatusType.NEW, 100L, 0L, 50L, true, 0L, 0);
+            999, 100L, 1L, 1L, OrderStatusType.NEW, 100L, 0L, 50L, true, 0L, 0, 0L);
         assertFalse(result);
     }
 
@@ -244,9 +244,9 @@ public class MatchEventPublisherTest {
     public void multipleEventsDeliveredInOrder() throws Exception {
         publisher.start();
 
-        publisher.publishTradeExecution(MARKET_ID, 100L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L);
+        publisher.publishTradeExecution(MARKET_ID, 100L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L);
         publisher.publishOrderBookLevelUpdate(MARKET_ID, 200L, 60L, 20L, 3, false);
-        publisher.publishOrderStatusUpdate(MARKET_ID, 300L, 1L, 1L, OrderStatusType.FILLED, 0L, 10L, 50L, true, 0L, 0);
+        publisher.publishOrderStatusUpdate(MARKET_ID, 300L, 1L, 1L, OrderStatusType.FILLED, 0L, 10L, 50L, true, 0L, 0, 0L);
 
         Thread.sleep(200);
 
@@ -264,8 +264,8 @@ public class MatchEventPublisherTest {
         publisher.initMarket(2, handler2);
         publisher.start();
 
-        publisher.publishTradeExecution(MARKET_ID, 100L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L);
-        publisher.publishTradeExecution(2, 200L, 3L, 3L, 4L, 4L, 70L, 5L, false, 0L, 0L);
+        publisher.publishTradeExecution(MARKET_ID, 100L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L);
+        publisher.publishTradeExecution(2, 200L, 3L, 3L, 4L, 4L, 70L, 5L, false, 0L, 0L, 0L);
 
         Thread.sleep(200);
 

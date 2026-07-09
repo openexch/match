@@ -479,7 +479,8 @@ public class Engine {
                 takerOrderId, takerUserId,
                 makerOrderId, makerUserId,
                 matchPrice, matchQty, takerIsBuy,
-                takerOmsOrderId, makerOmsOrderId
+                takerOmsOrderId, makerOmsOrderId,
+                currentLogPosition
             );
         }
     }
@@ -674,7 +675,8 @@ public class Engine {
         }
         eventPublisher.publishOrderStatusUpdate(
             marketId, timestamp, orderId, userId,
-            orderStatus, remainingQty, filledQty, orderPrice, isBuy, omsOrderId, rejectReason
+            orderStatus, remainingQty, filledQty, orderPrice, isBuy, omsOrderId, rejectReason,
+            currentLogPosition
         );
     }
 

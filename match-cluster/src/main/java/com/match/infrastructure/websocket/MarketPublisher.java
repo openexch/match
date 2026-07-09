@@ -123,6 +123,7 @@ public class MarketPublisher implements MarketEventHandler {
         long omsOrderId;
         long statusSeq;
         int rejectReason; // OrderRejectReason code (NONE=0 on non-rejects); carried on egress from SBE v6 (match#75)
+        long egressSeq;   // Aeron log position of the producing command; OMS ordering key (Layer 2, SBE v7)
     }
 
     // P1.2 (match#31): per-market monotonic sequence over OrderStatus events,
@@ -145,6 +146,7 @@ public class MarketPublisher implements MarketEventHandler {
         boolean takerIsBuy;
         long takerOmsOrderId;
         long makerOmsOrderId;
+        long egressSeq;   // Aeron log position of the producing command; OMS ordering key (Layer 2, SBE v7)
     }
 
     // Change detection - use engine version numbers to detect any book change
@@ -358,6 +360,7 @@ public class MarketPublisher implements MarketEventHandler {
         tradeEntry.takerIsBuy = event.isTakerIsBuy();
         tradeEntry.takerOmsOrderId = event.getTakerOmsOrderId();
         tradeEntry.makerOmsOrderId = event.getMakerOmsOrderId();
+        tradeEntry.egressSeq = event.getEgressSeq();
         tradeExecutionBuffer.add(tradeEntry);
 
         // Capture book version for correlation (read from both books)
@@ -567,6 +570,7 @@ public class MarketPublisher implements MarketEventHandler {
         entry.omsOrderId = event.getOmsOrderId();
         entry.statusSeq = seq;
         entry.rejectReason = event.getRejectReason();
+        entry.egressSeq = event.getEgressSeq();
         orderStatusBuffer.add(entry);
     }
 
@@ -921,7 +925,8 @@ public class MarketPublisher implements MarketEventHandler {
                 .timestamp(entry.timestamp)
                 .omsOrderId(entry.omsOrderId)
                 .statusSeq(entry.statusSeq)
-                .rejectReason((short) entry.rejectReason);
+                .rejectReason((short) entry.rejectReason)
+                .egressSeq(entry.egressSeq);
         }
 
         return MessageHeaderEncoder.ENCODED_LENGTH + orderStatusBatchEncoder.encodedLength();
@@ -963,7 +968,8 @@ public class MarketPublisher implements MarketEventHandler {
                 .quantity(entry.quantity)
                 .takerSide(entry.takerIsBuy ? OrderSide.BID : OrderSide.ASK)
                 .takerOmsOrderId(entry.takerOmsOrderId)
-                .makerOmsOrderId(entry.makerOmsOrderId);
+                .makerOmsOrderId(entry.makerOmsOrderId)
+                .egressSeq(entry.egressSeq);
         }
 
         return MessageHeaderEncoder.ENCODED_LENGTH + tradeExecutionBatchEncoder.encodedLength();

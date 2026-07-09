@@ -42,7 +42,7 @@ public class MarketPublisherTradeBatchTest {
             // Distinct trade ids; spread across 50 prices so aggregation stays small.
             e.setTradeExecution(1, 1000L, i + 1, 100, 7, 200 + i, 8,
                     FixedPoint.fromDouble(60_000.0 + (i % 50)), FixedPoint.fromDouble(1.0),
-                    true, 0, 0);
+                    true, 0, 0, 0L);
             try {
                 pub.onEvent(e, i, true);
             } catch (Exception ex) {
@@ -75,7 +75,7 @@ public class MarketPublisherTradeBatchTest {
             for (int i = 0; i < pushed; i++) {
                 PublishEvent e = new PublishEvent();
                 e.setTradeExecution(1, 1000L, i + 1, 100, 7, 200 + i, 8,
-                        FixedPoint.fromDouble(60_000.0 + (i % 50)), FixedPoint.fromDouble(1.0), true, 0, 0);
+                        FixedPoint.fromDouble(60_000.0 + (i % 50)), FixedPoint.fromDouble(1.0), true, 0, 0, 0L);
                 pub.onEvent(e, i, true);
             }
 
@@ -184,7 +184,7 @@ public class MarketPublisherTradeBatchTest {
     private static PublishEvent tradeEvent(int tradeId, long price, long quantity, boolean takerIsBuy) {
         PublishEvent e = new PublishEvent();
         e.setTradeExecution(1, 200L, tradeId, 100, 7, 300 + tradeId, 8,
-                price, quantity, takerIsBuy, 0, 0);
+                price, quantity, takerIsBuy, 0, 0, 0L);
         return e;
     }
 
