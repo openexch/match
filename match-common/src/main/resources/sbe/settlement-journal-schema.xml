@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Settlement journal wire schema (match#settlement-journal, Layer for the per-node
+    settlement journal: a recorded Aeron publication carrying every trade + every
+    terminal order status, written from the deterministic service thread).
+
+    NOTE: distinct package (com.match.infrastructure.journal.generated) so the
+    generated codecs here cannot collide with the order-schema codecs in
+    com.match.infrastructure.generated (schema id=1). This schema is id=3.
+-->
+<sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
+                   package="com.match.infrastructure.journal.generated"
+                   id="3"
+                   version="1"
+                   semanticVersion="0.1"
+                   description="Match Settlement Journal Schema"
+                   byteOrder="littleEndian"
+>
+    <types>
+        <composite name="messageHeader" description="Message identifiers and length of message root">
+            <type name="blockLength" primitiveType="uint16"/>
+            <type name="templateId" primitiveType="uint16"/>
+            <type name="schemaId" primitiveType="uint16"/>
+            <type name="version" primitiveType="uint16"/>
+        </composite>
+        <!-- order-schema.xml (id=1) has no reusable boolean pattern: it encodes side/direction via
+             the OrderSide enum (BID/ASK) and encodes flags as raw uint8 (e.g. OpenOrdersSnapshot.isLast).
+             The journal's takerIsBuy is a plain boolean, not a side, so it gets its own typed enum here
+             rather than reusing OrderSide (this schema does not depend on the order-schema package) or
+             a raw uint8 (which loses the FALSE=0/TRUE=1 contract at the wire level). -->
+        <enum name="BooleanType" encodingType="uint8">
+            <validValue name="FALSE">0</validValue>
+            <validValue name="TRUE">1</validValue>
+        </enum>
+        <!-- Terminal order status carried on JournalTerminal. Numerically aligned with order-schema's
+             OrderStatus enum (FILLED=2, CANCELLED=3, REJECTED=4) for operator familiarity, but kept as
+             an independent type: this schema must not depend on the order-schema package (see header
+             note), and the journal only ever carries the terminal subset (status >= FILLED). -->
+        <enum name="TerminalStatus" encodingType="uint8">
+            <validValue name="FILLED">2</validValue>
+            <validValue name="CANCELLED">3</validValue>
+            <validValue name="REJECTED">4</validValue>
+        </enum>
+    </types>
+
+    <!-- One entry per trade execution, journal is tradeId-dense in engine order. -->
+    <sbe:message name="JournalTrade" id="1" description="Settlement journal entry for one trade execution">
+        <!-- Cluster-log position of the producing command; order key only (sparse, non-unique). -->
+        <field name="egressSeq" id="1" type="int64"/>
+        <field name="tradeId" id="2" type="int64"/>
+        <field name="marketId" id="3" type="int32"/>
+        <field name="takerOrderId" id="4" type="int64"/>
+        <field name="takerUserId" id="5" type="int64"/>
+        <field name="makerOrderId" id="6" type="int64"/>
+        <field name="makerUserId" id="7" type="int64"/>
+        <field name="price" id="8" type="int64"/>
+        <field name="quantity" id="9" type="int64"/>
+        <field name="takerIsBuy" id="10" type="BooleanType"/>
+        <field name="timestamp" id="11" type="int64"/>
+    </sbe:message>
+
+    <!-- Terminal order statuses only (status >= FILLED); consumers release the order's residual hold;
+         unknown orders are a no-op. -->
+    <sbe:message name="JournalTerminal" id="2" description="Settlement journal entry for a terminal order status">
+        <!-- Cluster-log position of the producing command; order key only (sparse, non-unique). -->
+        <field name="egressSeq" id="1" type="int64"/>
+        <field name="orderId" id="2" type="int64"/>
+        <field name="userId" id="3" type="int64"/>
+        <field name="marketId" id="4" type="int32"/>
+        <field name="status" id="5" type="TerminalStatus"/>
+        <field name="timestamp" id="6" type="int64"/>
+    </sbe:message>
+
+</sbe:messageSchema>

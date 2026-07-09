@@ -94,6 +94,31 @@
                             </systemProperties>
                         </configuration>
                     </execution>
+                    <!-- Settlement journal schema (id=3): separate execution/package so the
+                         generated codecs cannot collide with the order-schema codecs above. -->
+                    <execution>
+                        <id>generate-sbe-settlement-journal</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                        <configuration>
+                            <mainClass>uk.co.real_logic.sbe.SbeTool</mainClass>
+                            <arguments>
+                                <argument>${project.basedir}/src/main/resources/sbe/settlement-journal-schema.xml</argument>
+                            </arguments>
+                            <systemProperties>
+                                <systemProperty>
+                                    <key>sbe.output.dir</key>
+                                    <value>${project.basedir}/src/main/java</value>
+                                </systemProperty>
+                                <systemProperty>
+                                    <key>sbe.target.language</key>
+                                    <value>Java</value>
+                                </systemProperty>
+                            </systemProperties>
+                        </configuration>
+                    </execution>
                 </executions>
             </plugin>
         </plugins>
