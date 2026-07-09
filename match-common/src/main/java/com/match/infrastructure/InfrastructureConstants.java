@@ -63,4 +63,11 @@ public final class InfrastructureConstants {
      * yields 9010/9110/9210 for nodes 0/1/2 on the default portBase 9000.
      */
     public static final int JOURNAL_ARCHIVE_CONTROL_PORT_OFFSET = 10;
+    /**
+     * Control stream ids for the journal archive, distinct from the consensus archive's
+     * defaults (10/11): both archives are clients of the SAME media driver, and the
+     * local-control IPC channel is shared driver-wide, so identical stream ids would collide.
+     */
+    public static final int JOURNAL_ARCHIVE_CONTROL_STREAM_ID = 4010;
+    public static final int JOURNAL_ARCHIVE_LOCAL_CONTROL_STREAM_ID = 4011;
 }

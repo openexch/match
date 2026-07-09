@@ -76,6 +76,15 @@ public class AppClusteredService implements ClusteredService {
     private final MatchEventPublisher eventPublisher = new MatchEventPublisher();
     private final SubscriptionManager subscriptionManager = new SubscriptionManager();
 
+    /**
+     * Arm the settlement journal on the event publisher. Called from AeronCluster bootstrap
+     * (before launch) when SETTLEMENT_JOURNAL_ENABLED — the journal itself lives with the
+     * bootstrap because it owns the second (journal) archive's lifecycle.
+     */
+    public void setSettlementJournal(final com.match.infrastructure.journal.SettlementJournal journal) {
+        eventPublisher.setSettlementJournal(journal);
+    }
+
     // Store cluster reference for snapshot idle strategy and broadcasting
     private Cluster cluster;
 

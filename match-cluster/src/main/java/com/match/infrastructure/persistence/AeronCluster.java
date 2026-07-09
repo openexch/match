@@ -51,8 +51,18 @@ public class AeronCluster {
         final String hosts = getClusterAddresses();
 
         final List<String> hostAddresses = List.of(hosts.split(","));
+        final AppClusteredService appService = new AppClusteredService();
         final ClusterConfig clusterConfig = ClusterConfig.create(nodeId, hostAddresses, hostAddresses, portBase,
-                new AppClusteredService());
+                appService);
+
+        // Settlement journal (dark unless SETTLEMENT_JOURNAL_ENABLED): the ring is armed on the
+        // event publisher NOW so the service thread journals from the first command; the journal
+        // archive + writer thread start inside the launch path once the media driver is up.
+        final com.match.infrastructure.journal.SettlementJournalRuntime journalRuntime =
+                com.match.infrastructure.journal.SettlementJournalRuntime.createIfEnabled(nodeId, portBase);
+        if (journalRuntime != null) {
+            appService.setSettlementJournal(journalRuntime.journal());
+        }
 
         clusterConfig.baseDir(getBaseDir(nodeId));
 
@@ -147,9 +157,9 @@ public class AeronCluster {
         hostAddresses.forEach(AeronCluster::awaitDnsResolution);
 
         if (driverMode == DriverMode.EXTERNAL) {
-            launchWithExternalDriver(clusterConfig, nodeId, barrier);
+            launchWithExternalDriver(clusterConfig, nodeId, barrier, journalRuntime);
         } else {
-            launchWithEmbeddedDriver(clusterConfig, barrier);
+            launchWithEmbeddedDriver(clusterConfig, barrier, journalRuntime);
         }
     }
 
@@ -163,7 +173,8 @@ public class AeronCluster {
      * lifecycle, so no dirDeleteOnStart/Shutdown here.
      */
     private static void launchWithExternalDriver(
-            final ClusterConfig clusterConfig, final int nodeId, final ShutdownSignalBarrier barrier) {
+            final ClusterConfig clusterConfig, final int nodeId, final ShutdownSignalBarrier barrier,
+            final com.match.infrastructure.journal.SettlementJournalRuntime journalRuntime) {
         final String aeronDir = TransportConfig.aeronDir(nodeId);
         log.info("Driver mode EXTERNAL: connecting to media driver at %s", aeronDir);
         TransportConfig.awaitExternalDriver(aeronDir, TransportConfig.EXTERNAL_DRIVER_TIMEOUT_MS);
@@ -173,7 +184,12 @@ public class AeronCluster {
         clusterConfig.aeronDirectoryName(aeronDir);
 
         // Launch order mirrors ClusteredMediaDriver.launch: Archive -> ConsensusModule -> container.
+        // The journal runtime (second, disk-backed archive + writer thread) is first-in/last-out:
+        // it must outlive the container so the ring is drained through service shutdown.
         try (
+                com.match.infrastructure.journal.SettlementJournalRuntime ignoredJournal =
+                        journalRuntime == null ? null
+                                : journalRuntime.start(aeronDir, clusterConfig.archiveContext().errorHandler());
                 Archive ignored = Archive.launch(clusterConfig.archiveContext());
                 ConsensusModule ignored1 = ConsensusModule.launch(
                         clusterConfig.consensusModuleContext().terminationHook(barrier::signal));
@@ -193,7 +209,8 @@ public class AeronCluster {
      * deploy/media-driver/driver.properties: keep the two in sync.
      */
     private static void launchWithEmbeddedDriver(
-            final ClusterConfig clusterConfig, final ShutdownSignalBarrier barrier) {
+            final ClusterConfig clusterConfig, final ShutdownSignalBarrier barrier,
+            final com.match.infrastructure.journal.SettlementJournalRuntime journalRuntime) {
         try (
                 ClusteredMediaDriver ignored = ClusteredMediaDriver.launch(
                         clusterConfig.mediaDriverContext()
@@ -219,6 +236,12 @@ public class AeronCluster {
                             .mtuLength(8192),  // 8KB MTU
                         clusterConfig.archiveContext(),
                         clusterConfig.consensusModuleContext().terminationHook(barrier::signal));
+                // Journal archive is a driver client: start only after ClusteredMediaDriver is up.
+                com.match.infrastructure.journal.SettlementJournalRuntime ignoredJournal =
+                        journalRuntime == null ? null
+                                : journalRuntime.start(
+                                        clusterConfig.mediaDriverContext().aeronDirectoryName(),
+                                        clusterConfig.archiveContext().errorHandler());
                 ClusteredServiceContainer ignored1 = ClusteredServiceContainer.launch(
                         clusterConfig.clusteredServiceContext().terminationHook(barrier::signal)))
         {

@@ -46,8 +46,23 @@ public class MatchEventPublisher implements MatchEventSink {
     // and the diag reader both run on the cluster service thread.
     private long terminalStatusCount;
 
+    // Settlement journal (money-loss surface): every trade and every terminal status is
+    // appended HERE, on the deterministic service thread, BEFORE the sheddable Disruptor —
+    // so the journal sees every settlement-relevant event on every replica regardless of
+    // egress-side shedding or leadership. null = journaling disabled (dark); the volatile
+    // read is the only overhead on the hot path in that case.
+    private volatile com.match.infrastructure.journal.SettlementJournal settlementJournal;
+
     // Publisher state
     private volatile boolean running = false;
+
+    /**
+     * Arm the settlement journal. Called once at node bootstrap (before the cluster starts
+     * processing) when SETTLEMENT_JOURNAL_ENABLED; never called on the hot path.
+     */
+    public void setSettlementJournal(final com.match.infrastructure.journal.SettlementJournal journal) {
+        this.settlementJournal = journal;
+    }
 
     public MatchEventPublisher() {
         this.disruptors = new Int2ObjectHashMap<>();
@@ -160,6 +175,12 @@ public class MatchEventPublisher implements MatchEventSink {
         }
 
         long tradeId = tradeIdGenerator.getAndIncrement();
+
+        final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
+        if (journal != null) {
+            journal.appendTrade(egressSeq, tradeId, marketId, takerOrderId, takerUserId,
+                    makerOrderId, makerUserId, price, quantity, takerIsBuy, timestamp);
+        }
 
         // Check ring buffer capacity and apply backpressure if needed
         long remaining = ringBuffer.remainingCapacity();
@@ -293,6 +314,10 @@ public class MatchEventPublisher implements MatchEventSink {
 
         if (orderStatus >= OrderStatusType.FILLED) {
             terminalStatusCount++;
+            final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
+            if (journal != null) {
+                journal.appendTerminal(egressSeq, orderId, userId, marketId, orderStatus, timestamp);
+            }
         }
 
         long sequence = ringBuffer.next();
