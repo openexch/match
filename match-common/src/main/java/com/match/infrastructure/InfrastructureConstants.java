@@ -44,4 +44,23 @@ public final class InfrastructureConstants {
     public static final long SESSION_KEEPALIVE_INTERVAL_MS = 1_000;
     /** Minimum delay between reconnection attempts (ms) */
     public static final long RECONNECT_COOLDOWN_MS = 500;
+
+    // ==================== SETTLEMENT JOURNAL ====================
+    // The settlement journal is a per-node, disk-backed second Aeron archive: a recorded
+    // publication carrying every trade + every terminal order status, written from the
+    // deterministic service thread (settlement-journal-schema.xml, schema id=3). It is a
+    // money-loss surface (consumers release residual holds off it) so it is designed to be
+    // lossless by construction: separate stream/archive from the consensus log, so journal
+    // durability is never entangled with cluster replication/snapshotting.
+    /** Aeron stream id the settlement journal is recorded/replayed on. */
+    public static final int SETTLEMENT_JOURNAL_STREAM_ID = 4001;
+    /** Aeron IPC channel the settlement journal is published on (large term for durability headroom). */
+    public static final String SETTLEMENT_JOURNAL_CHANNEL = "aeron:ipc?term-length=64m";
+    /**
+     * Port offset for the settlement journal's archive control channel, distinct from the
+     * consensus archive's {@code ARCHIVE_CONTROL_PORT_OFFSET} (=1) so the two archives never
+     * share a control port. Combined with the standard portBase + nodeId*100 scheme this
+     * yields 9010/9110/9210 for nodes 0/1/2 on the default portBase 9000.
+     */
+    public static final int JOURNAL_ARCHIVE_CONTROL_PORT_OFFSET = 10;
 }
