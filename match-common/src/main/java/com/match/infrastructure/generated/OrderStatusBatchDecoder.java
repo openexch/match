@@ -13,7 +13,7 @@ public final class OrderStatusBatchDecoder
     public static final int BLOCK_LENGTH = 12;
     public static final int TEMPLATE_ID = 24;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 6;
+    public static final int SCHEMA_VERSION = 7;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -313,7 +313,7 @@ public final class OrderStatusBatchDecoder
 
         public static int sbeBlockLength()
         {
-            return 67;
+            return 75;
         }
 
         public int actingBlockLength()
@@ -897,6 +897,62 @@ public final class OrderStatusBatchDecoder
         }
 
 
+        public static int egressSeqId()
+        {
+            return 13;
+        }
+
+        public static int egressSeqSinceVersion()
+        {
+            return 7;
+        }
+
+        public static int egressSeqEncodingOffset()
+        {
+            return 67;
+        }
+
+        public static int egressSeqEncodingLength()
+        {
+            return 8;
+        }
+
+        public static String egressSeqMetaAttribute(final MetaAttribute metaAttribute)
+        {
+            if (MetaAttribute.PRESENCE == metaAttribute)
+            {
+                return "required";
+            }
+
+            return "";
+        }
+
+        public static long egressSeqNullValue()
+        {
+            return -9223372036854775808L;
+        }
+
+        public static long egressSeqMinValue()
+        {
+            return -9223372036854775807L;
+        }
+
+        public static long egressSeqMaxValue()
+        {
+            return 9223372036854775807L;
+        }
+
+        public long egressSeq()
+        {
+            if (parentMessage.actingVersion < 7)
+            {
+                return -9223372036854775808L;
+            }
+
+            return buffer.getLong(offset + 67, BYTE_ORDER);
+        }
+
+
         public StringBuilder appendTo(final StringBuilder builder)
         {
             if (null == buffer)
@@ -937,6 +993,9 @@ public final class OrderStatusBatchDecoder
             builder.append('|');
             builder.append("rejectReason=");
             builder.append(this.rejectReason());
+            builder.append('|');
+            builder.append("egressSeq=");
+            builder.append(this.egressSeq());
             builder.append(')');
 
             return builder;

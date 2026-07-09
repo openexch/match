@@ -60,6 +60,10 @@ public class PublishEvent {
     private boolean orderIsBuy;
     private long omsOrderId;      // OMS correlation ID
     private int rejectReason;     // OrderRejectReason code (NONE=0 on non-rejects); match#75
+    // Layer 2: Aeron log position of the command that produced this event (deterministic across
+    // replicas, monotonic across leaders). Carried on BOTH trade and status egress as the OMS
+    // ordering key spanning the two streams. 0 when unset (e.g. replay/tests with no cluster log).
+    private long egressSeq;
 
     // Padding to avoid false sharing (occupy full cache line)
     @SuppressWarnings("unused")
@@ -99,6 +103,7 @@ public class PublishEvent {
         orderIsBuy = false;
         omsOrderId = 0;
         rejectReason = 0;
+        egressSeq = 0;
     }
 
     // === Setters for Trade Execution ===
@@ -119,7 +124,8 @@ public class PublishEvent {
             long quantity,
             boolean takerIsBuy,
             long takerOmsOrderId,
-            long makerOmsOrderId) {
+            long makerOmsOrderId,
+            long egressSeq) {
         this.eventType = PublishEventType.TRADE_EXECUTION;
         this.marketId = marketId;
         this.timestamp = timestamp;
@@ -133,6 +139,7 @@ public class PublishEvent {
         this.takerIsBuy = takerIsBuy;
         this.takerOmsOrderId = takerOmsOrderId;
         this.makerOmsOrderId = makerOmsOrderId;
+        this.egressSeq = egressSeq;
     }
 
     // === Setters for Order Book Update (Incremental) ===
@@ -202,7 +209,8 @@ public class PublishEvent {
             long orderPrice,
             boolean orderIsBuy,
             long omsOrderId,
-            int rejectReason) {
+            int rejectReason,
+            long egressSeq) {
         this.eventType = PublishEventType.ORDER_STATUS_UPDATE;
         this.marketId = marketId;
         this.timestamp = timestamp;
@@ -215,6 +223,7 @@ public class PublishEvent {
         this.orderIsBuy = orderIsBuy;
         this.omsOrderId = omsOrderId;
         this.rejectReason = rejectReason;
+        this.egressSeq = egressSeq;
     }
 
     // === Getters (all inline for JIT optimization) ===
@@ -262,4 +271,5 @@ public class PublishEvent {
     public boolean isOrderIsBuy() { return orderIsBuy; }
     public long getOmsOrderId() { return omsOrderId; }
     public int getRejectReason() { return rejectReason; }
+    public long getEgressSeq() { return egressSeq; }
 }

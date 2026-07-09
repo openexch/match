@@ -28,7 +28,9 @@ public final class RecordingEventSink implements MatchEventSink {
     public boolean publishTradeExecution(
             int marketId, long timestamp, long takerOrderId, long takerUserId,
             long makerOrderId, long makerUserId, long price, long quantity,
-            boolean takerIsBuy, long takerOmsOrderId, long makerOmsOrderId) {
+            boolean takerIsBuy, long takerOmsOrderId, long makerOmsOrderId, long egressSeq) {
+        // egressSeq is a transport-ordering value (Aeron log position), not a logical engine event
+        // field — deliberately NOT recorded, so the determinism goldens stay implementation-agnostic.
         long tradeId = tradeIdGenerator.getAndIncrement();
         events.add(new EngineEvent.Trade(marketId, timestamp, tradeId, takerOrderId, takerUserId,
                 makerOrderId, makerUserId, price, quantity, takerIsBuy, takerOmsOrderId, makerOmsOrderId));
@@ -39,7 +41,8 @@ public final class RecordingEventSink implements MatchEventSink {
     public boolean publishOrderStatusUpdate(
             int marketId, long timestamp, long orderId, long userId,
             int orderStatus, long remainingQty, long filledQty,
-            long orderPrice, boolean orderIsBuy, long omsOrderId, int rejectReason) {
+            long orderPrice, boolean orderIsBuy, long omsOrderId, int rejectReason, long egressSeq) {
+        // egressSeq (Aeron log position) is intentionally not recorded — see publishTradeExecution.
         events.add(new EngineEvent.Status(marketId, timestamp, orderId, userId, orderStatus,
                 remainingQty, filledQty, orderPrice, orderIsBuy, omsOrderId, rejectReason));
         return true;

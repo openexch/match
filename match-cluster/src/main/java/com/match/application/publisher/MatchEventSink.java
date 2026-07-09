@@ -29,7 +29,8 @@ public interface MatchEventSink {
             long quantity,
             boolean takerIsBuy,
             long takerOmsOrderId,
-            long makerOmsOrderId);
+            long makerOmsOrderId,
+            long egressSeq);
 
     /**
      * Publish an order status update (NEW / PARTIALLY_FILLED / FILLED / CANCELLED / REJECTED).
@@ -38,6 +39,9 @@ public interface MatchEventSink {
      *                     WHY a REJECTED (or reason-carrying CANCELLED) status fired;
      *                     {@code OrderRejectReason.NONE} (0) on non-reject statuses. Carried on the
      *                     order-status egress from SBE v6 (match#75) so the OMS/UI can surface it.
+     * @param egressSeq    Aeron log position of the producing command (Layer 2): the OMS's ordering
+     *                     key across the trade + status egress streams. Deterministic across
+     *                     replicas, monotonic across leaders. 0 when unset (replay/tests/no log).
      * @return true if accepted by the sink, false if the market is unknown
      */
     boolean publishOrderStatusUpdate(
@@ -51,5 +55,6 @@ public interface MatchEventSink {
             long orderPrice,
             boolean orderIsBuy,
             long omsOrderId,
-            int rejectReason);
+            int rejectReason,
+            long egressSeq);
 }

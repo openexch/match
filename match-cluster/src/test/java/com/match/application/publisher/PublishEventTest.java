@@ -22,7 +22,7 @@ public class PublishEventTest {
 
     @Test
     public void setTradeExecutionSetsAllFields() {
-        event.setTradeExecution(1, 1000L, 42L, 10L, 100L, 20L, 200L, 5000L, 250L, true, 0L, 0L);
+        event.setTradeExecution(1, 1000L, 42L, 10L, 100L, 20L, 200L, 5000L, 250L, true, 0L, 0L, 0L);
 
         assertEquals(PublishEventType.TRADE_EXECUTION, event.getEventType());
         assertEquals(1, event.getMarketId());
@@ -39,7 +39,7 @@ public class PublishEventTest {
 
     @Test
     public void setTradeExecutionTakerIsSell() {
-        event.setTradeExecution(2, 2000L, 99L, 11L, 101L, 22L, 202L, 3000L, 100L, false, 0L, 0L);
+        event.setTradeExecution(2, 2000L, 99L, 11L, 101L, 22L, 202L, 3000L, 100L, false, 0L, 0L, 0L);
 
         assertFalse(event.isTakerIsBuy());
         assertEquals(2, event.getMarketId());
@@ -125,7 +125,7 @@ public class PublishEventTest {
 
     @Test
     public void setOrderStatusUpdateSetsAllFields() {
-        event.setOrderStatusUpdate(2, 7000L, 55L, 300L, OrderStatusType.NEW, 500L, 0L, 4000L, true, 0L, 0);
+        event.setOrderStatusUpdate(2, 7000L, 55L, 300L, OrderStatusType.NEW, 500L, 0L, 4000L, true, 0L, 0, 0L);
 
         assertEquals(PublishEventType.ORDER_STATUS_UPDATE, event.getEventType());
         assertEquals(2, event.getMarketId());
@@ -141,7 +141,7 @@ public class PublishEventTest {
 
     @Test
     public void setOrderStatusUpdateSellSide() {
-        event.setOrderStatusUpdate(1, 8000L, 66L, 400L, OrderStatusType.FILLED, 0L, 1000L, 5000L, false, 0L, 0);
+        event.setOrderStatusUpdate(1, 8000L, 66L, 400L, OrderStatusType.FILLED, 0L, 1000L, 5000L, false, 0L, 0, 0L);
 
         assertFalse(event.isOrderIsBuy());
         assertEquals(OrderStatusType.FILLED, event.getOrderStatus());
@@ -154,7 +154,7 @@ public class PublishEventTest {
     @Test
     public void clearResetsAllFields() {
         // Set trade execution first
-        event.setTradeExecution(1, 1000L, 42L, 10L, 100L, 20L, 200L, 5000L, 250L, true, 0L, 0L);
+        event.setTradeExecution(1, 1000L, 42L, 10L, 100L, 20L, 200L, 5000L, 250L, true, 0L, 0L, 0L);
         // Then clear
         event.clear();
 
@@ -201,7 +201,7 @@ public class PublishEventTest {
 
     @Test
     public void clearAfterOrderStatusUpdate() {
-        event.setOrderStatusUpdate(1, 100L, 10L, 20L, OrderStatusType.CANCELLED, 0L, 500L, 3000L, true, 0L, 0);
+        event.setOrderStatusUpdate(1, 100L, 10L, 20L, OrderStatusType.CANCELLED, 0L, 500L, 3000L, true, 0L, 0, 0L);
 
         event.clear();
 

@@ -134,7 +134,7 @@ public class MarketPublisherOrderStatusReasonTest {
     private static PublishEvent statusEvent(long orderId, int status, int rejectReason) {
         PublishEvent e = new PublishEvent();
         e.setOrderStatusUpdate(1, 1000L, orderId, 200L, status,
-                FixedPoint.fromDouble(1.0), 0L, FixedPoint.fromDouble(60_000.0), true, 0L, rejectReason);
+                FixedPoint.fromDouble(1.0), 0L, FixedPoint.fromDouble(60_000.0), true, 0L, rejectReason, 0L);
         return e;
     }
 
