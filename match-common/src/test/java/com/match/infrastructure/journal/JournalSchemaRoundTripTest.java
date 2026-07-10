@@ -64,7 +64,9 @@ public class JournalSchemaRoundTripTest {
                 .price(price)
                 .quantity(quantity)
                 .takerIsBuy(takerIsBuy ? BooleanType.TRUE : BooleanType.FALSE)
-                .timestamp(timestamp);
+                .timestamp(timestamp)
+                .takerOmsOrderId(880_001L)
+                .makerOmsOrderId(880_002L);
 
         MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder().wrap(buffer, 0);
         assertEquals(JournalTradeDecoder.TEMPLATE_ID, headerDecoder.templateId());
@@ -83,6 +85,8 @@ public class JournalSchemaRoundTripTest {
         assertEquals(price, decoder.price());
         assertEquals(quantity, decoder.quantity());
         assertEquals(takerIsBuy ? BooleanType.TRUE : BooleanType.FALSE, decoder.takerIsBuy());
+        assertEquals(880_001L, decoder.takerOmsOrderId());
+        assertEquals(880_002L, decoder.makerOmsOrderId());
         assertEquals(timestamp, decoder.timestamp());
     }
 
@@ -104,7 +108,8 @@ public class JournalSchemaRoundTripTest {
                 .userId(userId)
                 .marketId(marketId)
                 .status(TerminalStatus.FILLED)
-                .timestamp(timestamp);
+                .timestamp(timestamp)
+                .omsOrderId(770_001L);
 
         MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder().wrap(buffer, 0);
         assertEquals(JournalTerminalDecoder.TEMPLATE_ID, headerDecoder.templateId());
@@ -118,6 +123,7 @@ public class JournalSchemaRoundTripTest {
         assertEquals(userId, decoder.userId());
         assertEquals(marketId, decoder.marketId());
         assertEquals(TerminalStatus.FILLED, decoder.status());
+        assertEquals(770_001L, decoder.omsOrderId());
         assertEquals(timestamp, decoder.timestamp());
     }
 

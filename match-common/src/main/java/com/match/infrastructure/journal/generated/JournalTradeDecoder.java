@@ -10,7 +10,7 @@ import org.agrona.DirectBuffer;
 @SuppressWarnings("all")
 public final class JournalTradeDecoder
 {
-    public static final int BLOCK_LENGTH = 77;
+    public static final int BLOCK_LENGTH = 93;
     public static final int TEMPLATE_ID = 1;
     public static final int SCHEMA_ID = 3;
     public static final int SCHEMA_VERSION = 1;
@@ -683,6 +683,108 @@ public final class JournalTradeDecoder
     }
 
 
+    public static int takerOmsOrderIdId()
+    {
+        return 12;
+    }
+
+    public static int takerOmsOrderIdSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int takerOmsOrderIdEncodingOffset()
+    {
+        return 77;
+    }
+
+    public static int takerOmsOrderIdEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String takerOmsOrderIdMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long takerOmsOrderIdNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long takerOmsOrderIdMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long takerOmsOrderIdMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public long takerOmsOrderId()
+    {
+        return buffer.getLong(offset + 77, BYTE_ORDER);
+    }
+
+
+    public static int makerOmsOrderIdId()
+    {
+        return 13;
+    }
+
+    public static int makerOmsOrderIdSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int makerOmsOrderIdEncodingOffset()
+    {
+        return 85;
+    }
+
+    public static int makerOmsOrderIdEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String makerOmsOrderIdMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long makerOmsOrderIdNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long makerOmsOrderIdMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long makerOmsOrderIdMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public long makerOmsOrderId()
+    {
+        return buffer.getLong(offset + 85, BYTE_ORDER);
+    }
+
+
     public String toString()
     {
         if (null == buffer)
@@ -756,6 +858,12 @@ public final class JournalTradeDecoder
         builder.append('|');
         builder.append("timestamp=");
         builder.append(this.timestamp());
+        builder.append('|');
+        builder.append("takerOmsOrderId=");
+        builder.append(this.takerOmsOrderId());
+        builder.append('|');
+        builder.append("makerOmsOrderId=");
+        builder.append(this.makerOmsOrderId());
 
         limit(originalLimit);
 

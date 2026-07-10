@@ -102,9 +102,9 @@ public class JournalWriterIntegrationTest {
 
     @Test
     public void appendedEntriesAreRecordedAndReplayableInOrder() throws Exception {
-        journal.appendTrade(500L, 1L, 1, 11L, 900_001L, 22L, 900_002L, 1_000L, 2_000L, true, 42L);
-        journal.appendTrade(510L, 2L, 1, 33L, 900_003L, 22L, 900_002L, 1_100L, 900L, false, 43L);
-        journal.appendTerminal(510L, 22L, 900_002L, 1, 2, 44L);
+        journal.appendTrade(500L, 1L, 1, 11L, 900_001L, 22L, 900_002L, 1_000L, 2_000L, true, 42L, 7_011L, 7_022L);
+        journal.appendTrade(510L, 2L, 1, 33L, 900_003L, 22L, 900_002L, 1_100L, 900L, false, 43L, 7_033L, 7_022L);
+        journal.appendTerminal(510L, 22L, 900_002L, 1, 2, 44L, 7_022L);
 
         final long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(10);
         while (agent.writtenEntries() < 3) {

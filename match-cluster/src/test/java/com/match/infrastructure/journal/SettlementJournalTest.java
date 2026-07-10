@@ -51,8 +51,8 @@ public class SettlementJournalTest {
         final SettlementJournal journal = new SettlementJournal(1 << 16);
 
         journal.appendTrade(1000L, 42L, 3, 11L, 100001L, 22L, 100002L,
-                6_012_345_000L, 25_000_000L, true, 1_752_100_000_123L);
-        journal.appendTerminal(1001L, 22L, 100002L, 3, 2 /* FILLED */, 1_752_100_000_124L);
+                6_012_345_000L, 25_000_000L, true, 1_752_100_000_123L, 9_011L, 9_022L);
+        journal.appendTerminal(1001L, 22L, 100002L, 3, 2 /* FILLED */, 1_752_100_000_124L, 9_022L);
 
         final Drained drained = drainAll(journal);
         assertEquals(2, drained.msgTypes.size());
@@ -76,6 +76,8 @@ public class SettlementJournalTest {
         assertEquals(25_000_000L, trade.quantity());
         assertEquals(BooleanType.TRUE, trade.takerIsBuy());
         assertEquals(1_752_100_000_123L, trade.timestamp());
+        assertEquals(9_011L, trade.takerOmsOrderId());
+        assertEquals(9_022L, trade.makerOmsOrderId());
 
         final UnsafeBuffer buf1 = new UnsafeBuffer(drained.payloads.get(1));
         header.wrap(buf1, 0);
@@ -88,6 +90,7 @@ public class SettlementJournalTest {
         assertEquals(3, terminal.marketId());
         assertEquals(TerminalStatus.FILLED, terminal.status());
         assertEquals(1_752_100_000_124L, terminal.timestamp());
+        assertEquals(9_022L, terminal.omsOrderId());
 
         assertEquals(1L, journal.appendedTrades());
         assertEquals(1L, journal.appendedTerminals());
@@ -105,9 +108,10 @@ public class SettlementJournalTest {
         final SettlementJournal journal = new SettlementJournal(1 << 16);
         for (int i = 0; i < 50; i++) {
             journal.appendTrade(100 + i, 1 + i, 1 + (i % 5), 10 + i, 900_000 + i,
-                    20 + i, 900_100 + i, 1_000_000L * (1 + i), 50_000_000L, (i & 1) == 0, 1_000_000L + i);
+                    20 + i, 900_100 + i, 1_000_000L * (1 + i), 50_000_000L, (i & 1) == 0, 1_000_000L + i,
+                    5_000L + i, 6_000L + i);
             if (i % 5 == 0) {
-                journal.appendTerminal(100 + i, 20 + i, 900_100 + i, 1 + (i % 5), 2 + (i % 3), 1_000_001L + i);
+                journal.appendTerminal(100 + i, 20 + i, 900_100 + i, 1 + (i % 5), 2 + (i % 3), 1_000_001L + i, 6_000L + i);
             }
         }
         final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
@@ -128,7 +132,7 @@ public class SettlementJournalTest {
 
         // Fill by raw ring writes (same record size a trade encodes to) until a write is
         // REFUSED — the ring is then deterministically too full for one more trade record.
-        final UnsafeBuffer filler = new UnsafeBuffer(new byte[93]);
+        final UnsafeBuffer filler = new UnsafeBuffer(new byte[109]);
         while (journal.ringBuffer().write(SettlementJournal.MSG_TYPE_TRADE, filler, 0, filler.capacity())) {
             // keep filling
         }
@@ -136,7 +140,7 @@ public class SettlementJournalTest {
 
         final CountDownLatch blockedAppendDone = new CountDownLatch(1);
         final Thread appender = new Thread(() -> {
-            journal.appendTrade(9999, 9999, 1, 1, 1, 2, 2, 100, 100, false, 9999);
+            journal.appendTrade(9999, 9999, 1, 1, 1, 2, 2, 100, 100, false, 9999, 1, 2);
             blockedAppendDone.countDown();
         }, "test-blocked-appender");
         appender.start();
