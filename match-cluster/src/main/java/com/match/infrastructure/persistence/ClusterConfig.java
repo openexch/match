@@ -26,6 +26,8 @@ import io.aeron.cluster.service.ClusteredServiceContainer;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.MinMulticastFlowControlSupplier;
 import io.aeron.driver.ThreadingMode;
+import com.match.infrastructure.TransportConfig;
+
 import org.agrona.ErrorHandler;
 import org.agrona.concurrent.NoOpLock;
 
@@ -187,7 +189,8 @@ public final class ClusterConfig
                 .controlChannel(udpChannel(memberId, hostname, portBase))
                 .archiveClientContext(replicationArchiveContext)
                 .localControlChannel("aeron:ipc?term-length=16m")  // 16MB for high throughput
-                .replicationChannel("aeron:udp?endpoint=" + hostname + ":0")
+                .replicationChannel("aeron:udp?endpoint=" + hostname + ":0|term-length="
+                        + TransportConfig.logTermLength())
                 // Disable events for lower latency
                 .recordingEventsEnabled(false)
                 // DEDICATED threading for low latency
@@ -220,7 +223,8 @@ public final class ClusterConfig
                 .clusterDir(new File(baseDir, CLUSTER_SUB_DIR))
                 .archiveContext(aeronArchiveContext.clone())
                 .serviceCount(1 + additionalServices.length)
-                .replicationChannel("aeron:udp?endpoint=" + hostname + ":0")
+                .replicationChannel("aeron:udp?endpoint=" + hostname + ":0|term-length="
+                        + TransportConfig.logTermLength())
                 .snapshotChannel(snapshotChannel)
                 // Idle strategy for consensus
                 .idleStrategySupplier(org.agrona.concurrent.BusySpinIdleStrategy::new)
