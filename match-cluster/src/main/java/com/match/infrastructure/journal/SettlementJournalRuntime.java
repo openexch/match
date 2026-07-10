@@ -105,6 +105,7 @@ public final class SettlementJournalRuntime implements AutoCloseable {
                 .threadingMode(ArchiveThreadingMode.SHARED)
                 .idleStrategySupplier(BackoffIdleStrategy::new)
                 .fileSyncLevel(1)
+                .catalogFileSyncLevel(1)
                 .segmentFileLength(SEGMENT_FILE_LENGTH)
                 .errorHandler(errorHandler);
 
