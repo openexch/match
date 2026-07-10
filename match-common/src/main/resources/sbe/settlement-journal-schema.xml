@@ -57,6 +57,12 @@
         <field name="quantity" id="9" type="int64"/>
         <field name="takerIsBuy" id="10" type="BooleanType"/>
         <field name="timestamp" id="11" type="int64"/>
+        <!-- The OMS-level order ids: the MONEY KEY. The Assets Engine keys holds by omsOrderId
+             (holds are placed before a cluster id exists), so settles must reference these, not
+             the cluster ids above. Iceberg slices carry their PARENT's omsOrderId — their fills
+             draw the parent hold down, which is exactly right. -->
+        <field name="takerOmsOrderId" id="12" type="int64"/>
+        <field name="makerOmsOrderId" id="13" type="int64"/>
     </sbe:message>
 
     <!-- Terminal order statuses only (status >= FILLED); consumers release the order's residual hold;
@@ -69,6 +75,11 @@
         <field name="marketId" id="4" type="int32"/>
         <field name="status" id="5" type="TerminalStatus"/>
         <field name="timestamp" id="6" type="int64"/>
+        <!-- The money key (see JournalTrade). NOTE for consumers: iceberg slices share the
+             parent's omsOrderId, so a slice's FILLED here must NOT be treated as "the exposure
+             is over" — the Assets Engine suppresses feed releases for holds the OMS marked
+             omsManagedRelease. -->
+        <field name="omsOrderId" id="7" type="int64"/>
     </sbe:message>
 
 </sbe:messageSchema>

@@ -179,7 +179,8 @@ public class MatchEventPublisher implements MatchEventSink {
         final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
         if (journal != null) {
             journal.appendTrade(egressSeq, tradeId, marketId, takerOrderId, takerUserId,
-                    makerOrderId, makerUserId, price, quantity, takerIsBuy, timestamp);
+                    makerOrderId, makerUserId, price, quantity, takerIsBuy, timestamp,
+                    takerOmsOrderId, makerOmsOrderId);
         }
 
         // Check ring buffer capacity and apply backpressure if needed
@@ -316,7 +317,7 @@ public class MatchEventPublisher implements MatchEventSink {
             terminalStatusCount++;
             final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
             if (journal != null) {
-                journal.appendTerminal(egressSeq, orderId, userId, marketId, orderStatus, timestamp);
+                journal.appendTerminal(egressSeq, orderId, userId, marketId, orderStatus, timestamp, omsOrderId);
             }
         }
 

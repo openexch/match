@@ -43,7 +43,7 @@ public final class SettlementJournal {
 
     private final OneToOneRingBuffer ringBuffer;
 
-    // Scratch encode buffer: max message = header(8) + JournalTrade block (85) < 128.
+    // Scratch encode buffer: max message = header(8) + JournalTrade block (101) < 128.
     private final UnsafeBuffer scratch = new UnsafeBuffer(ByteBuffer.allocateDirect(128));
     private final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
     private final JournalTradeEncoder tradeEncoder = new JournalTradeEncoder();
@@ -76,7 +76,9 @@ public final class SettlementJournal {
             final long price,
             final long quantity,
             final boolean takerIsBuy,
-            final long timestamp) {
+            final long timestamp,
+            final long takerOmsOrderId,
+            final long makerOmsOrderId) {
 
         tradeEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
                 .egressSeq(egressSeq)
@@ -89,7 +91,9 @@ public final class SettlementJournal {
                 .price(price)
                 .quantity(quantity)
                 .takerIsBuy(takerIsBuy ? BooleanType.TRUE : BooleanType.FALSE)
-                .timestamp(timestamp);
+                .timestamp(timestamp)
+                .takerOmsOrderId(takerOmsOrderId)
+                .makerOmsOrderId(makerOmsOrderId);
 
         blockingWrite(MSG_TYPE_TRADE,
                 MessageHeaderEncoder.ENCODED_LENGTH + tradeEncoder.encodedLength(), tradeId);
@@ -102,7 +106,8 @@ public final class SettlementJournal {
             final long userId,
             final int marketId,
             final int orderStatus,
-            final long timestamp) {
+            final long timestamp,
+            final long omsOrderId) {
 
         terminalEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
                 .egressSeq(egressSeq)
@@ -110,7 +115,8 @@ public final class SettlementJournal {
                 .userId(userId)
                 .marketId(marketId)
                 .status(TerminalStatus.get((short) orderStatus))
-                .timestamp(timestamp);
+                .timestamp(timestamp)
+                .omsOrderId(omsOrderId);
 
         blockingWrite(MSG_TYPE_TERMINAL,
                 MessageHeaderEncoder.ENCODED_LENGTH + terminalEncoder.encodedLength(), orderId);

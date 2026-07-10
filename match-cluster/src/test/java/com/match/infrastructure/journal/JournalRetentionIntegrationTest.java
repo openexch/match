@@ -106,7 +106,7 @@ public class JournalRetentionIntegrationTest {
     public void purgesLowSegmentsAndKeepsEverythingAtOrAboveWatermark() throws Exception {
         // Write enough trades (egressSeq == tradeId == i) to span several 64k segments.
         for (int i = 1; i <= TRADES; i++) {
-            journal.appendTrade(i, i, 1, 11L, 900_001L, 22L, 900_002L, 1_000L, 1L, true, i);
+            journal.appendTrade(i, i, 1, 11L, 900_001L, 22L, 900_002L, 1_000L, 1L, true, i, 7_011L, 7_022L);
         }
         final long drainDeadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(30);
         while (agent.writtenEntries() < TRADES) {
