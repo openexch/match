@@ -66,10 +66,37 @@ public class TimescaleIntegrationTest {
     }
 
     private void refreshAllCaggs() {
+        // Bottom-up: a hierarchical cagg (e.g. candles_1d) rolls up the level below it, so lower
+        // intervals must be materialized first.
         for (String view : new String[]{"candles_1m", "candles_5m", "candles_15m",
                 "candles_1h", "candles_4h", "candles_1d"}) {
-            execute("CALL refresh_continuous_aggregate('" + view + "', NULL, NULL)");
+            refreshCaggWithRetry(view);
         }
+    }
+
+    /**
+     * {@code refresh_continuous_aggregate} intermittently fails in CI (match#138) — a transient
+     * lock / "refresh already in progress" / not-yet-committed lower-level materialization right
+     * after schema creation. It is safely idempotent, so retry with a short backoff before failing.
+     */
+    private void refreshCaggWithRetry(String view) {
+        String sql = "CALL refresh_continuous_aggregate('" + view + "', NULL, NULL)";
+        RuntimeException last = null;
+        for (int attempt = 1; attempt <= 5; attempt++) {
+            try {
+                execute(sql);
+                return;
+            } catch (RuntimeException e) {
+                last = e;
+                try {
+                    Thread.sleep(300L * attempt);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("interrupted refreshing " + view, ie);
+                }
+            }
+        }
+        throw new RuntimeException("refresh_continuous_aggregate('" + view + "') failed after 5 attempts", last);
     }
 
     private void execute(String sql) {
