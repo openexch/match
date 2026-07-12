@@ -10,7 +10,7 @@
 #
 # ==================================================================
 
-.PHONY: tune tune-report install install-deps optimize-os help build build-java build-cluster build-gateway build-loadtest sbe os-check determinism update-goldens durability p1-gate p1-gate-smoke
+.PHONY: tune tune-report audit-arm install install-deps optimize-os help build build-java build-cluster build-gateway build-loadtest sbe os-check determinism update-goldens durability p1-gate p1-gate-smoke
 
 # ==================== CONFIGURATION ====================
 PROJECT_DIR := $(shell pwd)
@@ -49,6 +49,43 @@ install-deps:
 	@echo "→ Checking system utilities..."
 	@sudo apt install -y taskset util-linux procps net-tools 2>/dev/null || true
 	@echo "  ✓ All dependencies installed"
+	@echo ""
+	@$(MAKE) --no-print-directory audit-arm
+
+# Arm a boot-persistent audit watch on /dev/shm directory removals (ag#68): a
+# driver dir (/dev/shm/aeron-<user>-N-driver) has repeatedly been deleted out
+# from under a live node by an unattributed process, bypassing the PM cleanup
+# logs. This records the deleting pid/comm/auid so the culprit can be identified.
+# Scoped to DIRECTORY-removal syscalls (rmdir + renames), NOT file unlinks: the
+# prime suspect is the admin-gateway's own Go os.RemoveAll, which removes a dir
+# via rmdir(2) on amd64 (unlinkat flag 0 -> EISDIR -> rmdir fallback) — so this
+# catches it while staying near-silent (no per-file /dev/shm chatter). Trade-off:
+# a manual coreutils `rm -rf` uses unlinkat(AT_REMOVEDIR) and would slip past;
+# add unlink,unlinkat to the -S list if you ever need to catch that too.
+# Idempotent; never fails the install (|| true). Read hits with:
+#   sudo ausearch -k aeron-shm -i | grep -iE 'rmdir|rename' | tail
+audit-arm:
+	@echo "→ Arming /dev/shm dir-delete-watch (ag#68)..."
+	@if ! command -v auditctl >/dev/null 2>&1; then \
+		sudo apt install -y auditd 2>/dev/null || true; \
+	fi
+	@if command -v augenrules >/dev/null 2>&1; then \
+		printf '%s\n' \
+			'## Open Exchange: catch whoever deletes a live Aeron driver dir (ag#68).' \
+			'## Dir-removal syscalls only (rmdir + renames) — near-silent; catches Go os.RemoveAll.' \
+			'-a always,exit -F arch=b64 -F dir=/dev/shm -S rename,renameat,rmdir -k aeron-shm' \
+			'-a always,exit -F arch=b32 -F dir=/dev/shm -S rename,renameat,rmdir -k aeron-shm' \
+			| sudo tee /etc/audit/rules.d/aeron-shm.rules >/dev/null && \
+		sudo systemctl enable --now auditd 2>/dev/null || true; \
+		sudo augenrules --load 2>/dev/null || true; \
+		if sudo auditctl -l 2>/dev/null | grep -q aeron-shm; then \
+			echo "  ✓ Dir-delete-watch armed (key aeron-shm, persists across reboot)"; \
+		else \
+			echo "  ⚠ Rule file written but not loaded — check 'sudo systemctl status auditd'"; \
+		fi; \
+	else \
+		echo "  ⚠ auditd unavailable; skipping (install it to arm the ag#68 watch)"; \
+	fi
 
 install:
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
