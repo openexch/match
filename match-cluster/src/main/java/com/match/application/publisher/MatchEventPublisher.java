@@ -307,6 +307,31 @@ public class MatchEventPublisher implements MatchEventSink {
             long omsOrderId,
             int rejectReason,
             long egressSeq) {
+        return publishOrderStatusUpdate(marketId, timestamp, orderId, userId, orderStatus,
+            remainingQty, filledQty, orderPrice, orderIsBuy, omsOrderId, rejectReason, egressSeq,
+            false);
+    }
+
+    /**
+     * @param suppressJournalTerminal true ONLY for the old-leg CANCELLED of an accepted
+     *        cancel-replace: it shares the live replacement's omsOrderId (the AE money key), so
+     *        journaling it would feed a TerminalRelease that strips the still-open order's hold.
+     *        The wire status itself is unchanged — the OMS's replace leg-routing depends on it.
+     */
+    public boolean publishOrderStatusUpdate(
+            int marketId,
+            long timestamp,
+            long orderId,
+            long userId,
+            int orderStatus,
+            long remainingQty,
+            long filledQty,
+            long orderPrice,
+            boolean orderIsBuy,
+            long omsOrderId,
+            int rejectReason,
+            long egressSeq,
+            boolean suppressJournalTerminal) {
 
         RingBuffer<PublishEvent> ringBuffer = ringBuffers.get(marketId);
         if (ringBuffer == null) {
@@ -316,7 +341,7 @@ public class MatchEventPublisher implements MatchEventSink {
         if (orderStatus >= OrderStatusType.FILLED) {
             terminalStatusCount++;
             final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
-            if (journal != null) {
+            if (journal != null && !suppressJournalTerminal) {
                 journal.appendTerminal(egressSeq, orderId, userId, marketId, orderStatus, timestamp, omsOrderId);
             }
         }

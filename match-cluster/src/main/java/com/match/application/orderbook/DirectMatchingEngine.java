@@ -16,7 +16,7 @@ public class DirectMatchingEngine implements MatchingEngine {
     // thread. A hardcoded deterministic constant, NEVER an env var — a divergent cap between replicas
     // would fork the state machine. Tests inject a small cap via the package-private constructor.
     static final int MAX_MATCHES_PER_ORDER = 10_000;
-    private static final int MATCH_FIELDS = 4; // makerOrderId, makerUserId, price, quantity
+    private static final int MATCH_FIELDS = 5; // makerOrderId, makerUserId, price, quantity, makerFilled
 
     // Effective per-order match cap (defaults to MAX_MATCHES_PER_ORDER; test-injectable).
     private final int maxMatchesPerOrder;
@@ -225,6 +225,7 @@ public class DirectMatchingEngine implements MatchingEngine {
             matchResults[idx + 1] = makerUserId;
             matchResults[idx + 2] = price;
             matchResults[idx + 3] = matchQty;
+            matchResults[idx + 4] = (matchQty == makerQty) ? 1 : 0;
             matchCount++;
 
             // Update quantities
@@ -276,6 +277,7 @@ public class DirectMatchingEngine implements MatchingEngine {
             matchResults[idx + 1] = makerUserId;
             matchResults[idx + 2] = price;
             matchResults[idx + 3] = matchQty;
+            matchResults[idx + 4] = (matchQty == makerQty) ? 1 : 0;
             matchCount++;
 
             // Update
@@ -322,6 +324,10 @@ public class DirectMatchingEngine implements MatchingEngine {
 
     public long getMatchQuantity(int matchIndex) {
         return matchResults[matchIndex * MATCH_FIELDS + 3];
+    }
+
+    public boolean isMatchMakerFilled(int matchIndex) {
+        return matchResults[matchIndex * MATCH_FIELDS + 4] == 1;
     }
 
     public long getTakerRemainingQuantity() {

@@ -5,6 +5,8 @@ import com.match.application.publisher.*;
 import com.match.domain.FixedPoint;
 import com.match.domain.commands.CancelOrderCommand;
 import com.match.domain.commands.CreateOrderCommand;
+import com.match.domain.commands.UpdateOrderCommand;
+import com.match.infrastructure.journal.SettlementJournal;
 import com.match.domain.enums.OrderSide;
 import com.match.domain.enums.OrderType;
 import org.junit.After;
@@ -412,8 +414,15 @@ public class EnginePublisherIntegrationTest {
 
         List<CapturedEvent> statuses = findByType(PublishEventType.ORDER_STATUS_UPDATE);
         assertFalse("Should have order status", statuses.isEmpty());
+        // The fully-consumed maker (order 900) now emits its own FILLED first; assert on the
+        // TAKER's terminal specifically.
+        CapturedEvent takerStatus = null;
+        for (CapturedEvent ev : statuses) {
+            if (ev.userId == 200L) takerStatus = ev;
+        }
+        assertNotNull("taker must get a status", takerStatus);
         assertEquals("Partial fill with failed rest must be terminal CANCELLED",
-            OrderStatusType.CANCELLED, statuses.get(0).orderStatus);
+            OrderStatusType.CANCELLED, takerStatus.orderStatus);
     }
 
     @Test
@@ -526,6 +535,120 @@ public class EnginePublisherIntegrationTest {
 
     // ==================== Test Handler ====================
 
+
+    // ============ Maker terminal + replace journal exemption (2026-07-12 campaign fixes) ============
+
+    private long firstStatusOrderId() {
+        List<CapturedEvent> st = findByType(PublishEventType.ORDER_STATUS_UPDATE);
+        assertFalse(st.isEmpty());
+        return st.get(0).orderId;
+    }
+
+    private void makerFilledCase(Engine e) throws Exception {
+        CreateOrderCommand maker = limitCmd(100L, OrderSide.ASK, 60000.0, 1.0);
+        maker.setOmsOrderId(111L);
+        e.acceptOrder(MARKET_ID, Engine.CMD_CREATE, maker, System.nanoTime());
+        waitForEvents();
+        long makerOrderId = firstStatusOrderId();
+        handler.events.clear();
+
+        CreateOrderCommand taker = limitCmd(200L, OrderSide.BID, 60000.0, 1.0);
+        taker.setOmsOrderId(222L);
+        e.acceptOrder(MARKET_ID, Engine.CMD_CREATE, taker, System.nanoTime());
+        waitForEvents();
+
+        boolean makerFilled = false;
+        for (CapturedEvent ev : findByType(PublishEventType.ORDER_STATUS_UPDATE)) {
+            if (ev.orderId == makerOrderId && ev.orderStatus == OrderStatusType.FILLED) {
+                makerFilled = true;
+                assertEquals("maker terminal must carry the maker's omsOrderId (the AE money key)",
+                    111L, ev.omsOrderId);
+                assertEquals(100L, ev.userId);
+            }
+        }
+        assertTrue("fully-consumed maker must get a terminal FILLED — the AE hold release rides on it",
+            makerFilled);
+    }
+
+    @Test
+    public void makerFullConsumptionPublishesMakerFilled_array() throws Exception {
+        makerFilledCase(engineWith("array"));
+    }
+
+    @Test
+    public void makerFullConsumptionPublishesMakerFilled_direct() throws Exception {
+        makerFilledCase(engineWith("direct"));
+    }
+
+    @Test
+    public void partiallyConsumedMakerGetsNoStatus() throws Exception {
+        CreateOrderCommand maker = limitCmd(100L, OrderSide.ASK, 60000.0, 2.0);
+        maker.setOmsOrderId(111L);
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, maker, System.nanoTime());
+        waitForEvents();
+        long makerOrderId = firstStatusOrderId();
+        handler.events.clear();
+
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(200L, OrderSide.BID, 60000.0, 1.0), System.nanoTime());
+        waitForEvents();
+
+        for (CapturedEvent ev : findByType(PublishEventType.ORDER_STATUS_UPDATE)) {
+            assertNotEquals("partial maker consumption must not emit a maker status (trades are the fill source)",
+                makerOrderId, ev.orderId);
+        }
+        // the maker's terminal arrives when the remainder is consumed
+        engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(201L, OrderSide.BID, 60000.0, 1.0), System.nanoTime());
+        waitForEvents();
+        boolean makerFilled = false;
+        for (CapturedEvent ev : findByType(PublishEventType.ORDER_STATUS_UPDATE)) {
+            if (ev.orderId == makerOrderId && ev.orderStatus == OrderStatusType.FILLED) makerFilled = true;
+        }
+        assertTrue(makerFilled);
+    }
+
+    @Test
+    public void replaceCancelIsJournalExemptButRealCancelJournals() throws Exception {
+        SettlementJournal journal = new SettlementJournal(64 * 1024);
+        publisher.setSettlementJournal(journal);
+        try {
+            CreateOrderCommand create = limitCmd(100L, OrderSide.BID, 59000.0, 1.0);
+            create.setOmsOrderId(333L);
+            engine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, create, System.nanoTime());
+            waitForEvents();
+            long oldOrderId = firstStatusOrderId();
+            handler.events.clear();
+
+            UpdateOrderCommand upd = new UpdateOrderCommand();
+            upd.setUserId(100L);
+            upd.setOrderId(oldOrderId);
+            upd.setOrderSide(OrderSide.BID);
+            upd.setOrderType(OrderType.LIMIT);
+            upd.setPrice(FixedPoint.fromDouble(58000.0));
+            upd.setQuantity(FixedPoint.fromDouble(1.0));
+            engine.acceptOrder(MARKET_ID, Engine.CMD_UPDATE, upd, System.nanoTime());
+            waitForEvents();
+
+            boolean sawWireCancel = false;
+            long newOrderId = 0;
+            for (CapturedEvent ev : findByType(PublishEventType.ORDER_STATUS_UPDATE)) {
+                if (ev.orderId == oldOrderId && ev.orderStatus == OrderStatusType.CANCELLED) sawWireCancel = true;
+                if (ev.orderId != oldOrderId && ev.orderStatus == OrderStatusType.NEW) newOrderId = ev.orderId;
+            }
+            assertTrue("old-leg CANCELLED must still be published on the wire (OMS leg-routing)", sawWireCancel);
+            assertTrue("replacement leg must be NEW", newOrderId != 0);
+            assertEquals("replace-cancel must NOT reach the settlement journal — it shares the live "
+                + "replacement's omsOrderId and would strip the order's AE hold",
+                0, journal.appendedTerminals());
+
+            engine.acceptOrder(MARKET_ID, Engine.CMD_CANCEL, cancelCmd(100L, newOrderId), System.nanoTime());
+            waitForEvents();
+            assertEquals("a real cancel is a money event and must journal its terminal",
+                1, journal.appendedTerminals());
+        } finally {
+            publisher.setSettlementJournal(null);
+        }
+    }
+
     private static class CapturedEvent {
         int eventType;
         int marketId;
@@ -537,6 +660,7 @@ public class EnginePublisherIntegrationTest {
         long orderId;
         long userId;
         int rejectReason;
+        long omsOrderId;
     }
 
     private static class CapturingHandler implements MarketEventHandler {
@@ -560,6 +684,7 @@ public class EnginePublisherIntegrationTest {
             copy.orderId = event.getOrderId();
             copy.userId = event.getUserId();
             copy.rejectReason = event.getRejectReason();
+            copy.omsOrderId = event.getOmsOrderId();
             events.add(copy);
         }
 
