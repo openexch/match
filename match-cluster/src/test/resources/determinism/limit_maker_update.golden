@@ -2,6 +2,7 @@ STATUS m=1 ts=1000 order=1 user=100 status=NEW rem=500000000 filled=0 px=6000000
 STATUS m=1 ts=1000 order=2 user=200 status=NEW rem=500000000 filled=0 px=5900000000000 buy=1 oms=0 reason=NONE
 STATUS m=1 ts=1000 order=2 user=200 status=REJECTED rem=0 filled=0 px=6100000000000 buy=1 oms=0 reason=WOULD_CROSS
 TRADE  m=1 ts=1000 tradeId=1 taker=3 takerUser=300 maker=2 makerUser=200 px=5900000000000 qty=500000000 takerBuy=0 takerOms=0 makerOms=0
+STATUS m=1 ts=1000 order=2 user=200 status=FILLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE
 STATUS m=1 ts=1000 order=3 user=300 status=FILLED rem=0 filled=500000000 px=0 buy=0 oms=0 reason=NONE
 STATUS m=1 ts=1000 order=4 user=400 status=NEW rem=100000000 filled=0 px=5900000000000 buy=1 oms=0 reason=NONE
 STATUS m=1 ts=1000 order=4 user=400 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=0 reason=NONE

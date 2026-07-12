@@ -482,6 +482,18 @@ public class Engine {
                 takerOmsOrderId, makerOmsOrderId,
                 currentLogPosition
             );
+
+            // A fully-consumed maker gets an explicit terminal FILLED. The OMS derives maker fill
+            // state from the TradeExecutions above (late/duplicate statuses for terminal orders are
+            // dropped there), but the settlement journal derives the AE's TerminalRelease from
+            // terminal statuses — without this the maker's hold is never feed-released. Quantities
+            // are zeros like processCancel's ack: trades are the quantity source of record.
+            if (engine.isMatchMakerFilled(i)) {
+                orderIdToOmsOrderId.remove(makerOrderId);
+                publishOrderStatus(marketId, timestamp, makerOrderId, makerUserId,
+                    OrderStatusType.FILLED, 0, 0, 0, !takerIsBuy, makerOmsOrderId,
+                    OrderRejectReason.NONE);
+            }
         }
     }
 
@@ -589,9 +601,10 @@ public class Engine {
         // Clean up old mapping
         orderIdToOmsOrderId.remove(oldOrderId);
 
-        // Publish cancel for old order (the successful half of an accepted amend, not a reject)
-        publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.CANCELLED,
-            0, 0, 0, isBuy, omsOrderId, OrderRejectReason.NONE);
+        // Publish cancel for old order (the successful half of an accepted amend, not a reject).
+        // Journal-exempt: this CANCELLED shares the live replacement's omsOrderId — see
+        // publishReplaceCancelStatus.
+        publishReplaceCancelStatus(marketId, timestamp, oldOrderId, userId, isBuy, omsOrderId);
 
         // 2. Place new order with updated price/quantity
         long newOrderId = orderIdGenerator.getAndIncrement();
@@ -677,6 +690,24 @@ public class Engine {
             marketId, timestamp, orderId, userId,
             orderStatus, remainingQty, filledQty, orderPrice, isBuy, omsOrderId, rejectReason,
             currentLogPosition
+        );
+    }
+
+    /**
+     * Replace-cancel variant: publishes the old leg's CANCELLED on the wire (the OMS's replace
+     * leg-routing depends on it) but keeps it OUT of the settlement journal — it shares the live
+     * replacement's omsOrderId, and a journaled terminal would feed the AE a TerminalRelease that
+     * strips the still-open order's hold.
+     */
+    private void publishReplaceCancelStatus(int marketId, long timestamp, long orderId, long userId,
+            boolean isBuy, long omsOrderId) {
+        if (eventPublisher == null) {
+            return;
+        }
+        eventPublisher.publishOrderStatusUpdate(
+            marketId, timestamp, orderId, userId,
+            OrderStatusType.CANCELLED, 0, 0, 0, isBuy, omsOrderId, OrderRejectReason.NONE,
+            currentLogPosition, true
         );
     }
 

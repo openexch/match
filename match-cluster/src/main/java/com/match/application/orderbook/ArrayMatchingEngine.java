@@ -30,7 +30,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     // thread. A hardcoded deterministic constant, NEVER an env var — a divergent cap between replicas
     // would fork the state machine. Tests inject a small cap via the package-private constructor.
     static final int MAX_MATCHES_PER_ORDER = 10_000;
-    private static final int MATCH_FIELDS = 4; // makerOrderId, makerUserId, price, quantity
+    private static final int MATCH_FIELDS = 5; // makerOrderId, makerUserId, price, quantity, makerFilled
 
     private final ArrayOrderBook askBook;
     private final ArrayOrderBook bidBook;
@@ -180,6 +180,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
             matchResults[idx + 1] = makerUserId;
             matchResults[idx + 2] = price;
             matchResults[idx + 3] = matchQty;
+            matchResults[idx + 4] = (matchQty == makerQty) ? 1 : 0;
             matchCount++;
 
             takerRemainingQty -= matchQty;
@@ -227,6 +228,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
             matchResults[idx + 1] = makerUserId;
             matchResults[idx + 2] = price;
             matchResults[idx + 3] = matchQty;
+            matchResults[idx + 4] = (matchQty == makerQty) ? 1 : 0;
             matchCount++;
 
             takerRemainingBudget -= cost;
@@ -249,6 +251,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     public long getMatchMakerUserId(int i) { return matchResults[i * MATCH_FIELDS + 1]; }
     public long getMatchPrice(int i) { return matchResults[i * MATCH_FIELDS + 2]; }
     public long getMatchQuantity(int i) { return matchResults[i * MATCH_FIELDS + 3]; }
+    public boolean isMatchMakerFilled(int i) { return matchResults[i * MATCH_FIELDS + 4] == 1; }
     public long getTakerRemainingQuantity() { return takerRemainingQty; }
     public long getTakerRemainingBudget() { return takerRemainingBudget; }
 

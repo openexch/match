@@ -59,6 +59,15 @@ public interface MatchingEngine {
     long getMatchMakerUserId(int matchIndex);
     long getMatchPrice(int matchIndex);
     long getMatchQuantity(int matchIndex);
+
+    /**
+     * True if this match fully consumed the maker order (it was removed from the book by it).
+     * Recorded at match time so the caller can emit the maker's terminal FILLED status — the
+     * settlement journal derives TerminalRelease from terminals, so a maker completion without
+     * this signal leaks the maker's AE hold forever.
+     */
+    boolean isMatchMakerFilled(int matchIndex);
+
     long getTakerRemainingQuantity();
     long getTakerRemainingBudget();
 

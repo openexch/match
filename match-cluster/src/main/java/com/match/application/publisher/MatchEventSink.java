@@ -57,4 +57,29 @@ public interface MatchEventSink {
             long omsOrderId,
             int rejectReason,
             long egressSeq);
+
+    /**
+     * Variant with journal-terminal suppression. {@code suppressJournalTerminal} is set ONLY for
+     * the old-leg CANCELLED of an accepted cancel-replace: it shares the live replacement's
+     * omsOrderId (the AE money key), so a journaled terminal would feed the AE a TerminalRelease
+     * that strips the still-open order's hold. Sinks without a settlement journal can ignore the
+     * flag — this default delegates to the 12-arg form.
+     */
+    default boolean publishOrderStatusUpdate(
+            int marketId,
+            long timestamp,
+            long orderId,
+            long userId,
+            int orderStatus,
+            long remainingQty,
+            long filledQty,
+            long orderPrice,
+            boolean orderIsBuy,
+            long omsOrderId,
+            int rejectReason,
+            long egressSeq,
+            boolean suppressJournalTerminal) {
+        return publishOrderStatusUpdate(marketId, timestamp, orderId, userId, orderStatus,
+            remainingQty, filledQty, orderPrice, orderIsBuy, omsOrderId, rejectReason, egressSeq);
+    }
 }
