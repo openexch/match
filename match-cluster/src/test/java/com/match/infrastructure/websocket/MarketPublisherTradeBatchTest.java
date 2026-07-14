@@ -2,6 +2,7 @@
 package com.match.infrastructure.websocket;
 
 import com.match.application.publisher.MarketDataBroadcaster;
+import com.match.application.publisher.OrderStatusType;
 import com.match.application.publisher.PublishEvent;
 import com.match.domain.FixedPoint;
 import com.match.infrastructure.generated.MessageHeaderDecoder;
@@ -236,6 +237,67 @@ public class MarketPublisherTradeBatchTest {
         @Override
         public void broadcastReliable(DirectBuffer buffer, int offset, int length) {
             // OMS-bound path (TradeExecutionBatch / OrderStatusBatch) — not under test here.
+        }
+    }
+
+    @Test
+    public void flushErrorCountsDiscardedReliableEgress() throws Exception {
+        // match#132: when flushBuffers() throws mid-flush (here the broadcaster fails on the reliable
+        // OMS lane), clearBuffersWithoutSending() discards the buffered RELIABLE egress (TradeExecution
+        // + OrderStatus). That discard must be COUNTED into the drop tallies so it is visible on
+        // /metrics, not silently swallowed under only an unexported flushErrorCount.
+        MarketPublisher pub = new MarketPublisher(1, "BTC-USD", null);
+        ThrowingReliableBroadcaster bc = new ThrowingReliableBroadcaster();
+        pub.setBroadcaster(bc);
+
+        final int trades = 7;
+        final int statuses = 4;
+        for (int i = 0; i < trades; i++) {
+            PublishEvent e = new PublishEvent();
+            e.setTradeExecution(1, 1000L, i + 1, 100, 7, 200 + i, 8,
+                    FixedPoint.fromDouble(60_000.0 + i), FixedPoint.fromDouble(1.0), true, 0, 0, 0L);
+            pub.onEvent(e, i, true);
+        }
+        for (int i = 0; i < statuses; i++) {
+            PublishEvent e = new PublishEvent();
+            e.setOrderStatusUpdate(1, 1000L, 500 + i, 200L, OrderStatusType.NEW,
+                    FixedPoint.fromDouble(1.0), 0L, FixedPoint.fromDouble(60_000.0), true, 0L, 0, 0L);
+            pub.onEvent(e, i, true);
+        }
+
+        // Nothing dropped yet: the buffers hold and no flush has run.
+        assertEquals(0, pub.getDroppedTradeEvents());
+        assertEquals(0, pub.getDroppedStatusEvents());
+
+        // Force exactly one flush; the broadcaster throws on the reliable lane so flushBuffers() hits
+        // its catch-all and discards the buffered OMS egress.
+        pub.flushBuffers();
+
+        assertTrue("broadcaster must have thrown on the reliable lane", bc.threw);
+        assertEquals("discarded trade-exec egress must be counted", trades, pub.getDroppedTradeEvents());
+        assertEquals("discarded order-status egress must be counted", statuses, pub.getDroppedStatusEvents());
+        assertEquals("flush-error sub-tally = trades + statuses",
+                trades + statuses, pub.getFlushErrorDropped());
+    }
+
+    /** Fails on the reliable OMS lane to force a flush error; the lossy market-data lane succeeds. */
+    private static final class ThrowingReliableBroadcaster implements MarketDataBroadcaster {
+        boolean threw = false;
+
+        @Override
+        public boolean hasSubscribers() {
+            return true;
+        }
+
+        @Override
+        public void broadcast(DirectBuffer buffer, int offset, int length) {
+            // Lossy market-data path (aggregated trades / book snapshot), allowed to succeed.
+        }
+
+        @Override
+        public void broadcastReliable(DirectBuffer buffer, int offset, int length) {
+            threw = true;
+            throw new RuntimeException("simulated reliable egress failure");
         }
     }
 

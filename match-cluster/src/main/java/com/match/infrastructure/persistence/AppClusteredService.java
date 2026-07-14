@@ -373,6 +373,8 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_follower_egress_skipped_total", "Lossy market-data egress skipped on followers (no consumer)", followerSkipped::get)
                     .counter("match_dropped_oms_egress_total", "Reliable OMS egress drops (should stay 0)", droppedOmsEgress::get)
                     .counter("match_egress_offer_giveups_total", "Frames lost to exhausted backpressure retries at session.offer (should stay 0)", egressOfferGiveUps::get)
+                    .counter("match_publisher_dropped_trade_total", "Reliable OMS trade-egress dropped by market publishers (buffer-full or flush error; should stay 0)", eventPublisher::droppedTradeEgressTotal)
+                    .counter("match_publisher_dropped_status_total", "Reliable OMS status-egress dropped by market publishers (buffer-full or flush error; should stay 0)", eventPublisher::droppedStatusEgressTotal)
                     .counter("match_unknown_timers_total", "Fired cluster timers with no runnable", timerManager::getUnknownTimerCount)
                     .counter("match_flush_timer_fires_total", "Egress flush timer fires", () -> flushTimerFireCount)
                     .counter("match_aeron_errors_total", "Aeron error handler invocations", AeronCluster.AERON_ERROR_COUNT::get)

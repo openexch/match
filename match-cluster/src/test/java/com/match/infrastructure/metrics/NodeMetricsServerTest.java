@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.match.infrastructure.metrics;
 
+import com.match.application.publisher.MarketEventHandler;
+import com.match.application.publisher.MatchEventPublisher;
+import com.match.application.publisher.PublishEvent;
 import org.junit.Test;
 
 import static org.junit.Assert.*;
@@ -55,5 +58,68 @@ public class NodeMetricsServerTest {
             if (metrics.shouldSample()) sampled++;
         }
         assertEquals(10, sampled);
+    }
+
+    /**
+     * match#132: the per-publisher reliable-egress drop counters are aggregated across handlers by
+     * MatchEventPublisher and must render on /metrics under their new names. Wires the aggregators as
+     * counters exactly as AppClusteredService.startMetricsServer does.
+     */
+    @Test
+    public void publisherDropCountersAggregateAndRender() {
+        MatchEventPublisher eventPublisher = new MatchEventPublisher();
+        eventPublisher.initMarket(1, new StubDroppingHandler(1, 5, 3));
+        eventPublisher.initMarket(2, new StubDroppingHandler(2, 2, 4));
+        // No start(): initMarket alone populates the handler map without spinning up disruptor threads.
+
+        assertEquals("trade drops summed across handlers", 7, eventPublisher.droppedTradeEgressTotal());
+        assertEquals("status drops summed across handlers", 7, eventPublisher.droppedStatusEgressTotal());
+
+        NodeMetrics metrics = new NodeMetrics();
+        metrics.publish();
+        NodeMetricsServer server = new NodeMetricsServer(metrics)
+                .counter("match_publisher_dropped_trade_total", "Reliable OMS trade-egress dropped",
+                        eventPublisher::droppedTradeEgressTotal)
+                .counter("match_publisher_dropped_status_total", "Reliable OMS status-egress dropped",
+                        eventPublisher::droppedStatusEgressTotal);
+
+        String out = server.render();
+        assertTrue(out.contains("match_publisher_dropped_trade_total 7"));
+        assertTrue(out.contains("# TYPE match_publisher_dropped_trade_total counter"));
+        assertTrue(out.contains("match_publisher_dropped_status_total 7"));
+        assertTrue(out.contains("# TYPE match_publisher_dropped_status_total counter"));
+    }
+
+    /** Minimal MarketEventHandler that reports fixed reliable-egress drop counts. */
+    private static final class StubDroppingHandler implements MarketEventHandler {
+        private final int marketId;
+        private final long droppedTrades;
+        private final long droppedStatuses;
+
+        StubDroppingHandler(int marketId, long droppedTrades, long droppedStatuses) {
+            this.marketId = marketId;
+            this.droppedTrades = droppedTrades;
+            this.droppedStatuses = droppedStatuses;
+        }
+
+        @Override
+        public void onEvent(PublishEvent event, long sequence, boolean endOfBatch) {
+            // Not exercised in this test.
+        }
+
+        @Override
+        public int getMarketId() {
+            return marketId;
+        }
+
+        @Override
+        public long getDroppedTradeEvents() {
+            return droppedTrades;
+        }
+
+        @Override
+        public long getDroppedStatusEvents() {
+            return droppedStatuses;
+        }
     }
 }
