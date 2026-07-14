@@ -134,6 +134,15 @@ public class AppClusteredService implements ClusteredService {
     // then EXPECTED and correct — this counter says why).
     private final AtomicLong egressOfferGiveUps = new AtomicLong(0);
 
+    // match#140: per-session egress delivery observability. egressOfferGiveUps above only sees the
+    // BACKPRESSURE give-up; a session going dark via NOT_CONNECTED/CLOSED/MAX_POSITION_EXCEEDED hit a
+    // bare `break` in drainQueue with NO counter, and lastEgressSendMs was stamped on poll not on
+    // delivery, so match_last_egress_age_ms read healthy during a single-session blackout. This holds
+    // the per-disposition skip counters, per-session skip tally + last-successful-offer age, and the
+    // per-drain delivery flag. Observability only — no delivery/backpressure/retry behavior changes.
+    // See EgressSessionMetrics for the (service-thread-only maps, AtomicLong/volatile scrape) model.
+    private final EgressSessionMetrics egressSessionMetrics = new EgressSessionMetrics();
+
     // The queues above are bounded by ENTRY COUNT, but each entry holds a copied batch buffer
     // (up to ~150KB), so a count limit alone is NOT a memory bound — under a backed-up egress
     // consumer (or while replaying a huge log) they can fill the heap and OOM the matching node.
@@ -261,20 +270,28 @@ public class AppClusteredService implements ClusteredService {
             }
 
             // Drain OMS-bound settlement egress FIRST (reliable, priority), then lossy UI market data.
-            boolean sentAny = drainQueue(omsEgressQueue, omsEgressBytes, sessions);
-            sentAny |= drainQueue(marketDataQueue, marketDataBytes, sessions);
-            if (sentAny) {
+            // match#140: drainQueue now returns whether any session actually RECEIVED a frame (a
+            // positive offer), not merely whether a message was polled — so lastEgressSendMs (behind
+            // match_last_egress_age_ms) is stamped on real delivery, never on a poll that every
+            // session skipped. This closes the false-healthy signal for a full egress blackout.
+            boolean deliveredAny = drainQueue(omsEgressQueue, omsEgressBytes, sessions);
+            deliveredAny |= drainQueue(marketDataQueue, marketDataBytes, sessions);
+            // Refresh the per-session oldest-offer snapshot (service thread) for the age gauge.
+            egressSessionMetrics.recomputeOldestOffer();
+            if (deliveredAny) {
                 lastEgressSendMs = System.currentTimeMillis();
             }
         }
 
         private boolean drainQueue(Queue<QueuedMessage> queue, AtomicLong queuedBytes, List<ClientSession> sessions) {
             QueuedMessage msg;
-            boolean sentAny = false;
+            // match#140: signal is now delivery-based, not poll-based. beginDrain() resets the
+            // per-drain flag; recordDelivered() (positive offer) sets it. The RETURN value tells
+            // flush() whether any session actually received a frame this drain.
+            egressSessionMetrics.beginDrain();
             while ((msg = queue.poll()) != null) {
                 queuedBytes.addAndGet(-msg.length);
                 broadcastBuffer.putBytes(0, msg.data, 0, msg.length);
-                sentAny = true;
 
                 // Send to all connected sessions
                 for (ClientSession session : sessions) {
@@ -282,6 +299,8 @@ public class AppClusteredService implements ClusteredService {
                     while (retries < 3) {
                         long result = session.offer(broadcastBuffer, 0, msg.length);
                         if (result > 0) {
+                            // match#140: real delivery to this session — record its last-offer time.
+                            egressSessionMetrics.recordDelivered(session.id(), System.currentTimeMillis());
                             break;
                         } else if (result == Publication.BACK_PRESSURED || result == Publication.ADMIN_ACTION) {
                             retries++;
@@ -289,7 +308,11 @@ public class AppClusteredService implements ClusteredService {
                                 cluster.idleStrategy().idle();
                             }
                         } else {
-                            // Session closed or not connected - skip it
+                            // Session closed or not connected - skip it. Behavior UNCHANGED (still
+                            // break, no retry, nothing dropped differently). match#140: previously
+                            // this was invisible — count the disposition and per-session tally so a
+                            // whole session going dark is greppable + on /metrics.
+                            recordEgressSkip(session.id(), result);
                             break;
                         }
                     }
@@ -306,7 +329,7 @@ public class AppClusteredService implements ClusteredService {
                     }
                 }
             }
-            return sentAny;
+            return egressSessionMetrics.deliveredThisDrain();
         }
 
         @Override
@@ -384,7 +407,30 @@ public class AppClusteredService implements ClusteredService {
                     .gauge("match_egress_queue_market_bytes", "Bytes queued for market-data egress", marketDataBytes::get)
                     .gauge("match_client_sessions", "Connected cluster client sessions", () -> clientSessions.getAllSessions().size())
                     .gauge("match_last_egress_age_ms", "Milliseconds since the last egress send (leader only)",
-                            () -> lastEgressSendMs == 0 ? -1 : System.currentTimeMillis() - lastEgressSendMs);
+                            () -> lastEgressSendMs == 0 ? -1 : System.currentTimeMillis() - lastEgressSendMs)
+                    // match#140: per-session egress delivery observability. A session going dark
+                    // (NOT_CONNECTED/CLOSED/MAX_POSITION_EXCEEDED) was an invisible `break`; these
+                    // make a single-session blackout greppable + scrapeable. Aggregate + per-disposition.
+                    .counter("match_egress_session_skips_total",
+                            "Egress offers skipped for a non-backpressure disposition, all sessions (session went dark; match#140)",
+                            egressSessionMetrics::totalSkips)
+                    .counter("match_egress_skips_not_connected_total",
+                            "Egress offers skipped because the session was NOT_CONNECTED (match#140)",
+                            egressSessionMetrics::skipsNotConnected)
+                    .counter("match_egress_skips_closed_total",
+                            "Egress offers skipped because the session was CLOSED (match#140)",
+                            egressSessionMetrics::skipsClosed)
+                    .counter("match_egress_skips_max_position_total",
+                            "Egress offers skipped for MAX_POSITION_EXCEEDED (match#140)",
+                            egressSessionMetrics::skipsMaxPosition)
+                    .counter("match_egress_skips_other_total",
+                            "Egress offers skipped for any other non-positive disposition (match#140)",
+                            egressSessionMetrics::skipsOther)
+                    .gauge("match_egress_session_last_offer_age_ms",
+                            "Max ms since a successful per-session egress offer across sessions; climbs "
+                            + "during a single-session blackout while match_last_egress_age_ms stays "
+                            + "healthy (-1 = no session has delivered yet; match#140)",
+                            () -> egressSessionMetrics.maxSessionOfferAgeMs(System.currentTimeMillis()));
             metricsServer.start(port);
         } catch (Exception e) {
             // Metrics must never take a node down.
@@ -703,6 +749,9 @@ public class AppClusteredService implements ClusteredService {
     public void onSessionClose(final ClientSession session, final long timestamp, final CloseReason closeReason) {
         context.setClusterTime(timestamp);
         clientSessions.removeSession(session);
+        // match#140: drop this session from per-session egress observability so a normally-closed
+        // session can never freeze match_egress_session_last_offer_age_ms high (stale last-offer ms).
+        egressSessionMetrics.removeSession(session.id());
         System.out.println("Client session closed: " + session.id() + " reason=" + closeReason
                 + " (total sessions=" + clientSessions.getAllSessions().size() + ")");   // match#25 diag: track session count
     }
@@ -758,6 +807,24 @@ public class AppClusteredService implements ClusteredService {
     }
 
     /**
+     * match#140: shared per-session skip accounting for a non-positive, non-backpressure egress
+     * offer disposition (session went dark). Records the disposition counter + per-session tally in
+     * {@link EgressSessionMetrics} and emits a rate-limited System.err line (first skip per session,
+     * then every {@link EgressSessionMetrics#SKIP_LOG_INTERVAL}), mirroring the egressOfferGiveUps
+     * log style so a live single-session blackout is greppable. Observability only.
+     */
+    private void recordEgressSkip(final long sessionId, final long result) {
+        final long tally = egressSessionMetrics.recordSkip(sessionId, result);
+        if (EgressSessionMetrics.shouldLog(tally)) {
+            System.err.println("CRITICAL: egress session went dark — offer skipped (session=" + sessionId
+                + ", disposition=" + EgressSessionMetrics.dispositionName(result)
+                + ", sessionSkips=" + tally + ") — this session is receiving no egress; a single-session"
+                + " blackout is in progress (match_last_egress_age_ms can still read healthy if other"
+                + " sessions deliver — watch match_egress_session_last_offer_age_ms / _skips_total)");
+        }
+    }
+
+    /**
      * Send a ClusterHeartbeat keep-warm to all sessions. Called from the flush
      * timer when no egress has been sent for EGRESS_KEEP_WARM_INTERVAL_MS.
      * Egress-only side effect — does not touch replicated state.
@@ -770,8 +837,18 @@ public class AppClusteredService implements ClusteredService {
         int length = MessageHeaderEncoder.ENCODED_LENGTH + keepWarmEncoder.encodedLength();
 
         for (ClientSession session : clientSessions.getAllSessions()) {
-            // Best-effort send - don't block or retry
-            session.offer(keepWarmBuffer, 0, length);
+            // Best-effort send - don't block or retry. Behavior UNCHANGED; match#140 only observes
+            // the result: a positive offer refreshes the session's last-offer age, and a dark
+            // disposition (NOT_CONNECTED/CLOSED/MAX_POSITION_EXCEEDED) is fed through the same skip
+            // accounting so a session that only ever sees failed heartbeats is still visible.
+            // Transient BACK_PRESSURED/ADMIN_ACTION on a best-effort heartbeat is neither (matches
+            // drainQueue's classification: those are the retry branch there, not a dark skip).
+            final long result = session.offer(keepWarmBuffer, 0, length);
+            if (result > 0) {
+                egressSessionMetrics.recordDelivered(session.id(), System.currentTimeMillis());
+            } else if (result != Publication.BACK_PRESSURED && result != Publication.ADMIN_ACTION) {
+                recordEgressSkip(session.id(), result);
+            }
         }
     }
 
