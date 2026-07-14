@@ -418,6 +418,33 @@ public class MatchEventPublisher implements MatchEventSink {
     }
 
     /**
+     * Sum of RELIABLE OMS-lane trade-egress events dropped across every per-market handler
+     * (bounded-buffer overflow or a flush error discarding buffered egress). Exported to /metrics
+     * as match_publisher_dropped_trade_total. Read off the hot path (metrics scrape thread).
+     */
+    public long droppedTradeEgressTotal() {
+        long sum = 0;
+        Int2ObjectHashMap<MarketEventHandler>.ValueIterator it = handlers.values().iterator();
+        while (it.hasNext()) {
+            sum += it.next().getDroppedTradeEvents();
+        }
+        return sum;
+    }
+
+    /**
+     * Sum of RELIABLE OMS-lane order-status-egress events dropped across every per-market handler.
+     * See {@link #droppedTradeEgressTotal()}. Exported as match_publisher_dropped_status_total.
+     */
+    public long droppedStatusEgressTotal() {
+        long sum = 0;
+        Int2ObjectHashMap<MarketEventHandler>.ValueIterator it = handlers.values().iterator();
+        while (it.hasNext()) {
+            sum += it.next().getDroppedStatusEvents();
+        }
+        return sum;
+    }
+
+    /**
      * Check if publisher is running.
      */
     public boolean isRunning() {

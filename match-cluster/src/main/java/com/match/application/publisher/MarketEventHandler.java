@@ -39,4 +39,21 @@ public interface MarketEventHandler extends EventHandler<PublishEvent> {
      * Called when handler is shutting down.
      */
     default void onShutdown() {}
+
+    /**
+     * RELIABLE OMS-lane trade-egress events this handler has dropped (bounded-buffer overflow or a
+     * flush error discarding buffered egress). Aggregated onto /metrics. Default 0 for handlers
+     * that never shed.
+     */
+    default long getDroppedTradeEvents() {
+        return 0L;
+    }
+
+    /**
+     * RELIABLE OMS-lane order-status-egress events this handler has dropped. See
+     * {@link #getDroppedTradeEvents()}. Default 0 for handlers that never shed.
+     */
+    default long getDroppedStatusEvents() {
+        return 0L;
+    }
 }

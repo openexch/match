@@ -172,6 +172,10 @@ public class MarketPublisher implements MarketEventHandler {
     // Diagnostic counters
     private long flushCount = 0;
     private long flushErrorCount = 0;
+    // RELIABLE OMS-lane egress discarded by the flush-error path (clearBuffersWithoutSending after a
+    // throw in flushBuffers). Subset of droppedTradeEvents/droppedStatusEvents, kept distinct so the
+    // buffer-full drops (enqueue side) can be told apart from flush-error drops on /metrics.
+    private long flushErrorDropped = 0;
 
     public MarketPublisher(int marketId, String marketName, SubscriptionManager subscriptionManager) {
         this.marketId = marketId;
@@ -251,14 +255,21 @@ public class MarketPublisher implements MarketEventHandler {
         this.broadcaster = broadcaster;
     }
 
-    /** Trade-egress events dropped because the bounded buffer was full (flush fell behind). 0 in healthy operation. */
+    /** Trade-egress events dropped (bounded-buffer overflow OR a flush error discarding buffered egress). 0 in healthy operation. */
+    @Override
     public long getDroppedTradeEvents() {
         return droppedTradeEvents;
     }
 
-    /** Order-status-egress events dropped because the bounded buffer was full. 0 in healthy operation. */
+    /** Order-status-egress events dropped (bounded-buffer overflow OR a flush error discarding buffered egress). 0 in healthy operation. */
+    @Override
     public long getDroppedStatusEvents() {
         return droppedStatusEvents;
+    }
+
+    /** Subset of the dropped* totals discarded specifically by the flush-error path (buffer-full vs flush-error split). */
+    public long getFlushErrorDropped() {
+        return flushErrorDropped;
     }
 
     @Override
@@ -514,8 +525,25 @@ public class MarketPublisher implements MarketEventHandler {
             }
         } catch (Exception e) {
             flushErrorCount++;
-            logger.error("FLUSH ERROR for market " + marketId + " (error #" + flushErrorCount + "): " + e.getMessage());
-            e.printStackTrace();
+            // clearBuffersWithoutSending() below throws away the buffered RELIABLE OMS-lane egress
+            // (TradeExecutionBatch + OrderStatusBatch). Count the loss into the SAME tallies the
+            // enqueue-side buffer-full path feeds, so it is visible on /metrics, plus a distinct
+            // flush-error sub-tally. Counting runs every error; the log is rate-limited (flush fires
+            // every 20ms, so a persistently throwing broadcaster must not spam per-flush; mirrors
+            // the drop logging at bufferTrade/bufferOrderStatus).
+            int lostTrades = tradeExecutionBuffer.size();
+            int lostStatuses = orderStatusBuffer.size();
+            droppedTradeEvents += lostTrades;
+            droppedStatusEvents += lostStatuses;
+            flushErrorDropped += lostTrades + lostStatuses;
+            if (flushErrorCount == 1 || flushErrorCount % 1000 == 0) {
+                logger.error("FLUSH ERROR for market " + marketId + " (error #" + flushErrorCount
+                    + "): DISCARDING OMS egress: " + lostTrades + " trade + " + lostStatuses
+                    + " status events (flushErrorDropped=" + flushErrorDropped
+                    + ", droppedTrade=" + droppedTradeEvents + ", droppedStatus=" + droppedStatusEvents
+                    + "); recoverable via OMS reconciliation: " + e.getMessage());
+                e.printStackTrace();
+            }
             clearBuffersWithoutSending();
         }
     }
