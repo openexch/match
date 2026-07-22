@@ -15,7 +15,7 @@ const FEED_INSTANCE = 'feed';
  *  frame enters the edge there, so DO distance from the box is pure added
  *  latency for everyone. Hints only apply on (re)creation — existing
  *  objects stay put — this makes the good case deterministic. */
-const FEED_LOCATION: DurableObjectLocationHint = 'weur';
+const FEED_LOCATION: DurableObjectLocationHint = 'me';
 
 function publishTokenOk(header: string | null, expected: string | undefined): boolean {
   if (!expected || !header?.startsWith('Bearer ')) return false;
