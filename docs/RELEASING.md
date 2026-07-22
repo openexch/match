@@ -1,7 +1,7 @@
 # Releasing the Open Exchange stack
 
-The stack is four repos, versioned **together as one product** under a single tag (e.g. `v0.2.0-alpha`
-= match + oms + admin-gateway + trading-ui all at that version). One version answers "what is Open
+The stack is five repos, versioned **together as one product** under a single tag (e.g. `v0.4.0-beta`
+= match + oms + admin-gateway + trading-ui + assets all at that version). One version answers "what is Open
 Exchange running?".
 
 ## Repos (GitHub → local dir)
@@ -11,7 +11,8 @@ Exchange running?".
 | `openexch/match` | `match/` | matching engine cluster (anchor repo) |
 | `openexch/oms` | `order-management/` | order management service (dir ≠ repo; use `oms` for `gh`) |
 | `openexch/admin-gateway` | `admin-gateway/` | Go process manager / ops API |
-| `openexch/trading-ui` | `trading-ui/` | trading + admin web UI (Cloudflare Pages, deploys from `main`) |
+| `openexch/trading-ui` | `trading-ui/` | trading web UI (Cloudflare Pages, deploys from `main`) |
+| `openexch/assets` | `assets/` | Assets Engine — deterministic money ledger (joined the train at v0.4.0-beta) |
 
 The top-level `openexchange/` is **not** a git repo; each child is.
 
