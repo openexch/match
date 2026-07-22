@@ -17,7 +17,7 @@ leader mid-load), so these steps are exercised continuously.
 
 ## The one-block version
 
-Everything below is copy-pasteable as a single block. The four repos
+Everything below is copy-pasteable as a single block. The five repos
 **must be cloned as siblings with these exact directory names** (the admin
 gateway locates its peers by layout; override with `MATCH_PROJECT_DIR` /
 `OMS_PROJECT_DIR` if you deviate). Note that the `oms` repo is cloned into
@@ -33,12 +33,15 @@ sudo sysctl -w net.core.rmem_max=16777216 net.core.wmem_max=16777216
 mkdir -p openexchange && cd openexchange
 git clone https://github.com/openexch/match.git
 git clone https://github.com/openexch/oms.git order-management
+git clone https://github.com/openexch/assets.git
 git clone https://github.com/openexch/admin-gateway.git
 git clone https://github.com/openexch/trading-ui.git
 
-# 2. Build. match is installed to the local Maven repo because oms depends
-#    on com.match:match-common (not on Maven Central).
+# 2. Build. match and the assets modules are installed to the local Maven
+#    repo because oms depends on com.match:match-common and the Assets
+#    Engine's assets-common/assets-cluster (none on Maven Central).
 (cd match && mvn -B clean install -DskipTests)
+(cd assets && mvn -B install -DskipTests -pl assets-common,assets-cluster -am)
 (cd order-management && mvn -B clean package -DskipTests \
   && cp oms-app/target/oms-app-1.0-SNAPSHOT.jar oms-app/target/oms-app.jar)
 (cd admin-gateway && go build -o admin-gateway .)
