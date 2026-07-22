@@ -91,7 +91,7 @@ public class LoadConfig {
         private OrderScenario scenario = OrderScenario.BALANCED;
         private List<String> clusterHosts = Arrays.asList("127.0.0.1", "127.0.0.1", "127.0.0.1");
         private int basePort = 9000;
-        private String egressChannel = getDefaultEgressChannel();
+        private String egressChannel; // resolved in build(): EGRESS_HOST env or route-based detection
         private String ingressChannel = "aeron:udp?term-length=16m|mtu=8k"; // Match cluster config
         private int maxRetries = 10; // Increased retries but with shorter delays
         private long retryDelayMs = 0; // Remove sleep - use busy retry instead
@@ -152,32 +152,55 @@ public class LoadConfig {
         }
 
         public LoadConfig build() {
+            if (egressChannel == null) {
+                egressChannel = detectEgressChannel(clusterHosts.isEmpty() ? "127.0.0.1" : clusterHosts.get(0));
+            }
             return new LoadConfig(this);
         }
 
         /**
-         * Get the default egress channel configuration.
-         * Uses network interface detection to find the appropriate endpoint.
+         * Resolve the egress (response) channel endpoint the cluster publishes back to.
+         * The address must be reachable FROM the cluster nodes, so loopback is only
+         * correct when the cluster itself is local. Resolution order:
+         *   1. EGRESS_HOST env (operator override; same name the gateway and OMS use)
+         *   2. the local address the OS routes toward the first cluster host
+         *      (interface-name agnostic: eth0, ens5, bonded NICs all work)
+         *   3. first non-loopback IPv4 on any up interface
+         *   4. loopback (single-host development)
          */
-        private static String getDefaultEgressChannel() {
+        private static String detectEgressChannel(String peerHost) {
+            String env = System.getenv("EGRESS_HOST");
+            if (env != null && !env.isBlank()) {
+                return "aeron:udp?endpoint=" + env + ":0";
+            }
+            try (java.net.DatagramSocket probe = new java.net.DatagramSocket()) {
+                probe.connect(java.net.InetAddress.getByName(peerHost), 9);
+                java.net.InetAddress local = probe.getLocalAddress();
+                if (local instanceof java.net.Inet4Address && !local.isAnyLocalAddress()) {
+                    return "aeron:udp?endpoint=" + local.getHostAddress() + ":0";
+                }
+            } catch (Exception e) {
+                // fall through
+            }
             try {
-                // Try to get the container's IP address from network interfaces
-                java.net.NetworkInterface networkInterface = java.net.NetworkInterface.getByName("eth0");
-                if (networkInterface != null) {
-                    java.util.Enumeration<java.net.InetAddress> addresses = networkInterface.getInetAddresses();
-                    while (addresses.hasMoreElements()) {
-                        java.net.InetAddress addr = addresses.nextElement();
+                java.util.Enumeration<java.net.NetworkInterface> ifaces =
+                        java.net.NetworkInterface.getNetworkInterfaces();
+                while (ifaces.hasMoreElements()) {
+                    java.net.NetworkInterface ni = ifaces.nextElement();
+                    if (!ni.isUp() || ni.isLoopback()) {
+                        continue;
+                    }
+                    java.util.Enumeration<java.net.InetAddress> addrs = ni.getInetAddresses();
+                    while (addrs.hasMoreElements()) {
+                        java.net.InetAddress addr = addrs.nextElement();
                         if (addr instanceof java.net.Inet4Address && !addr.isLoopbackAddress()) {
-                            // Found a valid IPv4 address on eth0, use it for egress
                             return "aeron:udp?endpoint=" + addr.getHostAddress() + ":0";
                         }
                     }
                 }
             } catch (Exception e) {
-                // Fall through to default
+                // fall through
             }
-
-            // Default to loopback for local development
             return "aeron:udp?endpoint=127.0.0.1:0";
         }
     }
