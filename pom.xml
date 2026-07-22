@@ -36,7 +36,7 @@
         <agrona.version>2.5.0</agrona.version>
         <sbe.version>1.39.0</sbe.version>
         <disruptor.version>4.0.0</disruptor.version>
-        <netty.version>4.2.15.Final</netty.version>
+        <netty.version>4.2.16.Final</netty.version>
         <gson.version>2.14.0</gson.version>
         <!-- Market-data persistence (mirror the OMS repo's versions) -->
         <postgresql.version>42.7.12</postgresql.version>
