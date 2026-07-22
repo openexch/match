@@ -46,6 +46,9 @@
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>com.match.loadtest.LoadGenerator</mainClass>
+                                    <manifestEntries>
+                                        <Add-Opens>java.base/jdk.internal.misc java.base/sun.nio.ch java.base/java.nio</Add-Opens>
+                                    </manifestEntries>
                                 </transformer>
                             </transformers>
                             <filters>
