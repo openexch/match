@@ -574,13 +574,13 @@ public class LoadGenerator {
         System.out.println();
         System.out.println("Options:");
         System.out.println("  -r, --rate <n>        Target orders per second (default: 1000)");
-        System.out.println("  -d, --duration <n>    Test duration in seconds (default: 60)");
+        System.out.println("  -d, --duration <n>    Total run seconds INCLUDING warmup (default: 60; measured window = duration - warmup)");
         System.out.println("  -t, --threads <n>     Number of worker threads (default: 4)");
         System.out.println("  -s, --scenario <name> Scenario: BALANCED, MARKET_MAKER, AGGRESSIVE, SPIKE (default: BALANCED)");
         System.out.println("  -h, --hosts <list>    Cluster hosts comma-separated");
         System.out.println("  --no-ui               Disable interactive UI (use text output)");
         System.out.println("  --ultra               Ultra-low latency mode (single thread, small batches)");
-        System.out.println("  --warmup <n>          JIT warmup seconds before measurement (default: 0)");
+        System.out.println("  --warmup <n>          JIT warmup seconds at the START of --duration, metrics discarded (default: 0)");
         System.out.println("  --help                Show this help message");
         System.out.println();
         System.out.println("Examples:");
