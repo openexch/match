@@ -151,18 +151,23 @@ public final class ClusterConfig
         final String ingressHostname = ingressHostnames.get(memberId - startingMemberId);
         final String hostname = clusterHostnames.get(memberId - startingMemberId);
 
-        // ==================== ULTRA-LOW LATENCY MEDIA DRIVER CONFIG ====================
+        // ==================== MEDIA DRIVER CONFIG ====================
+        // Threading + idle are configurable (TRANSPORT_DRIVER_THREADING / TRANSPORT_IDLE_MODE):
+        // DEDICATED + busy-spin (default) gives ultra-low latency on isolated cores but burns up
+        // to 3 cores per node; SHARED + sleep lets a constrained host (cloud demo) run the same
+        // cluster on a fraction of a core when quiet. termBufferSparseFile stays dense either way
+        // for consistent latency.
+        final ThreadingMode driverThreading = driverThreadingMode(TransportConfig.driverThreadingMode());
         final MediaDriver.Context mediaDriverContext = new MediaDriver.Context()
                 .aeronDirectoryName(aeronDirName)
-                // Threading: DEDICATED for ultra-low latency (separate threads for conductor/sender/receiver)
-                .threadingMode(ThreadingMode.DEDICATED)
+                .threadingMode(driverThreading)
                 // Memory: Pre-allocate term buffers for consistent latency (no sparse file faults)
                 .termBufferSparseFile(false)
-                // Idle strategies: BusySpin for lowest latency (uses CPU, avoids context switches)
-                .conductorIdleStrategy(new org.agrona.concurrent.BusySpinIdleStrategy())
-                .senderIdleStrategy(new org.agrona.concurrent.BusySpinIdleStrategy())
-                .receiverIdleStrategy(new org.agrona.concurrent.BusySpinIdleStrategy())
-                .sharedIdleStrategy(new org.agrona.concurrent.BusySpinIdleStrategy())
+                // Idle strategies per TRANSPORT_IDLE_MODE (busy_spin default = lowest latency).
+                .conductorIdleStrategy(TransportConfig.idleStrategySupplier().get())
+                .senderIdleStrategy(TransportConfig.idleStrategySupplier().get())
+                .receiverIdleStrategy(TransportConfig.idleStrategySupplier().get())
+                .sharedIdleStrategy(TransportConfig.idleStrategySupplier().get())
                 // Flow control
                 .multicastFlowControlSupplier(new MinMulticastFlowControlSupplier())
                 // Buffer sizes for high throughput
@@ -193,8 +198,10 @@ public final class ClusterConfig
                         + TransportConfig.logTermLength())
                 // Disable events for lower latency
                 .recordingEventsEnabled(false)
-                // DEDICATED threading for low latency
-                .threadingMode(ArchiveThreadingMode.DEDICATED)
+                // Threading follows TRANSPORT_DRIVER_THREADING (DEDICATED default = low latency;
+                // SHARED collapses the archive's recorder/replayer/conductor onto one thread on
+                // constrained hosts).
+                .threadingMode(archiveThreadingMode(TransportConfig.driverThreadingMode()))
                 // Catalog and segment sizes
                 .catalogCapacity(1024 * 1024)  // 1MB catalog for more recordings
                 // Segment length sets archive RECLAMATION granularity, not throughput:
@@ -610,5 +617,37 @@ public final class ClusterConfig
     private static String endpoint(final int nodeId, final String hostname, final int portBase, final int portOffset)
     {
         return hostname + ":" + calculatePort(nodeId, portBase, portOffset);
+    }
+
+    /** Map the transport-neutral threading knob to the media driver's ThreadingMode. */
+    private static ThreadingMode driverThreadingMode(final TransportConfig.DriverThreading mode)
+    {
+        switch (mode)
+        {
+            case SHARED:
+                return ThreadingMode.SHARED;
+            case SHARED_NETWORK:
+                return ThreadingMode.SHARED_NETWORK;
+            case DEDICATED:
+            default:
+                return ThreadingMode.DEDICATED;
+        }
+    }
+
+    /**
+     * Map the same knob to the archive's threading mode. The archive has no SHARED_NETWORK
+     * variant, so both shared options collapse to ArchiveThreadingMode.SHARED.
+     */
+    private static ArchiveThreadingMode archiveThreadingMode(final TransportConfig.DriverThreading mode)
+    {
+        switch (mode)
+        {
+            case SHARED:
+            case SHARED_NETWORK:
+                return ArchiveThreadingMode.SHARED;
+            case DEDICATED:
+            default:
+                return ArchiveThreadingMode.DEDICATED;
+        }
     }
 }
