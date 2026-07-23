@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.match.application.publisher;
 
+import com.lmax.disruptor.BlockingWaitStrategy;
+import com.lmax.disruptor.BusySpinWaitStrategy;
 import com.lmax.disruptor.ExceptionHandler;
 import com.lmax.disruptor.RingBuffer;
+import com.lmax.disruptor.SleepingWaitStrategy;
+import com.lmax.disruptor.WaitStrategy;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
-import com.lmax.disruptor.BusySpinWaitStrategy;
 import com.match.infrastructure.Logger;
+import com.match.infrastructure.TransportConfig;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import java.util.concurrent.ThreadFactory;
@@ -27,6 +31,30 @@ import java.util.concurrent.atomic.AtomicLong;
 public class MatchEventPublisher implements MatchEventSink {
 
     private static final Logger logger = Logger.getLogger(MatchEventPublisher.class);
+
+    /**
+     * Disruptor wait strategy for the per-market publisher threads, following {@code TRANSPORT_IDLE_MODE}
+     * (the same knob as the cluster idle/driver threading). Each market's consumer thread otherwise
+     * busy-spins a whole core waiting for events — the right choice on isolated prod cores, but on a
+     * shared/cloud host with many markets that is most of the box. A fresh instance per market: some
+     * strategies (BlockingWaitStrategy) hold per-disruptor lock state.
+     * <ul>
+     *   <li>busy_spin (default): {@link BusySpinWaitStrategy} — lowest latency, one core per market.</li>
+     *   <li>backoff: {@link SleepingWaitStrategy} — spin/yield then park; low CPU, ~µs latency.</li>
+     *   <li>sleep: {@link BlockingWaitStrategy} — lock/condition; ~0% CPU when idle, ~µs wakeup.</li>
+     * </ul>
+     */
+    private static WaitStrategy waitStrategy() {
+        switch (TransportConfig.idleMode()) {
+            case SLEEP:
+                return new BlockingWaitStrategy();
+            case BACKOFF:
+                return new SleepingWaitStrategy();
+            case BUSY_SPIN:
+            default:
+                return new BusySpinWaitStrategy();
+        }
+    }
 
     // Ring buffer size (must be power of 2)
     // 64K events provides ~1-2 seconds buffer at 50K events/sec peak
@@ -93,7 +121,7 @@ public class MatchEventPublisher implements MatchEventSink {
             RING_BUFFER_SIZE,
             threadFactory,
             ProducerType.SINGLE,         // Single producer (matching engine thread)
-            new BusySpinWaitStrategy()   // Lowest latency wait strategy
+            waitStrategy()               // busy-spin in prod, sleep/block on constrained hosts (TRANSPORT_IDLE_MODE)
         );
 
         // Add exception handler to prevent silent failures

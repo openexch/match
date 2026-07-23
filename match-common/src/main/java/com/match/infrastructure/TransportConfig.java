@@ -6,6 +6,7 @@ import io.aeron.CommonContext;
 import org.agrona.concurrent.BackoffIdleStrategy;
 import org.agrona.concurrent.BusySpinIdleStrategy;
 import org.agrona.concurrent.IdleStrategy;
+import org.agrona.concurrent.SleepingMillisIdleStrategy;
 
 import java.io.File;
 import java.util.function.Supplier;
@@ -26,6 +27,7 @@ import java.util.function.Supplier;
  * |------------------------|------------------------|----------------------------------|
  * | TRANSPORT_DRIVER_MODE  | transport.driver.mode  | embedded                         |
  * | TRANSPORT_IDLE_MODE    | transport.idle.mode    | busy_spin                        |
+ * | TRANSPORT_DRIVER_THREADING | transport.driver.threading | dedicated                 |
  * | AERON_DIR              | aeron.driver.dir       | &lt;aeron-default&gt;-&lt;nodeId&gt;-driver  |
  * | TRANSPORT_INTERFACE    | transport.interface    | (unset: bind decided by OS)      |
  * | TRANSPORT_MTU          | transport.mtu          | 8192                             |
@@ -43,12 +45,28 @@ public final class TransportConfig {
         EMBEDDED
     }
 
-    /** Idle strategy profile for driver-facing agents (consensus, containers). */
+    /** Idle strategy profile for driver-facing agents (consensus, containers, embedded driver). */
     public enum IdleMode {
         /** Lowest latency, burns a core per agent (prod on isolated cores). */
         BUSY_SPIN,
         /** Spin, then yield, then park (dev laptops, CI). */
-        BACKOFF
+        BACKOFF,
+        /** Park ~1ms every idle, no spin phase: ~0% CPU when quiet, ~1ms added latency.
+         *  For resource-constrained hosts (cloud demo boxes) where burning cores idling
+         *  is the problem, not tail latency. */
+        SLEEP
+    }
+
+    /**
+     * Media-driver / archive threading mode. DEDICATED runs a separate thread per agent
+     * (conductor/sender/receiver) for lowest latency but spins up to 3 cores per node;
+     * SHARED collapses them onto one thread (a fraction of the cores) for constrained
+     * hosts; SHARED_NETWORK keeps the conductor separate from a shared sender/receiver.
+     */
+    public enum DriverThreading {
+        DEDICATED,
+        SHARED,
+        SHARED_NETWORK
     }
 
     /** How long a client polls for an external driver's cnc.dat before giving up. */
@@ -86,7 +104,24 @@ public final class TransportConfig {
         } catch (final IllegalArgumentException e) {
             throw new IllegalArgumentException(
                     "Invalid TRANSPORT_IDLE_MODE/transport.idle.mode '" + value +
-                    "' (expected busy_spin|backoff)");
+                    "' (expected busy_spin|backoff|sleep)");
+        }
+    }
+
+    /**
+     * Media-driver / archive threading mode. Defaults to DEDICATED (today's ultra-low-latency
+     * behavior). Opt in to SHARED / SHARED_NETWORK on constrained hosts.
+     *
+     * @return the configured driver threading mode.
+     */
+    public static DriverThreading driverThreadingMode() {
+        final String value = envOrProp("TRANSPORT_DRIVER_THREADING", "transport.driver.threading", "dedicated");
+        try {
+            return DriverThreading.valueOf(value.trim().toUpperCase());
+        } catch (final IllegalArgumentException e) {
+            throw new IllegalArgumentException(
+                    "Invalid TRANSPORT_DRIVER_THREADING/transport.driver.threading '" + value +
+                    "' (expected dedicated|shared|shared_network)");
         }
     }
 
@@ -98,9 +133,15 @@ public final class TransportConfig {
      * @return idle strategy supplier.
      */
     public static Supplier<IdleStrategy> idleStrategySupplier() {
-        return idleMode() == IdleMode.BUSY_SPIN
-                ? BusySpinIdleStrategy::new
-                : BackoffIdleStrategy::new;
+        switch (idleMode()) {
+            case BUSY_SPIN:
+                return BusySpinIdleStrategy::new;
+            case SLEEP:
+                return () -> new SleepingMillisIdleStrategy(1);
+            case BACKOFF:
+            default:
+                return BackoffIdleStrategy::new;
+        }
     }
 
     /**
