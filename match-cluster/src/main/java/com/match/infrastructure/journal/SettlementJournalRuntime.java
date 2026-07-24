@@ -79,13 +79,28 @@ public final class SettlementJournalRuntime implements AutoCloseable {
         return journal;
     }
 
+    /** Archive listen host: SETTLEMENT_JOURNAL_ARCHIVE_BIND, default localhost (host-local only). */
+    static String archiveBindHost() {
+        final String bind = System.getenv("SETTLEMENT_JOURNAL_ARCHIVE_BIND");
+        return bind == null || bind.isBlank() ? "localhost" : bind.trim();
+    }
+
     /**
      * Launch the journal Archive (a client of the node's media driver) and the writer thread.
      * Call once the media driver at {@code aeronDirectoryName} is up. Idempotence not needed:
      * bootstrap calls this exactly once per process.
      */
     public SettlementJournalRuntime start(final String aeronDirectoryName, final ErrorHandler errorHandler) {
-        final String controlChannel = "aeron:udp?endpoint=localhost:" + controlPort;
+        // SETTLEMENT_JOURNAL_ARCHIVE_BIND widens the archive's listen address so an OFF-HOST
+        // bridge can replay the journal (multi-host deployments; the settlement bridge is the
+        // journal's consumer). Default stays localhost: on a single box nothing changes, and
+        // the money journal is never exposed beyond the host unless explicitly asked for.
+        // In-process clients (writer agent, retention) still connect via localhost when the
+        // bind is 0.0.0.0 (a wildcard is a valid listen address but not a valid destination).
+        final String bindHost = archiveBindHost();
+        final String connectHost = "0.0.0.0".equals(bindHost) ? "localhost" : bindHost;
+        final String listenChannel = "aeron:udp?endpoint=" + bindHost + ":" + controlPort;
+        final String controlChannel = "aeron:udp?endpoint=" + connectHost + ":" + controlPort;
 
         // Second Archive on the SAME media driver as the consensus archive: distinct control
         // port AND distinct control/local-control stream ids (the local-control IPC channel is
@@ -96,7 +111,7 @@ public final class SettlementJournalRuntime implements AutoCloseable {
         final Archive.Context ctx = new Archive.Context()
                 .aeronDirectoryName(aeronDirectoryName)
                 .archiveDir(new File(journalDir.toFile(), "archive"))
-                .controlChannel(controlChannel)
+                .controlChannel(listenChannel)
                 .controlStreamId(InfrastructureConstants.JOURNAL_ARCHIVE_CONTROL_STREAM_ID)
                 .localControlChannel("aeron:ipc?term-length=1m")
                 .localControlStreamId(InfrastructureConstants.JOURNAL_ARCHIVE_LOCAL_CONTROL_STREAM_ID)
