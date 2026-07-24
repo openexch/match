@@ -277,7 +277,11 @@ public final class JournalRetention {
         final String aeronDir = args[1];
         final int controlPort = Integer.parseInt(args[2]);
         final long safeEgressSeq = Long.parseLong(args[3]);
-        final String controlChannel = "aeron:udp?endpoint=localhost:" + controlPort;
+        // Mirror SettlementJournalRuntime: when the archive is bound to a specific address
+        // (SETTLEMENT_JOURNAL_ARCHIVE_BIND), localhost is no longer a valid destination.
+        final String bindHost = SettlementJournalRuntime.archiveBindHost();
+        final String connectHost = "0.0.0.0".equals(bindHost) ? "localhost" : bindHost;
+        final String controlChannel = "aeron:udp?endpoint=" + connectHost + ":" + controlPort;
 
         try (AeronArchive archive = AeronArchive.connect(
                 new AeronArchive.Context()
