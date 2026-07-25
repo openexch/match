@@ -43,3 +43,7 @@ tools/repro-bug9/__pycache__/
 # durability harness run artifacts (p1-gate reports, observer tapes)
 tools/durability/runs/
 tools/durability/__pycache__/
+
+# JVM compiler/crash replay dumps — build garbage, never source
+replay_pid*.log
+hs_err_pid*.log
