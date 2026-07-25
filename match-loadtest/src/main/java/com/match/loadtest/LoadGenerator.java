@@ -8,6 +8,7 @@ import io.aeron.cluster.client.AeronCluster;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
 import org.agrona.ExpandableDirectByteBuffer;
+import org.agrona.collections.Long2LongHashMap;
 import org.agrona.concurrent.ManyToOneConcurrentArrayQueue;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.BusySpinIdleStrategy;
@@ -33,6 +34,14 @@ public class LoadGenerator {
 
     private final LoadConfig config;
     private final MetricsCollector metrics;
+    /**
+     * correlationId -> nanoTime at which the order was offered. Written by the send path and read by
+     * the egress listener, both on this class's single duty thread, so no synchronization is needed
+     * and a primitive map keeps it allocation-free. MISSING_VALUE means "not ours or already matched"
+     * — a status for an unknown id is ignored rather than recorded, so a stray message cannot invent
+     * a latency sample.
+     */
+    private final Long2LongHashMap inFlight = new Long2LongHashMap(Long.MIN_VALUE);
     private final boolean ultraLowLatency;
     private final int warmupSeconds;
     private final MediaDriver mediaDriver;
@@ -106,7 +115,7 @@ public class LoadGenerator {
         );
 
         final AeronCluster.Context clusterCtx = new AeronCluster.Context()
-            .egressListener(new LoadTestEgressListener(metrics))
+            .egressListener(new LoadTestEgressListener(metrics, inFlight))
             .egressChannel(config.getEgressChannel())
             .ingressChannel(config.getIngressChannel())
             .aeronDirectoryName(mediaDriver.aeronDirectoryName())
@@ -307,8 +316,11 @@ public class LoadGenerator {
             while (drainCount < maxDrainPerCycle && (order = orderQueue.poll()) != null) {
                 boolean success = sendOrder(order, buffer, headerEncoder, createOrderEncoder);
                 if (success) {
-                    long latency = System.nanoTime() - order.enqueueTimeNs;
+                    final long sentNs = System.nanoTime();
+                    long latency = sentNs - order.enqueueTimeNs;
                     metrics.recordSuccess(latency);
+                    // Same thread polls egress, so a plain primitive map is enough.
+                    inFlight.put(order.correlationId, sentNs);
                     messagesSent.incrementAndGet();
                 } else {
                     metrics.recordFailure();
@@ -348,6 +360,10 @@ public class LoadGenerator {
         createOrderEncoder.marketId(order.marketId);       // int
         createOrderEncoder.orderType(toOrderType(order.orderType));
         createOrderEncoder.orderSide(toOrderSide(order.orderSide));
+        // The correlation key for the round trip. OrderRequest has carried a correlationId field
+        // labelled "Unique ID for round-trip latency tracking" all along; it was simply never put on
+        // the wire, so nothing could match a status back to the order that caused it.
+        createOrderEncoder.omsOrderId(order.correlationId);
 
         final int length = MessageHeaderEncoder.ENCODED_LENGTH + createOrderEncoder.encodedLength();
 
