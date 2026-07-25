@@ -19,6 +19,14 @@ public class MetricsCollector {
 
     // Latency tracking (nanoseconds)
     private final LatencyTracker latencyTracker = new LatencyTracker();
+    /**
+     * Committed round trip: CreateOrder offered -> first status back. Kept in a SEPARATE tracker from
+     * {@link #latencyTracker}, which measures ingress publication (encode + hand-off to the local
+     * driver, never leaving the machine). Publishing one under the other's name is the mistake this
+     * split exists to make impossible.
+     */
+    private final LatencyTracker ackLatency = new LatencyTracker();
+    private final LongAdder acksReceived = new LongAdder();
 
     // Throughput tracking
     private final AtomicLong lastSnapshotTime = new AtomicLong(System.currentTimeMillis());
@@ -26,9 +34,28 @@ public class MetricsCollector {
 
     private final long startTime = System.currentTimeMillis();
 
+    /**
+     * A CreateOrder was acknowledged: the matching engine replicated it, committed it, applied it and
+     * sent a status back. This is the round trip. {@link #recordSuccess} measures something else
+     * entirely — see this class's ingress/ack distinction — and the two must never be quoted as if
+     * they were the same number.
+     */
+    public void recordAck(long latencyNanos) {
+        ackLatency.record(latencyNanos);
+        acksReceived.increment();
+    }
+
     public void recordSuccess(long latencyNanos) {
         successCount.increment();
         latencyTracker.record(latencyNanos);
+    }
+
+    public long getAcksReceived() {
+        return acksReceived.sum();
+    }
+
+    public LatencyStats getAckLatencyStats() {
+        return ackLatency.getStats();
     }
 
     public void recordFailure() {
@@ -52,6 +79,8 @@ public class MetricsCollector {
         backpressureCount.reset();
         timeoutCount.reset();
         latencyTracker.reset();
+        ackLatency.reset();
+        acksReceived.reset();
         lastSnapshotTime.set(System.currentTimeMillis());
         lastSnapshotCount.set(0);
     }
@@ -149,7 +178,9 @@ public class MetricsCollector {
         System.out.printf("Timeouts:              %,10d%n", timeouts);
         System.out.printf("Average Throughput:    %,10.2f msg/s%n", avgThroughput);
         System.out.println();
-        System.out.println("Latency Distribution (μs):");
+        System.out.println("Latency Distribution (μs) — INGRESS PUBLICATION:");
+        System.out.println("  encode + hand-off to the local driver. Never leaves this machine:");
+        System.out.println("  no network, no consensus, no matching, no reply.");
         System.out.printf("  Min:                 %,10.2f μs%n", stats.min / 1000.0);
         System.out.printf("  p50 (median):        %,10.2f μs%n", stats.p50 / 1000.0);
         System.out.printf("  p95:                 %,10.2f μs%n", stats.p95 / 1000.0);
@@ -157,6 +188,25 @@ public class MetricsCollector {
         System.out.printf("  p99.9:               %,10.2f μs%n", stats.p999 / 1000.0);
         System.out.printf("  p99.99:              %,10.2f μs%n", stats.p9999 / 1000.0);
         System.out.printf("  Max:                 %,10.2f μs%n", stats.max / 1000.0);
+
+        final LatencyStats ack = ackLatency.getStats();
+        final long acks = acksReceived.sum();
+        System.out.println();
+        if (acks > 0) {
+            System.out.println("Latency Distribution (μs) — COMMITTED ROUND TRIP:");
+            System.out.println("  CreateOrder offered -> first status back: replicated, committed,");
+            System.out.println("  applied, answered. THIS is the number comparable to another system's.");
+            System.out.printf("  Acknowledged:        %,10d orders%n", acks);
+            System.out.printf("  Min:                 %,10.2f μs%n", ack.min / 1000.0);
+            System.out.printf("  p50:                 %,10.2f μs%n", ack.p50 / 1000.0);
+            System.out.printf("  p95:                 %,10.2f μs%n", ack.p95 / 1000.0);
+            System.out.printf("  p99:                 %,10.2f μs%n", ack.p99 / 1000.0);
+            System.out.printf("  p99.9:               %,10.2f μs%n", ack.p999 / 1000.0);
+            System.out.printf("  Max:                 %,10.2f μs%n", ack.max / 1000.0);
+        } else {
+            System.out.println("Committed round trip: NO ACKS MATCHED — the round-trip number is absent,");
+            System.out.println("  not zero. Do not quote the ingress figure above in its place.");
+        }
         System.out.printf("  Avg:                 %,10.2f μs%n", stats.avg / 1000.0);
 
         // Raw distribution for the published data set: -Dloadtest.hgrm=<path>
