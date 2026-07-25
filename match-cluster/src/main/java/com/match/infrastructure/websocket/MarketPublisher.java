@@ -320,6 +320,13 @@ public class MarketPublisher implements MarketEventHandler {
             bufferOrderStatus(event);
         }
         // ORDER_BOOK_UPDATE not used - snapshots collected directly from engine
+
+        // Send the OMS-bound facts as soon as this Disruptor batch is complete, instead of leaving them
+        // to wait out the 20 ms market-data conflation tick. The batch size tunes itself: busy means big
+        // batches, idle means a batch of one and no added latency.
+        if (endOfBatch) {
+            flushOmsStreamsNow();
+        }
     }
 
     /**
@@ -444,6 +451,62 @@ public class MarketPublisher implements MarketEventHandler {
     }
 
     // Package-private for tests (MarketPublisherBookChainTest drives flush cycles directly).
+    /**
+     * The OMS-bound reliable streams: individual trade executions and order status updates.
+     *
+     * <p>These are per-order FACTS. Unlike the aggregated trade feed and the book snapshot, they cannot
+     * be conflated — every one of them has to arrive, and a dropped terminal leaves an OMS hold stuck
+     * (oms#21). They were nonetheless riding on the 20 ms market-data flush scheduler, which exists for
+     * conflation, and that scheduler was the single largest component of client-visible order latency:
+     * an order status waited a uniform 0-20 ms for the next tick. Measured at 5k, 20k and 80k orders/s
+     * the order lifecycle sat at a flat 11.2 ms, unmoved by a 16x load change, which is the signature of
+     * a fixed periodic wait rather than queueing.</p>
+     *
+     * <p>Now called from {@code onEvent} on every Disruptor {@code endOfBatch}, which is opportunistic
+     * batching in the proper sense: under load the Disruptor hands over large batches and these go out
+     * as large batches, while at low rate the batch is one event and the latency is the offer itself.
+     * The scheduler keeps calling it too, as the idle-path backstop for a trailing partial batch.</p>
+     *
+     * <p>Caller must hold this object's monitor (both call sites are {@code synchronized}), which is
+     * what makes the shared {@code encodeBuffer} safe across the Disruptor thread and the scheduler.</p>
+     */
+    private void flushOmsStreams(final MarketDataBroadcaster localBroadcaster) {
+        while (!tradeExecutionBuffer.isEmpty()) {
+            int batchSize = Math.min(tradeExecutionBuffer.size(), MAX_TRADE_EXEC_PER_BATCH);
+            int length = encodeTradeExecutionBatch(batchSize);
+            if (length > 0) {
+                localBroadcaster.broadcastReliable(encodeBuffer, 0, length);
+            }
+            if (batchSize >= tradeExecutionBuffer.size()) {
+                tradeExecutionBuffer.clear();
+            } else {
+                tradeExecutionBuffer.subList(0, batchSize).clear();
+            }
+        }
+
+        while (!orderStatusBuffer.isEmpty()) {
+            int batchSize = Math.min(orderStatusBuffer.size(), MAX_ORDER_STATUS_PER_BATCH);
+            int length = encodeOrderStatusBatch(batchSize);
+            if (length > 0) {
+                localBroadcaster.broadcastReliable(encodeBuffer, 0, length);
+            }
+            if (batchSize >= orderStatusBuffer.size()) {
+                orderStatusBuffer.clear();
+            } else {
+                orderStatusBuffer.subList(0, batchSize).clear();
+            }
+        }
+    }
+
+    /** Opportunistic end-of-batch emit for the OMS streams only; market data stays on the scheduler. */
+    private synchronized void flushOmsStreamsNow() {
+        final MarketDataBroadcaster localBroadcaster = broadcaster;
+        if (localBroadcaster == null) {
+            return; // no gateway yet; the scheduled flush handles buffer hygiene
+        }
+        flushOmsStreams(localBroadcaster);
+    }
+
     synchronized void flushBuffers() {
         flushCount++;
 
@@ -482,39 +545,7 @@ public class MarketPublisher implements MarketEventHandler {
                 clearTradesBuffer();
             }
 
-            // Flush individual trade executions for OMS (TradeExecutionBatch)
-            // Reliable path: OMS-bound settlement, must not be dropped under market-data load.
-            // Chunked (like order status) so a large trade burst cannot overflow encodeBuffer.
-            while (!tradeExecutionBuffer.isEmpty()) {
-                int batchSize = Math.min(tradeExecutionBuffer.size(), MAX_TRADE_EXEC_PER_BATCH);
-                int length = encodeTradeExecutionBatch(batchSize);
-                if (length > 0) {
-                    localBroadcaster.broadcastReliable(encodeBuffer, 0, length);
-                }
-                if (batchSize >= tradeExecutionBuffer.size()) {
-                    tradeExecutionBuffer.clear();
-                } else {
-                    tradeExecutionBuffer.subList(0, batchSize).clear();
-                }
-            }
-
-            // Flush buffered order status updates as batch (SBE encoded)
-            // Reliable path: OMS-bound settlement (incl. terminal CANCELLED/REJECTED) must not be
-            // dropped under market-data load — a dropped terminal leaves an OMS hold stuck (oms#21).
-            // Send in chunks if buffer is large to prevent overflow
-            while (!orderStatusBuffer.isEmpty()) {
-                int batchSize = Math.min(orderStatusBuffer.size(), MAX_ORDER_STATUS_PER_BATCH);
-                int length = encodeOrderStatusBatch(batchSize);
-                if (length > 0) {
-                    localBroadcaster.broadcastReliable(encodeBuffer, 0, length);
-                }
-                // Remove encoded entries
-                if (batchSize >= orderStatusBuffer.size()) {
-                    orderStatusBuffer.clear();
-                } else {
-                    orderStatusBuffer.subList(0, batchSize).clear();
-                }
-            }
+            flushOmsStreams(localBroadcaster);
 
             // Get fresh order book snapshot from matching engine (SBE encoded)
             if (localEngine != null) {

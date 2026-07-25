@@ -122,13 +122,43 @@ public class MarketPublisherOrderStatusReasonTest {
 
     // ==================== helpers ====================
 
-    /** Deliver one event to the publisher's buffering path; onEvent declares checked Exception. */
+    /**
+     * Deliver one event as part of an ongoing Disruptor batch (endOfBatch=false), so it is buffered
+     * and not yet emitted. This mirrors how the Disruptor delivers under load: every event of a
+     * batch except the last carries endOfBatch=false, and the last one triggers the emit.
+     */
     private static void feed(MarketPublisher pub, PublishEvent e) {
+        feed(pub, e, false);
+    }
+
+    /** Deliver one event, choosing whether it closes the Disruptor batch. */
+    private static void feed(MarketPublisher pub, PublishEvent e, boolean endOfBatch) {
         try {
-            pub.onEvent(e, 0L, true);
+            pub.onEvent(e, 0L, endOfBatch);
         } catch (Exception ex) {
             throw new AssertionError("onEvent threw", ex);
         }
+    }
+
+    /**
+     * The end of a Disruptor batch emits the OMS-bound statuses immediately, without waiting for the
+     * market-data conflation flush. This is the contract that took the client-visible order lifecycle
+     * from 16.4 ms to 757 us: order statuses are per-order facts, not conflatable market data, and they
+     * must not wait out a timer that exists for conflation.
+     */
+    @Test
+    public void endOfBatchEmitsWithoutWaitingForTheConflationFlush() {
+        MarketPublisher pub = new MarketPublisher(1, "BTC-USD", null);
+        OrderStatusBatchCapturingBroadcaster bc = new OrderStatusBatchCapturingBroadcaster();
+        pub.setBroadcaster(bc);
+
+        feed(pub, statusEvent(11L, OrderStatusType.NEW, OrderRejectReason.NONE), false);
+        assertEquals("mid-batch events stay buffered", 0, bc.batches.size());
+
+        feed(pub, statusEvent(22L, OrderStatusType.NEW, OrderRejectReason.NONE), true);
+        assertEquals("the batch goes out at endOfBatch, with no flush call", 1, bc.batches.size());
+        assertEquals("and it carries the whole batch, not one frame per event",
+                2, decode(bc.batches.get(0)).size());
     }
 
     private static PublishEvent statusEvent(long orderId, int status, int rejectReason) {

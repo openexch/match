@@ -1,0 +1,9 @@
+[Unit]
+Description=Shield the Open Exchange cluster from the OOM killer (ag#68)
+Documentation=file:///home/emre/Apps/openexchange/match/deploy/oom-protect/README.md
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/exchange-oom-protect.sh
+# Needs CAP_SYS_RESOURCE to set a negative oom_score_adj (runs as root by default).

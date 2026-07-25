@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.match.loadtest;
 
-import java.util.Arrays;
+import org.HdrHistogram.Histogram;
+import org.HdrHistogram.SingleWriterRecorder;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -153,61 +154,75 @@ public class MetricsCollector {
         System.out.printf("  p50 (median):        %,10.2f μs%n", stats.p50 / 1000.0);
         System.out.printf("  p95:                 %,10.2f μs%n", stats.p95 / 1000.0);
         System.out.printf("  p99:                 %,10.2f μs%n", stats.p99 / 1000.0);
+        System.out.printf("  p99.9:               %,10.2f μs%n", stats.p999 / 1000.0);
+        System.out.printf("  p99.99:              %,10.2f μs%n", stats.p9999 / 1000.0);
         System.out.printf("  Max:                 %,10.2f μs%n", stats.max / 1000.0);
         System.out.printf("  Avg:                 %,10.2f μs%n", stats.avg / 1000.0);
+
+        // Raw distribution for the published data set: -Dloadtest.hgrm=<path>
+        final String hgrm = System.getProperty("loadtest.hgrm");
+        if (hgrm != null && !hgrm.isBlank()) {
+            try (java.io.PrintStream ps = new java.io.PrintStream(hgrm)) {
+                latencyTracker.writeHgrm(ps);
+                System.out.println("  (hgrm written: " + hgrm + ")");
+            } catch (Exception e) {
+                System.out.println("  WARN: could not write hgrm " + hgrm + ": " + e);
+            }
+        }
     }
 
     /**
-     * Lock-free latency tracker with percentile calculations.
-     * Single-writer (duty cycle thread), multi-reader safe.
+     * Latency tracker backed by HdrHistogram.
+     *
+     * Replaces a fixed ring + Arrays.sort: computing percentiles used to allocate an 8 MB
+     * copy and sort 1M longs on EVERY report interval (2s), which churned the heap and the
+     * cache and perturbed the tail it was measuring. HdrHistogram records in constant time
+     * on the writer and reads percentiles without sorting or allocating.
+     *
+     * SingleWriterRecorder matches the actual threading: the cluster duty-cycle thread is the
+     * only writer; the reporter thread reads. Interval histograms are accumulated into a
+     * cumulative histogram so reported percentiles stay whole-run (as before).
      */
     private static class LatencyTracker {
-        private static final int CAPACITY = 1_000_000;
-        private final long[] samples = new long[CAPACITY];
-        private volatile int writeIndex = 0;  // Only written by duty cycle thread
+        private final SingleWriterRecorder recorder = new SingleWriterRecorder(3);
+        private Histogram cumulative = new Histogram(3);
+        private Histogram recycled;
 
         public void record(long latencyNanos) {
-            // Lock-free: single writer pattern
-            int idx = writeIndex;
-            samples[idx % CAPACITY] = latencyNanos;
-            writeIndex = idx + 1;  // Volatile write ensures visibility
+            if (latencyNanos >= 0) {
+                recorder.recordValue(latencyNanos);
+            }
         }
 
-        public void reset() {
-            writeIndex = 0;
-            Arrays.fill(samples, 0);
+        public synchronized void reset() {
+            recorder.reset();
+            cumulative.reset();
+            recycled = null;
         }
 
-        public LatencyStats getStats() {
-            int currentIndex = writeIndex;  // Snapshot the index
-            if (currentIndex == 0) {
-                return new LatencyStats(0, 0, 0, 0, 0, 0);
+        /** Cumulative snapshot. Cheap: a phaser flip + histogram add, no sort, no 8MB copy. */
+        public synchronized LatencyStats getStats() {
+            recycled = recorder.getIntervalHistogram(recycled);
+            cumulative.add(recycled);
+            if (cumulative.getTotalCount() == 0) {
+                return new LatencyStats(0, 0, 0, 0, 0, 0, 0, 0);
             }
+            return new LatencyStats(
+                    cumulative.getMinValue(),
+                    cumulative.getMaxValue(),
+                    (long) cumulative.getMean(),
+                    cumulative.getValueAtPercentile(50.0),
+                    cumulative.getValueAtPercentile(95.0),
+                    cumulative.getValueAtPercentile(99.0),
+                    cumulative.getValueAtPercentile(99.9),
+                    cumulative.getValueAtPercentile(99.99));
+        }
 
-            int count = Math.min(currentIndex, CAPACITY);
-            long[] copy = new long[count];
-
-            // Copy samples - may have slight inconsistency but acceptable for metrics
-            int startIdx = currentIndex > CAPACITY ? currentIndex - CAPACITY : 0;
-            for (int i = 0; i < count; i++) {
-                copy[i] = samples[(startIdx + i) % CAPACITY];
-            }
-
-            Arrays.sort(copy);
-
-            long min = copy[0];
-            long max = copy[count - 1];
-            long sum = 0;
-            for (int i = 0; i < count; i++) {
-                sum += copy[i];
-            }
-            long avg = sum / count;
-
-            long p50 = copy[(int) (count * 0.50)];
-            long p95 = copy[(int) (count * 0.95)];
-            long p99 = copy[Math.min(count - 1, (int) (count * 0.99))];
-
-            return new LatencyStats(min, max, avg, p50, p95, p99);
+        /** Full distribution for the raw-data artifact (benchmark-as-code). */
+        public synchronized void writeHgrm(final java.io.PrintStream out) {
+            recycled = recorder.getIntervalHistogram(recycled);
+            cumulative.add(recycled);
+            cumulative.outputPercentileDistribution(out, 1000.0); // microseconds
         }
     }
 
@@ -221,14 +236,19 @@ public class MetricsCollector {
         public final long p50;
         public final long p95;
         public final long p99;
+        public final long p999;
+        public final long p9999;
 
-        public LatencyStats(long min, long max, long avg, long p50, long p95, long p99) {
+        public LatencyStats(long min, long max, long avg, long p50, long p95, long p99,
+                            long p999, long p9999) {
             this.min = min;
             this.max = max;
             this.avg = avg;
             this.p50 = p50;
             this.p95 = p95;
             this.p99 = p99;
+            this.p999 = p999;
+            this.p9999 = p9999;
         }
     }
 }
