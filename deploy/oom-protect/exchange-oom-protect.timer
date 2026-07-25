@@ -1,0 +1,10 @@
+[Unit]
+Description=Re-apply Open Exchange OOM protection (catches node rolls/restarts)
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=20s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

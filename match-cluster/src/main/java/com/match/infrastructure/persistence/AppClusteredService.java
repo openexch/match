@@ -531,17 +531,11 @@ public class AppClusteredService implements ClusteredService {
     // idle churn (~2.8 KB/s of the old ~3.9 KB/s; measured idle growth 3.9 -> ~1.2 KB/s).
     // The remaining ~1.1 KB/s is a separate source (OMS still offers a logged
     // GatewayHeartbeat ~10/s — fixed separately in the OMS repo, mirroring loud-limits).
-    // Active-trading latency is kept low by an opportunistic flush in onSessionMessage
-    // (see ACTIVE_FLUSH_INTERVAL_MS) — egress is only legal from log-driven callbacks,
+    // Active-trading latency is kept low by an unconditional opportunistic flush at the end of
+    // onSessionMessage — egress is only legal from log-driven callbacks,
     // so a periodic timer is still required to cover idle markets, the trailing batch
     // after trading stops, and resnapshot delivery to a client on a quiet market.
     private static final long MARKET_DATA_FLUSH_INTERVAL_MS = 250;
-
-    // Opportunistic active-trading flush cadence. Wall-clock gated and leader-only;
-    // pure egress output (ClientSession.offer), so it mutates no replicated state and
-    // adds no log entries — unlike the replicated flush timer above.
-    private static final long ACTIVE_FLUSH_INTERVAL_MS = 10;
-    private long lastActiveFlushMs = 0;
 
     // --- match#25 egress-wedge diagnostics (logging-only; NO behavior change) ---
     // These never touch replicated state, scheduling, or control flow — they only
@@ -794,15 +788,21 @@ public class AppClusteredService implements ClusteredService {
             System.out.flush();
         }
 
-        // Drain queued market data promptly while orders are flowing so the relaxed
-        // flush-timer cadence doesn't add latency during active trading. Wall-clock
-        // gated and leader-only — pure egress output, mutates no replicated state.
+        // Drain queued egress now that this message has been applied. Leader-only, pure egress
+        // output, mutates no replicated state and adds no log entries.
+        //
+        // This used to be wall-clock gated to once per 10ms, which cost a uniform 0-10ms wait on
+        // every client-visible order status (measured: 5.0ms at p50, and a p90 sitting exactly on
+        // the gate's full period). The gate existed to bound flush overhead, and it no longer needs
+        // to: MarketPublisher now assembles the OMS batches on its own Disruptor endOfBatch, so by
+        // the time a batch reaches this queue it is already a batch. Draining it per message moves
+        // bytes, it does not shrink batches.
+        //
+        // Draining unconditionally is also the correct shape for the constraint we are under:
+        // ClientSession.offer is only legal from a log-driven callback, so this is the ONLY place a
+        // leader can push egress at the rate work arrives.
         if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
-            final long nowMs = System.currentTimeMillis();
-            if (nowMs - lastActiveFlushMs >= ACTIVE_FLUSH_INTERVAL_MS) {
-                lastActiveFlushMs = nowMs;
-                aeronBroadcaster.flush();
-            }
+            aeronBroadcaster.flush();
         }
     }
 
