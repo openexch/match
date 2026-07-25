@@ -45,7 +45,7 @@ public class MarketPublisherTradeBatchTest {
                     FixedPoint.fromDouble(60_000.0 + (i % 50)), FixedPoint.fromDouble(1.0),
                     true, 0, 0, 0L);
             try {
-                pub.onEvent(e, i, true);
+                pub.onEvent(e, i, false);
             } catch (Exception ex) {
                 throw new AssertionError("onEvent threw for trade " + i, ex);
             }
@@ -77,7 +77,7 @@ public class MarketPublisherTradeBatchTest {
                 PublishEvent e = new PublishEvent();
                 e.setTradeExecution(1, 1000L, i + 1, 100, 7, 200 + i, 8,
                         FixedPoint.fromDouble(60_000.0 + (i % 50)), FixedPoint.fromDouble(1.0), true, 0, 0, 0L);
-                pub.onEvent(e, i, true);
+                pub.onEvent(e, i, false);
             }
 
             // Bounded: the excess is dropped, not accumulated into OOM.
@@ -106,12 +106,12 @@ public class MarketPublisherTradeBatchTest {
         // 3 buy-taker at p1, 2 sell-taker at p1, 1 buy-taker at p2 — one flush window
         int tradeId = 0;
         for (int i = 0; i < 3; i++) {
-            pub.onEvent(tradeEvent(++tradeId, p1, FixedPoint.fromDouble(1.0), true), tradeId, true);
+            pub.onEvent(tradeEvent(++tradeId, p1, FixedPoint.fromDouble(1.0), true), tradeId, false);
         }
         for (int i = 0; i < 2; i++) {
-            pub.onEvent(tradeEvent(++tradeId, p1, FixedPoint.fromDouble(2.0), false), tradeId, true);
+            pub.onEvent(tradeEvent(++tradeId, p1, FixedPoint.fromDouble(2.0), false), tradeId, false);
         }
-        pub.onEvent(tradeEvent(++tradeId, p2, FixedPoint.fromDouble(5.0), true), tradeId, true);
+        pub.onEvent(tradeEvent(++tradeId, p2, FixedPoint.fromDouble(5.0), true), tradeId, false);
 
         pub.onShutdown(); // single final flush
 
@@ -154,7 +154,7 @@ public class MarketPublisherTradeBatchTest {
 
         long price = FixedPoint.fromDouble(60_000.0);
         long qty = FixedPoint.fromDouble(1.5);
-        pub.onEvent(tradeEvent(1, price, qty, true), 0, true);
+        pub.onEvent(tradeEvent(1, price, qty, true), 0, false);
         pub.onShutdown();
 
         assertEquals(1, bc.tradesBatches.size());
@@ -256,13 +256,13 @@ public class MarketPublisherTradeBatchTest {
             PublishEvent e = new PublishEvent();
             e.setTradeExecution(1, 1000L, i + 1, 100, 7, 200 + i, 8,
                     FixedPoint.fromDouble(60_000.0 + i), FixedPoint.fromDouble(1.0), true, 0, 0, 0L);
-            pub.onEvent(e, i, true);
+            pub.onEvent(e, i, false);
         }
         for (int i = 0; i < statuses; i++) {
             PublishEvent e = new PublishEvent();
             e.setOrderStatusUpdate(1, 1000L, 500 + i, 200L, OrderStatusType.NEW,
                     FixedPoint.fromDouble(1.0), 0L, FixedPoint.fromDouble(60_000.0), true, 0L, 0, 0L);
-            pub.onEvent(e, i, true);
+            pub.onEvent(e, i, false);
         }
 
         // Nothing dropped yet: the buffers hold and no flush has run.

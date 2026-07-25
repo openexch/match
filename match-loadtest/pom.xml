@@ -11,6 +11,9 @@
     </parent>
 
     <artifactId>match-loadtest</artifactId>
+    <properties>
+        <argLine></argLine>
+    </properties>
     <packaging>jar</packaging>
     <name>Match Load Test</name>
     <description>Load testing tools for the matching engine</description>
@@ -23,9 +26,23 @@
         </dependency>
 
         <!-- Aeron for direct cluster communication -->
+        <!-- Benchmark histograms: real p99.9/p99.99 without the periodic sort that the
+             old ring-buffer tracker needed (that sort allocated 8MB and thrashed cache every
+             report interval, perturbing the very tail it was measuring). -->
+        <dependency>
+            <groupId>org.hdrhistogram</groupId>
+            <artifactId>HdrHistogram</artifactId>
+            <version>2.2.2</version>
+        </dependency>
         <dependency>
             <groupId>io.aeron</groupId>
             <artifactId>aeron-all</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.2</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
