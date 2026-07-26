@@ -93,6 +93,14 @@ public final class SnapshotCodec {
 
         // Iterate exactly as the historical inline encoder did — market order is part of the
         // byte format and must stay stable for byte-identical snapshots.
+        //
+        // This is safe only because Engine's constructor puts every MarketConfig.ALL_MARKETS entry in,
+        // in that fixed order, and nothing is ever removed: the table layout is therefore the same on a
+        // node that replayed from genesis and one that restored a snapshot. Make markets lazily created,
+        // dynamically listed, or removable and that stops holding — the snapshot bytes would start
+        // depending on the order markets were first traded, and comparing two nodes' snapshots would
+        // report divergence on books that agree. Sort by marketId here if that day comes. (The assets
+        // engine had exactly this defect in its account/hold maps; see BalanceSnapshotCodec.)
         final Int2ObjectHashMap<MatchingEngine>.KeyIterator keyIt = engines.keySet().iterator();
         while (keyIt.hasNext()) {
             final int marketId = keyIt.nextInt();
