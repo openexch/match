@@ -3,11 +3,19 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
+# PR runs supersede each other: only the latest push to a branch is interesting.
+# Push and tag runs NEVER cancel each other, which is why they are grouped by sha
+# rather than by ref. Each one publishes an artifact addressed by its own commit,
+# and a bundle can name any of them, so a superseded run is a build that becomes
+# unfetchable later — exactly when someone is trying to replay an old incident.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: >-
+    ci-${{ github.workflow }}-${{
+      github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -63,3 +71,224 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: 1
           ignore-unfixed: true
+
+  # Puts the shaded engine jar in S3 under its commit sha, so the demo box
+  # deploys by downloading rather than by compiling.
+  #
+  # Why the box does not build it: it is a 15 GB machine running the live money
+  # path with the matching engine busy-spinning on pinned cores, and a Maven
+  # build there takes RAM and CPU from it. And a bundle records the buildSha of
+  # the jar that wrote it, so replaying an old incident means booting that exact
+  # jar — which only works if it still exists somewhere other than a working
+  # tree that has since moved on.
+  #
+  # A job here rather than its own workflow so `needs` is a real gate: two
+  # workflows cannot depend on each other.
+  publish:
+    needs: [build, security]
+    # Opt-in per repo. Publishing needs an S3 bucket and an OIDC role that do not
+    # exist in a fresh clone or a fork, and a workflow that hard-fails on absent
+    # infrastructure turns main red for a reason unrelated to the code. Turn it on
+    # with: gh variable set ARTIFACT_PUBLISH --body true
+    if: github.event_name == 'push' && vars.ARTIFACT_PUBLISH == 'true'
+    # One publish at a time per repo, the next one queues. Serialising the writes
+    # is what keeps them ordered.
+    #
+    # Worth knowing the limit: GitHub keeps ONE pending run per group, so a third
+    # publish arriving while one runs and one waits displaces the waiting one.
+    # That is why the pointer move below is also written to only ever go forward,
+    # rather than trusting the queue to deliver in order.
+    concurrency:
+      group: publish-${{ github.repository }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      id-token: write # OIDC: no long-lived AWS keys in this repo
+    env:
+      BUCKET: openexch-build-artifacts-675715936685
+      ARTIFACT: match-cluster
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      # -DbuildSha is not decoration. The jar's manifest carries it, every
+      # bundle's manifest copies it from there, and a replay uses it to find the
+      # binary that produced the state. Left unset the property defaults to
+      # "unknown", which is honest and useless: the build refuses to guess, so
+      # the guessing has to not happen here.
+      - name: Package
+        run: |
+          set -euo pipefail
+          mvn -B -s .mvn-settings.xml clean package -DskipTests \
+            -DbuildSha=$(git rev-parse --short HEAD)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify the jar carries its sha
+        run: |
+          set -euo pipefail
+          JAR=match-cluster/target/${ARTIFACT}.jar
+          unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep '^Build-Sha:'
+          unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' \
+            | grep -q "^Build-Sha: $(git rev-parse --short HEAD)$" || {
+            echo "::error::the jar's Build-Sha does not match this commit"
+            exit 1
+          }
+
+      # Where this build belongs. A branch push is addressed by commit sha and is
+      # fetchable but not deployable in production; a tag push is addressed by
+      # the tag under releases/ and is the only thing the release channel will
+      # install. Both are published: replaying an old incident needs the commit
+      # build that produced its state, whether or not it was ever released.
+      - name: Work out where this build belongs
+        id: dest
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "prefix=${ARTIFACT}/releases/${TAG}" >> "$GITHUB_OUTPUT"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prefix=${ARTIFACT}/${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+          # Stamped once here and reused, so the value in the manifest is the same
+          # one the pointer comparison sorts on. Two calls to date would be two
+          # different answers to "when was this built".
+          echo "builtAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::675715936685:role/openexch-ci-artifact-publisher
+          aws-region: eu-central-1
+
+      # Payload first, manifest last. The same commit-marker discipline the
+      # ledger archive uses: S3 has no atomic multi-object write, so until the
+      # manifest lands the prefix is an upload in progress and the box must
+      # refuse to deploy from it.
+      # On a tag, the release version goes INTO the jar manifest before it is
+      # published. The pom is deliberately not bumped (the tag is the version,
+      # per docs/RELEASING.md), which would otherwise leave the jar unable to say
+      # which release it belongs to. Stamped here rather than guessed later.
+      - name: Stamp the release version into the jar
+        if: steps.dest.outputs.release == 'true'
+        env:
+          TAG: ${{ steps.dest.outputs.tag }}
+          BUILT_AT: ${{ steps.dest.outputs.builtAt }}
+        run: |
+          set -euo pipefail
+          JAR=match-cluster/target/${ARTIFACT}.jar
+          printf 'Implementation-Version: %s\n' "$TAG" > version.mf
+          jar ufm "$JAR" version.mf
+
+          # Both entries are re-checked AFTER the merge, not just the new one.
+          # jar ufm rewrites the manifest, and a stamp that silently dropped
+          # Build-Sha would leave a released jar that cannot be traced back to
+          # the commit that built it, which is the one thing a bundle needs from
+          # it. Verify what you changed, and what you changed it around.
+          MF=$(unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r')
+          echo "$MF" | grep -E '^(Implementation-Version|Build-Sha):'
+          echo "$MF" | grep -q "^Implementation-Version: ${TAG}$" || {
+            echo "::error::the release version did not land in the jar manifest"
+            exit 1
+          }
+          echo "$MF" | grep -q "^Build-Sha: $(git rev-parse --short HEAD)$" || {
+            echo "::error::stamping the version dropped Build-Sha from the jar manifest"
+            exit 1
+          }
+
+      - name: Publish
+        env:
+          DEST: ${{ steps.dest.outputs.prefix }}
+          TAG: ${{ steps.dest.outputs.tag }}
+        run: |
+          set -euo pipefail
+          JAR=match-cluster/target/${ARTIFACT}.jar
+          PREFIX="s3://${BUCKET}/${DEST}"
+          SUM=$(sha256sum "$JAR" | cut -d' ' -f1)
+          BYTES=$(stat -c%s "$JAR")
+
+          aws s3 cp "$JAR" "${PREFIX}/${ARTIFACT}.jar" \
+            --checksum-algorithm SHA256 --no-progress
+
+          # The tag field is what makes a release prefix self-describing. The box
+          # refuses a release prefix whose manifest carries no tag, which is how
+          # a per-commit build copied into releases/ gets caught rather than
+          # deployed.
+          cat > manifest.json <<JSON
+          {
+            "repo": "${ARTIFACT}",
+            "sha": "${GITHUB_SHA}",
+            "shortSha": "$(git rev-parse --short HEAD)",
+            "ref": "${GITHUB_REF}",
+            "tag": "${TAG}",
+            "builtAt": "${BUILT_AT}",
+            "runId": "${GITHUB_RUN_ID}",
+            "artifacts": [
+              {"name": "${ARTIFACT}.jar", "sha256": "${SUM}", "bytes": ${BYTES}}
+            ]
+          }
+          JSON
+          aws s3 cp manifest.json "${PREFIX}/manifest.json" --no-progress
+
+      # A publish step that cannot tell "uploaded" from "did nothing" is a step
+      # that says yes. cluster-kit's first publish reported success having
+      # uploaded nothing, and only the consumers' builds noticed.
+      - name: Verify the upload landed
+        env:
+          DEST: ${{ steps.dest.outputs.prefix }}
+        run: |
+          set -euo pipefail
+          JAR=match-cluster/target/${ARTIFACT}.jar
+          aws s3 cp "s3://${BUCKET}/${DEST}/${ARTIFACT}.jar" ./roundtrip --no-progress
+          diff <(sha256sum < "$JAR") <(sha256sum < ./roundtrip)
+
+      # Branch pushes only. The pointer moves after the payload is verified
+      # readable, so "latest" can never name a prefix that is not fully there.
+      #
+      # Releases deliberately have NO pointer: the newest release is computed by
+      # listing the prefixes. A pointer would be moved by whichever run finished
+      # last, and two tags' runs can finish out of order, which would leave the
+      # release channel installing an older version than it had.
+      - name: Move the latest pointer
+        if: steps.dest.outputs.release == 'false'
+        env:
+          BUILT_AT: ${{ steps.dest.outputs.builtAt }}
+        run: |
+          set -euo pipefail
+
+          # Compare before writing. Serialising publishes makes them ordered in
+          # the common case, but a displaced pending run or a retried old one can
+          # still arrive late, and a pointer that went backwards would hand the
+          # box an older build than it already had. ISO-8601 UTC sorts
+          # lexicographically, so the string comparison IS a time comparison.
+          CURRENT=$(aws s3 cp "s3://${BUCKET}/${ARTIFACT}/latest" - 2>/dev/null || true)
+          if [ -n "$CURRENT" ] && [ "$CURRENT" != "${GITHUB_SHA}" ]; then
+            CURRENT_AT=$(aws s3 cp "s3://${BUCKET}/${ARTIFACT}/${CURRENT}/manifest.json" - \
+              2>/dev/null | jq -r '.builtAt // ""' || true)
+            if [ -n "$CURRENT_AT" ] && [ "$CURRENT_AT" \> "$BUILT_AT" ]; then
+              echo "latest already names ${CURRENT} built at ${CURRENT_AT}, which is newer than"
+              echo "this build (${BUILT_AT}); leaving the pointer alone."
+              exit 0
+            fi
+          fi
+
+          printf '%s' "${GITHUB_SHA}" > latest
+          aws s3 cp latest "s3://${BUCKET}/${ARTIFACT}/latest" \
+            --content-type text/plain --no-progress
+
+      - name: Say what was published
+        env:
+          DEST: ${{ steps.dest.outputs.prefix }}
+        run: echo "published s3://${BUCKET}/${DEST}"
