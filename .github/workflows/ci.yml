@@ -127,7 +127,12 @@ jobs:
       - name: Package
         run: |
           set -euo pipefail
-          mvn -B -s .mvn-settings.xml clean package -DskipTests \
+          # Only the module this job publishes, and its in-reactor dependencies.
+          # A full reactor build pulls in modules that need artifacts the publish
+          # job has no reason to fetch (assets-bridge wants com.match:match-common,
+          # which the build job installs from a second checkout), and building them
+          # to throw them away is work either way.
+          mvn -B -s .mvn-settings.xml clean package -pl match-cluster -am -DskipTests \
             -DbuildSha=$(git rev-parse --short HEAD)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -185,7 +190,6 @@ jobs:
         if: steps.dest.outputs.release == 'true'
         env:
           TAG: ${{ steps.dest.outputs.tag }}
-          BUILT_AT: ${{ steps.dest.outputs.builtAt }}
         run: |
           set -euo pipefail
           JAR=match-cluster/target/${ARTIFACT}.jar
@@ -212,6 +216,7 @@ jobs:
         env:
           DEST: ${{ steps.dest.outputs.prefix }}
           TAG: ${{ steps.dest.outputs.tag }}
+          BUILT_AT: ${{ steps.dest.outputs.builtAt }}
         run: |
           set -euo pipefail
           JAR=match-cluster/target/${ARTIFACT}.jar
