@@ -32,6 +32,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
+        <cluster-kit.version>0.1.0</cluster-kit.version>
         <aeron.version>1.52.2</aeron.version>
         <agrona.version>2.5.0</agrona.version>
         <sbe.version>1.39.0</sbe.version>
@@ -64,6 +65,13 @@
             </dependency>
 
             <!-- Aeron -->
+            <!-- The cluster machinery both engines run on. One copy, so a fix
+                 lands in both places or neither; see openexch/cluster-kit. -->
+            <dependency>
+                <groupId>com.openexchange</groupId>
+                <artifactId>cluster-kit</artifactId>
+                <version>${cluster-kit.version}</version>
+            </dependency>
             <dependency>
                 <groupId>io.aeron</groupId>
                 <artifactId>aeron-all</artifactId>

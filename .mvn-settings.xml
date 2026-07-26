@@ -1,0 +1,26 @@
+<!-- CI-only Maven settings: resolve com.openexchange:cluster-kit from GitHub
+     Packages using the workflow token. Local development does not need this
+     file - `mvn install` in the cluster-kit checkout puts the artifact in
+     ~/.m2 where this build finds it first. -->
+<settings>
+  <servers>
+    <server>
+      <id>github</id>
+      <username>${env.GITHUB_ACTOR}</username>
+      <password>${env.GITHUB_TOKEN}</password>
+    </server>
+  </servers>
+  <profiles>
+    <profile>
+      <id>github</id>
+      <repositories>
+        <repository>
+          <id>github</id>
+          <url>https://maven.pkg.github.com/openexch/cluster-kit</url>
+          <snapshots><enabled>true</enabled></snapshots>
+        </repository>
+      </repositories>
+    </profile>
+  </profiles>
+  <activeProfiles><activeProfile>github</activeProfile></activeProfiles>
+</settings>
