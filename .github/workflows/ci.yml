@@ -12,6 +12,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     # Market-data persistence integration tests (TimescaleIntegrationTest) run
     # against this service; without MARKET_PG_TEST_URL they self-skip (Assume).
     services:
@@ -41,7 +44,9 @@ jobs:
           cache: maven
 
       - name: Build and test
-        run: mvn -B clean verify
+        run: mvn -B -s .mvn-settings.xml clean verify
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Dependency CVEs + committed secrets (match#32 / P1.5). Trivy covers both on a
   # private repo without GitHub Advanced Security; triaged findings go in .trivyignore.

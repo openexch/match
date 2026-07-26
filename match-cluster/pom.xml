@@ -28,6 +28,13 @@
             <artifactId>match-common</artifactId>
         </dependency>
 
+        <!-- Shared with the assets engine: snapshot bundles, staging archive,
+             watermark-bounded housekeeping. -->
+        <dependency>
+            <groupId>com.openexchange</groupId>
+            <artifactId>cluster-kit</artifactId>
+        </dependency>
+
         <!-- Aeron (full for cluster node functionality) -->
         <dependency>
             <groupId>io.aeron</groupId>
