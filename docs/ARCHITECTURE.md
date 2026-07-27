@@ -118,7 +118,6 @@ version is unsupported.
 | Go (admin-gateway) | 1.23 |
 | Node (trading-ui) | 22 (React 19, Vite 8) |
 | PostgreSQL | 14+ (tested against 16) |
-| Redis | 7 |
 | OS | Linux with writable `/dev/shm`; `net.core.rmem_max`/`wmem_max` raised to 16 MB for cluster replay channels |
 
 ## Disclaimer

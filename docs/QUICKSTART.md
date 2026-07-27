@@ -12,7 +12,6 @@ leader mid-load), so these steps are exercised continuously.
 - Java 21, Maven 3.9+
 - Go 1.23+
 - PostgreSQL 14+ running locally, with the `psql` client
-- Redis 7 (optional: the OMS falls back to in-memory without it)
 - Node 22 (only for the trading UI)
 
 ## The one-block version
