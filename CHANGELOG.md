@@ -6,6 +6,53 @@ are documented here. The stack (`match`, `oms`, `admin-gateway`,
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0-beta] - 2026-07-27
+
+The durability release: cluster state stops living only on the box it was
+produced on. Snapshots are taken by log volume and made durable automatically,
+the log behind them is captured as a bundle, and the archive is reclaimed
+instead of growing forever. Alongside that, the engine jar is published and
+addressed by commit sha, so the build that produced a bundle can be named.
+
+### Added
+- Bundles for the matching engine: a snapshot plus the log behind it, captured
+  as one durable unit, with a retention watermark (#162).
+- The load generator measures the **committed round trip** — CreateOrder
+  offered to first status back, replicated and applied — alongside ingress
+  publication, which never leaves the machine. The two are labelled and
+  reported separately and differ by roughly 880x; quoting one as the other is
+  the trap this closes (#161). Both distributions now ship raw hgrm files, and
+  an unmatched round trip is reported as absent rather than zero (#173).
+- `SETTLEMENT_JOURNAL_ARCHIVE_BIND` so an off-host bridge can replay the
+  journal archive (#157).
+- Configurable media-driver threading and a sleep idle strategy, for hosts
+  that cannot afford four busy-spinning threads (#156).
+- The engine jar is published to the artifact store, addressed by commit sha
+  and by release tag, with its `Build-Sha` in the manifest (#165). The load
+  generator is published with it, so a benchmark can be re-run from the
+  artifacts it was measured on rather than rebuilt (#173).
+
+### Changed
+- The cluster machinery is consumed from `cluster-kit` rather than kept as a
+  second copy in this repo, so a fix lands in both engines or neither
+  (#163, #164, #165).
+- The market-data edge feed is pinned to `me` (#155).
+- `--duration` includes `--warmup`; the help text says so now (#154).
+
+### Fixed
+- **Order lifecycle latency 16.4 ms → 757 µs.** The OMS egress streams were
+  riding the market-data conflation timer, which exists to conflate a price
+  feed and had no business batching per-order facts. They are flushed on the
+  Disruptor's `endOfBatch` instead: opportunistic batching, no wall clock
+  (#159).
+- Shaded jars carry `Add-Opens`, so a bare `java -jar` works instead of dying
+  with `IllegalAccessError` (#153, closes #152).
+- The load generator's egress endpoint detection no longer assumes the
+  interface is named `eth0`; on a host where it is `ens5` the client silently
+  advertised loopback and the cluster's reply went to the wrong machine (#151).
+- The publish job built the wrong modules and referenced an undefined
+  timestamp (#166).
+
 ## [0.4.0-beta] - 2026-07-22
 
 The money release: a replayable settlement journal, totally-ordered egress
