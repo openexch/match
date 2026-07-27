@@ -2,14 +2,17 @@
 
 Measured on the live dev cluster running the external media driver transport
 (kernel-bypass-ready architecture, kernel UDP path since no bypass NIC is present).
-Source data for the public performance page. Raw interval logs and parsed JSON live in
-`docs/perf/data/2026-07-02/`.
+Source data for the public performance page.
+
+The run transcripts and parsed ladders are **not kept in this repository**. Publishing a
+result means putting it on the performance page, not committing a console dump; what belongs
+here is the method and the scripts, so anyone can produce their own runs rather than take
+ours on faith. Reproduction steps are at the bottom of this file.
 
 ## Headline numbers (single desktop CPU, full Raft consensus)
 
-Final runs (`data/2026-07-02/ladder-final-3of3-verified.json`) with all 3 nodes
-verified live and committing during each run (pre/mid/post commit positions in
-`raw-final/run-transcript-with-node-commits.txt`):
+Final runs with all 3 nodes verified live and committing during each run (commit
+positions were captured pre, mid and post run):
 
 | Configuration | Sustained rate | Success | Ingress p50 | Ingress p99 | Max |
 |---|---|---|---|---|---|
@@ -68,7 +71,7 @@ node logs and commit positions).
   steady state (p99 0.3 µs) and Max drops to 99 µs (37x). JIT compilation and
   first-touch dominate early-tail and Max outliers, so: use >= 30 s warmup, report
   steady-state windows only, and re-warm after any node restart (the rung tables in
-  data/ show first-interval p99 spikes, e.g. 14.6 ms at 600k, from exactly this).
+  the run transcripts show first-interval p99 spikes, e.g. 14.6 ms at 600k, from exactly this).
   The persistent ~3 ms p99 in the dev-profile ladder was NOT warmup: it was constant
   for 45 s at every rate and disappeared with 1 generator thread instead of 4
   (scheduler contention on the generator's 4 E-cores).
@@ -158,4 +161,4 @@ curl -X POST localhost:8082/api/admin/snapshot   # housekeeping runs automatical
 5. RESOLVED: the earlier tuned ladder ran on a 2-of-3 quorum (node2 wedged, see the
    incident report). The headline table above is from the final re-runs with all 3
    nodes verified committing throughout; the exploratory 2-of-3 data is retained in
-   `ladder-prod-profile-os-tuned.json` and matched the final numbers.
+   the OS-tuned prod-profile ladder and matched the final numbers.

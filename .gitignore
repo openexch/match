@@ -47,3 +47,9 @@ tools/durability/__pycache__/
 # JVM compiler/crash replay dumps — build garbage, never source
 replay_pid*.log
 hs_err_pid*.log
+
+# Benchmark output. Results are published on the performance page, not committed here:
+# a console dump is not a publication, and the method plus the scripts are what let
+# someone produce their own numbers instead of taking ours on faith.
+docs/perf/data/
+*.hgrm
