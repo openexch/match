@@ -70,7 +70,11 @@ Secrets support a `*_FILE` variant that reads the value from a file.
 | `OMS_POSTGRES_URL` | `jdbc:postgresql://localhost:5432/oms` | Ledger database |
 | `OMS_POSTGRES_USER` | `oms` | Database user |
 | `OMS_POSTGRES_PASSWORD` / `_FILE` | none | **No default.** Without valid credentials the OMS runs in-memory only (no durable ledger). Apply `V001__init_schema.sql` manually; there is no auto-migration |
-| `OMS_REDIS_HOST` / `OMS_REDIS_PORT` | `localhost` / `6379` | Balance cache (falls back to in-memory if unreachable) |
+| `AE_CLUSTER_ADDRESSES` | `127.0.0.1` | Assets Engine nodes. The AE is the **only** balance store: no config, no alternative, and the OMS refuses to start without a healthy one |
+| `AE_CLUSTER_PORT_BASE` | `9300` | AE cluster port base |
+| `AE_EGRESS_HOST` / `AE_EGRESS_PORT` | `127.0.0.1` / `9393` | Where the AE sends replies. Across hosts this must be the OMS's own routable address; the loopback default is correct only when everything shares one |
+| `OMS_AE_HOLD_TIMEOUT_MS` | `250` | Per-hold round-trip budget before the order is rejected |
+| `OMS_AE_CONNECT_TIMEOUT_MS` | `30000` | Boot gate: how long to wait for the AE balance projection before FATAL |
 | `OMS_CORS_ORIGINS` | empty (none) | CORS allowlist for the REST edge |
 | `OMS_AUDIT_LOG` | `oms-audit.log` | Audit log path (`off` disables) |
 | `OMS_CLUSTER_INGRESS` | `localhost:9000` | Cluster ingress endpoint |
