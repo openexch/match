@@ -188,6 +188,7 @@ public class MetricsCollector {
         System.out.printf("  p99.9:               %,10.2f μs%n", stats.p999 / 1000.0);
         System.out.printf("  p99.99:              %,10.2f μs%n", stats.p9999 / 1000.0);
         System.out.printf("  Max:                 %,10.2f μs%n", stats.max / 1000.0);
+        System.out.printf("  Avg:                 %,10.2f μs%n", stats.avg / 1000.0);
 
         final LatencyStats ack = ackLatency.getStats();
         final long acks = acksReceived.sum();
@@ -202,22 +203,51 @@ public class MetricsCollector {
             System.out.printf("  p95:                 %,10.2f μs%n", ack.p95 / 1000.0);
             System.out.printf("  p99:                 %,10.2f μs%n", ack.p99 / 1000.0);
             System.out.printf("  p99.9:               %,10.2f μs%n", ack.p999 / 1000.0);
+            System.out.printf("  p99.99:              %,10.2f μs%n", ack.p9999 / 1000.0);
             System.out.printf("  Max:                 %,10.2f μs%n", ack.max / 1000.0);
+            System.out.printf("  Avg:                 %,10.2f μs%n", ack.avg / 1000.0);
         } else {
-            System.out.println("Committed round trip: NO ACKS MATCHED — the round-trip number is absent,");
-            System.out.println("  not zero. Do not quote the ingress figure above in its place.");
+            System.out.println("Latency Distribution (μs) — COMMITTED ROUND TRIP:");
+            System.out.println("  NO ACKS MATCHED — the round-trip number is absent, not zero.");
+            System.out.println("  Do not quote the ingress figure above in its place.");
         }
-        System.out.printf("  Avg:                 %,10.2f μs%n", stats.avg / 1000.0);
 
-        // Raw distribution for the published data set: -Dloadtest.hgrm=<path>
-        final String hgrm = System.getProperty("loadtest.hgrm");
-        if (hgrm != null && !hgrm.isBlank()) {
-            try (java.io.PrintStream ps = new java.io.PrintStream(hgrm)) {
-                latencyTracker.writeHgrm(ps);
-                System.out.println("  (hgrm written: " + hgrm + ")");
-            } catch (Exception e) {
-                System.out.println("  WARN: could not write hgrm " + hgrm + ": " + e);
-            }
+        writeHgrmFiles(acks > 0);
+    }
+
+    /**
+     * Raw distributions for the published data set: -Dloadtest.hgrm=&lt;path&gt;.
+     *
+     * Both metrics get their own file. Writing only the ingress histogram (as this did until
+     * 2026-07-27) left the headline number — the committed round trip — with no raw data, which
+     * the benchmark methodology requires shipping alongside every published percentile. A trailing
+     * ".hgrm" in the property is stripped so the two files sit next to each other:
+     *   -Dloadtest.hgrm=/tmp/run7.hgrm -> /tmp/run7-ingress.hgrm + /tmp/run7-committed.hgrm
+     *
+     * When no ack matched, the committed file is NOT written. An empty histogram on disk reads as
+     * "measured, and it was zero"; a missing file reads as what it is.
+     */
+    private void writeHgrmFiles(final boolean haveAcks) {
+        final String prop = System.getProperty("loadtest.hgrm");
+        if (prop == null || prop.isBlank()) {
+            return;
+        }
+        final String base = prop.endsWith(".hgrm") ? prop.substring(0, prop.length() - ".hgrm".length()) : prop;
+
+        writeHgrm(base + "-ingress.hgrm", latencyTracker);
+        if (haveAcks) {
+            writeHgrm(base + "-committed.hgrm", ackLatency);
+        } else {
+            System.out.println("  (committed hgrm NOT written: no acks matched)");
+        }
+    }
+
+    private static void writeHgrm(final String path, final LatencyTracker tracker) {
+        try (java.io.PrintStream ps = new java.io.PrintStream(path)) {
+            tracker.writeHgrm(ps);
+            System.out.println("  (hgrm written: " + path + ")");
+        } catch (Exception e) {
+            System.out.println("  WARN: could not write hgrm " + path + ": " + e);
         }
     }
 

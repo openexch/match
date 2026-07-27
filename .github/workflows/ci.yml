@@ -108,7 +108,15 @@ jobs:
       id-token: write # OIDC: no long-lived AWS keys in this repo
     env:
       BUCKET: openexch-build-artifacts-675715936685
+      # The prefix builds are addressed by. The box asks for a named file inside it,
+      # so more files under the same prefix is additive: nothing that reads it today
+      # has to change.
       ARTIFACT: match-cluster
+      # Published under that prefix, as <name>/target/<name>.jar. The engine jar is
+      # what the box deploys; the load generator rides along because a published
+      # benchmark has to be re-runnable from the artifacts it was measured on, and a
+      # harness rebuilt from source months later is a different harness.
+      JARS: match-cluster match-loadtest
     steps:
       - uses: actions/checkout@v7
 
@@ -132,21 +140,24 @@ jobs:
           # job has no reason to fetch (assets-bridge wants com.match:match-common,
           # which the build job installs from a second checkout), and building them
           # to throw them away is work either way.
-          mvn -B -s .mvn-settings.xml clean package -pl match-cluster -am -DskipTests \
+          mvn -B -s .mvn-settings.xml clean package -pl "${JARS// /,}" -am -DskipTests \
             -DbuildSha=$(git rev-parse --short HEAD)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify the jar carries its sha
+      - name: Verify every jar carries its sha
         run: |
           set -euo pipefail
-          JAR=match-cluster/target/${ARTIFACT}.jar
-          unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep '^Build-Sha:'
-          unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' \
-            | grep -q "^Build-Sha: $(git rev-parse --short HEAD)$" || {
-            echo "::error::the jar's Build-Sha does not match this commit"
-            exit 1
-          }
+          for m in ${JARS}; do
+            JAR=$m/target/$m.jar
+            [ -f "$JAR" ] || { echo "::error::${JARS} lists $m but $JAR was not built"; exit 1; }
+            unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep "^Build-Sha:" | sed "s/^/$m /"
+            unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' \
+              | grep -q "^Build-Sha: $(git rev-parse --short HEAD)$" || {
+              echo "::error::$m's Build-Sha does not match this commit"
+              exit 1
+            }
+          done
 
       # Where this build belongs. A branch push is addressed by commit sha and is
       # fetchable but not deployable in production; a tag push is addressed by
@@ -192,25 +203,27 @@ jobs:
           TAG: ${{ steps.dest.outputs.tag }}
         run: |
           set -euo pipefail
-          JAR=match-cluster/target/${ARTIFACT}.jar
           printf 'Implementation-Version: %s\n' "$TAG" > version.mf
-          jar ufm "$JAR" version.mf
+          for m in ${JARS}; do
+            JAR=$m/target/$m.jar
+            jar ufm "$JAR" version.mf
 
-          # Both entries are re-checked AFTER the merge, not just the new one.
-          # jar ufm rewrites the manifest, and a stamp that silently dropped
-          # Build-Sha would leave a released jar that cannot be traced back to
-          # the commit that built it, which is the one thing a bundle needs from
-          # it. Verify what you changed, and what you changed it around.
-          MF=$(unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r')
-          echo "$MF" | grep -E '^(Implementation-Version|Build-Sha):'
-          echo "$MF" | grep -q "^Implementation-Version: ${TAG}$" || {
-            echo "::error::the release version did not land in the jar manifest"
-            exit 1
-          }
-          echo "$MF" | grep -q "^Build-Sha: $(git rev-parse --short HEAD)$" || {
-            echo "::error::stamping the version dropped Build-Sha from the jar manifest"
-            exit 1
-          }
+            # Both entries are re-checked AFTER the merge, not just the new one.
+            # jar ufm rewrites the manifest, and a stamp that silently dropped
+            # Build-Sha would leave a released jar that cannot be traced back to
+            # the commit that built it, which is the one thing a bundle needs from
+            # it. Verify what you changed, and what you changed it around.
+            MF=$(unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r')
+            echo "$MF" | grep -E '^(Implementation-Version|Build-Sha):' | sed "s/^/$m /"
+            echo "$MF" | grep -q "^Implementation-Version: ${TAG}$" || {
+              echo "::error::the release version did not land in $m's manifest"
+              exit 1
+            }
+            echo "$MF" | grep -q "^Build-Sha: $(git rev-parse --short HEAD)$" || {
+              echo "::error::stamping the version dropped Build-Sha from $m's manifest"
+              exit 1
+            }
+          done
 
       - name: Publish
         env:
@@ -219,13 +232,19 @@ jobs:
           BUILT_AT: ${{ steps.dest.outputs.builtAt }}
         run: |
           set -euo pipefail
-          JAR=match-cluster/target/${ARTIFACT}.jar
           PREFIX="s3://${BUCKET}/${DEST}"
-          SUM=$(sha256sum "$JAR" | cut -d' ' -f1)
-          BYTES=$(stat -c%s "$JAR")
 
-          aws s3 cp "$JAR" "${PREFIX}/${ARTIFACT}.jar" \
-            --checksum-algorithm SHA256 --no-progress
+          # Every payload first, manifest last: the manifest is the commit marker,
+          # so it may not name a file that is not up yet.
+          ENTRIES=""
+          for m in ${JARS}; do
+            JAR=$m/target/$m.jar
+            SUM=$(sha256sum "$JAR" | cut -d' ' -f1)
+            BYTES=$(stat -c%s "$JAR")
+            aws s3 cp "$JAR" "${PREFIX}/${m}.jar" \
+              --checksum-algorithm SHA256 --no-progress
+            ENTRIES="${ENTRIES}${ENTRIES:+,}{\"name\": \"${m}.jar\", \"sha256\": \"${SUM}\", \"bytes\": ${BYTES}}"
+          done
 
           # The tag field is what makes a release prefix self-describing. The box
           # refuses a release prefix whose manifest carries no tag, which is how
@@ -240,24 +259,29 @@ jobs:
             "tag": "${TAG}",
             "builtAt": "${BUILT_AT}",
             "runId": "${GITHUB_RUN_ID}",
-            "artifacts": [
-              {"name": "${ARTIFACT}.jar", "sha256": "${SUM}", "bytes": ${BYTES}}
-            ]
+            "artifacts": [${ENTRIES}]
           }
           JSON
+          python3 -c 'import json,sys; json.load(open("manifest.json"))' || {
+            echo "::error::the manifest this job just wrote is not valid JSON"
+            exit 1
+          }
           aws s3 cp manifest.json "${PREFIX}/manifest.json" --no-progress
 
       # A publish step that cannot tell "uploaded" from "did nothing" is a step
       # that says yes. cluster-kit's first publish reported success having
       # uploaded nothing, and only the consumers' builds noticed.
-      - name: Verify the upload landed
+      - name: Verify the uploads landed
         env:
           DEST: ${{ steps.dest.outputs.prefix }}
         run: |
           set -euo pipefail
-          JAR=match-cluster/target/${ARTIFACT}.jar
-          aws s3 cp "s3://${BUCKET}/${DEST}/${ARTIFACT}.jar" ./roundtrip --no-progress
-          diff <(sha256sum < "$JAR") <(sha256sum < ./roundtrip)
+          for m in ${JARS}; do
+            aws s3 cp "s3://${BUCKET}/${DEST}/${m}.jar" ./roundtrip --no-progress
+            diff <(sha256sum < "$m/target/$m.jar") <(sha256sum < ./roundtrip) \
+              || { echo "::error::$m did not round-trip"; exit 1; }
+            echo "$m round-tripped"
+          done
 
       # Branch pushes only. The pointer moves after the payload is verified
       # readable, so "latest" can never name a prefix that is not fully there.

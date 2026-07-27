@@ -13,6 +13,9 @@
     <artifactId>match-loadtest</artifactId>
     <properties>
         <argLine></argLine>
+        <!-- Overridden by the build with the short git sha. See the shade plugin's
+             Build-Sha manifest entry for why this is never guessed. -->
+        <buildSha>unknown</buildSha>
     </properties>
     <packaging>jar</packaging>
     <name>Match Load Test</name>
@@ -65,6 +68,13 @@
                                     <mainClass>com.match.loadtest.LoadGenerator</mainClass>
                                     <manifestEntries>
                                         <Add-Opens>java.base/jdk.internal.misc java.base/sun.nio.ch java.base/java.nio</Add-Opens>
+                                        <!-- Stamped for the same reason the engine jar is: a
+                                             published benchmark has to name the harness that
+                                             produced its numbers, not only the engine under
+                                             test. The default is the literal "unknown" rather
+                                             than a guess, so a result set without provenance
+                                             says so instead of implying it. -->
+                                        <Build-Sha>${buildSha}</Build-Sha>
                                     </manifestEntries>
                                 </transformer>
                             </transformers>
