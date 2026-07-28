@@ -10,7 +10,7 @@ Exchange running?".
 |---|---|---|
 | `openexch/match` | `match/` | matching engine cluster (anchor repo) |
 | `openexch/oms` | `order-management/` | order management service (dir ≠ repo; use `oms` for `gh`) |
-| `openexch/admin-gateway` | `admin-gateway/` | Go process manager / ops API |
+| `openexch/admin` | `admin/` | Go process manager / ops API |
 | `openexch/trading-ui` | `trading-ui/` | trading web UI (Cloudflare Pages, deploys from `main`) |
 | `openexch/assets` | `assets/` | Assets Engine — deterministic money ledger (joined the train at v0.4.0-beta) |
 

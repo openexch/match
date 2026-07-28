@@ -1,4 +1,4 @@
-Repo: openexch/admin-gateway
+Repo: openexch/admin
 Title: Ops blind spots: status API serves stale CnC counters for dead/wedged nodes; adopted processes lose crash monitoring
 
 Two observability gaps that compounded the 2026-07-02 stranded-follower incident (match repo, docs/incidents/2026-07-02-follower-stranded-by-housekeeping.md):
