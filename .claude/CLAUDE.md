@@ -169,7 +169,7 @@ curl -X POST http://localhost:8082/api/admin/stop-all-nodes                   # 
 | Incident reports | `docs/incidents/` |
 | Hot-path allocation audit | `docs/hot-path-allocations.md` |
 | SBE Schema | `match-common/src/main/resources/sbe/order-schema.xml` |
-| Admin Gateway | `admin-gateway/` (Go service) |
+| Admin Gateway | `admin/` (Go service) |
 
 ## Build Commands
 
@@ -237,7 +237,7 @@ Logs at: `~/.local/log/cluster/`
 ## Order Flow
 
 ```
-1. HTTP POST/PUT/DELETE /api/v1/orders → OMS (8080, separate repo: order-management)
+1. HTTP POST/PUT/DELETE /api/v1/orders → OMS (8080, separate repo: oms)
 2. → Risk checks → Balance holds → ClusterClient.submitOrder()
 3. → SBE CreateOrder/CancelOrder/UpdateOrder → Cluster ingress
 4. → AppClusteredService.onSessionMessage()

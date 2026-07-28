@@ -17,10 +17,9 @@ leader mid-load), so these steps are exercised continuously.
 ## The one-block version
 
 Everything below is copy-pasteable as a single block. The five repos
-**must be cloned as siblings with these exact directory names** (the admin
-gateway locates its peers by layout; override with `MATCH_PROJECT_DIR` /
-`OMS_PROJECT_DIR` if you deviate). Note that the `oms` repo is cloned into
-a directory named `order-management`.
+**must be cloned as siblings, keeping their default directory names** (the
+admin gateway locates its peers by layout; override with `MATCH_PROJECT_DIR`,
+`OMS_PROJECT_DIR` or `ASSETS_PROJECT_DIR` if you deviate).
 
 ```bash
 set -euo pipefail
@@ -31,9 +30,9 @@ sudo sysctl -w net.core.rmem_max=16777216 net.core.wmem_max=16777216
 # 1. Clone the stack (siblings, exact names).
 mkdir -p openexchange && cd openexchange
 git clone https://github.com/openexch/match.git
-git clone https://github.com/openexch/oms.git order-management
+git clone https://github.com/openexch/oms.git
 git clone https://github.com/openexch/assets.git
-git clone https://github.com/openexch/admin-gateway.git
+git clone https://github.com/openexch/admin.git
 git clone https://github.com/openexch/trading-ui.git
 
 # 2. Build. match and the assets modules are installed to the local Maven
@@ -41,19 +40,19 @@ git clone https://github.com/openexch/trading-ui.git
 #    Engine's assets-common/assets-cluster (none on Maven Central).
 (cd match && mvn -B clean install -DskipTests)
 (cd assets && mvn -B install -DskipTests -pl assets-common,assets-cluster -am)
-(cd order-management && mvn -B clean package -DskipTests \
+(cd oms && mvn -B clean package -DskipTests \
   && cp oms-app/target/oms-app-1.0-SNAPSHOT.jar oms-app/target/oms-app.jar)
-(cd admin-gateway && go build -o admin-gateway .)
+(cd admin && go build -o admin-gateway .)
 
 # 3. Database. The OMS does not auto-migrate; apply the schema once.
 sudo -u postgres psql -c "CREATE ROLE oms LOGIN PASSWORD 'oms-dev'" || true
 sudo -u postgres createdb -O oms oms || true
 PGPASSWORD=oms-dev psql -h localhost -U oms -d oms -v ON_ERROR_STOP=1 \
-  -f order-management/oms-persistence/src/main/resources/db/migration/V001__init_schema.sql
+  -f oms/oms-persistence/src/main/resources/db/migration/V001__init_schema.sql
 
 # 4. Start the stack under the admin gateway. Children inherit this
 #    environment; dev auth mode is for local evaluation only.
-cd admin-gateway
+cd admin
 export OMS_POSTGRES_PASSWORD=oms-dev
 export OMS_AUTH_MODE=dev
 nohup ./admin-gateway > admin.log 2>&1 &
@@ -103,7 +102,7 @@ The dev server proxies `/api/v1` to the OMS (8080), `/ws` to market data
 - **Ports in use**: the stack claims 8080 (OMS), 8081 (market WS), 8082
   (admin), 9000+ (cluster), 9090 (gRPC), 9091/9093 (egress), 9500+
   (metrics).
-- **Full E2E proof**: `order-management/e2e/failover_e2e.py` boots an
+- **Full E2E proof**: `oms/e2e/failover_e2e.py` boots an
   isolated cluster plus OMS, kills the leader mid-load, and asserts exact
   fills, balances, and ledger conservation. On a box that also runs another
-  stack, set `E2E_CPUSET` (see `order-management/e2e/README.md`).
+  stack, set `E2E_CPUSET` (see `oms/e2e/README.md`).

@@ -10,7 +10,7 @@ umbrella view.
 |---|---|---|
 | [match](https://github.com/openexch/match) | Matching engine cluster (this repo, the anchor): 3-node Aeron Cluster (Raft), deterministic matching core, market-data and order gateways | Java 21 |
 | [oms](https://github.com/openexch/oms) | Order management service: REST/gRPC edge, auth, risk checks, balances and holds, Postgres ledger, cluster client | Java 21 |
-| [admin-gateway](https://github.com/openexch/admin-gateway) | Process manager and operations API: supervises nodes, drivers, gateways, and the OMS; snapshots, backups, rolling updates | Go 1.23 |
+| [admin-gateway](https://github.com/openexch/admin) | Process manager and operations API: supervises nodes, drivers, gateways, and the OMS; snapshots, backups, rolling updates | Go 1.23 |
 | [trading-ui](https://github.com/openexch/trading-ui) | Trading and admin web interface | React 19 / Node 22 |
 
 ## Big picture

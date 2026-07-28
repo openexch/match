@@ -15,7 +15,7 @@ infrastructure released as one product across four repos:
 |---|---|
 | [match](https://github.com/openexch/match) | Matching engine cluster (this repo) |
 | [oms](https://github.com/openexch/oms) | Order management: REST/gRPC edge, auth, risk, balances, Postgres ledger |
-| [admin-gateway](https://github.com/openexch/admin-gateway) | Process manager and operations API |
+| [admin-gateway](https://github.com/openexch/admin) | Process manager and operations API |
 | [trading-ui](https://github.com/openexch/trading-ui) | Trading and admin web interface |
 
 Start here:
