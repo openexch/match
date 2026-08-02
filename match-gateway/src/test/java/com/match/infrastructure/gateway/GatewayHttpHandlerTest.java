@@ -233,6 +233,48 @@ public class GatewayHttpHandlerTest {
         channel.finish();
     }
 
+    /** Seed one aggregated trade into a market's tape. */
+    private void seedTrade(int marketId, String marketName, double price) {
+        JsonArray trades = new JsonArray();
+        JsonObject t = new JsonObject();
+        t.addProperty("price", price);
+        t.addProperty("quantity", 1.0);
+        t.addProperty("tradeCount", 1);
+        t.addProperty("side", "BUY");
+        t.addProperty("timestamp", 1_700_000_000_000L);
+        trades.add(t);
+        stateManager.getTrades().addBatch(marketId, marketName, trades);
+    }
+
+    @Test
+    public void testTradesFilteredByMarketId() {
+        seedTrade(1, "BTC-USD", 101000.0);
+        seedTrade(2, "ETH-USD", 3400.0);
+
+        EmbeddedChannel channel = createChannel();
+        FullHttpResponse response = sendRequest(channel, HttpMethod.GET, "/api/trades?marketId=2");
+        assertEquals(HttpResponseStatus.OK, response.status());
+        String body = getBody(response);
+        assertTrue("ETH trade should be present", body.contains("3400"));
+        assertFalse("BTC trade must not leak into a marketId=2 request", body.contains("101000"));
+        channel.finish();
+    }
+
+    @Test
+    public void testTradesDefaultsToAllMarkets() {
+        seedTrade(1, "BTC-USD", 101000.0);
+        seedTrade(2, "ETH-USD", 3400.0);
+
+        EmbeddedChannel channel = createChannel();
+        FullHttpResponse response = sendRequest(channel, HttpMethod.GET, "/api/trades");
+        assertEquals(HttpResponseStatus.OK, response.status());
+        String body = getBody(response);
+        // No marketId means the venue-wide tape — the pre-existing contract.
+        assertTrue(body.contains("101000"));
+        assertTrue(body.contains("3400"));
+        channel.finish();
+    }
+
     @Test
     public void testTradesWithInvalidLimit() {
         EmbeddedChannel channel = createChannel();
