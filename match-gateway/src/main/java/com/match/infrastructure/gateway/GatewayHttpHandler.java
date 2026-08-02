@@ -118,8 +118,12 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
     private void handleTrades(ChannelHandlerContext ctx, String uri) {
         int limit = parseQueryParam(uri, "limit", 50);
         limit = Math.min(limit, 500); // Cap at max buffer size
+        // The tape is venue-wide by default (marketId 0), unlike /api/orderbook and
+        // /api/candles which default to market 1. Callers asking for one market used
+        // to get every market's trades back, silently.
+        int marketId = parseQueryParam(uri, "marketId", 0);
 
-        stateManager.recentTradesJsonAsync(limit, 0)
+        stateManager.recentTradesJsonAsync(limit, marketId)
                 .whenComplete((json, err) -> {
                     if (err != null) {
                         sendError(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, err.getMessage());
