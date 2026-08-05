@@ -35,11 +35,15 @@ public class LoadGenerator {
     private final LoadConfig config;
     private final MetricsCollector metrics;
     /**
-     * correlationId -> nanoTime at which the order was offered. Written by the send path and read by
-     * the egress listener, both on this class's single duty thread, so no synchronization is needed
-     * and a primitive map keeps it allocation-free. MISSING_VALUE means "not ours or already matched"
-     * — a status for an unknown id is ignored rather than recorded, so a stray message cannot invent
-     * a latency sample.
+     * correlationId -> the order's SCHEDULED send slot on the fixed-rate timeline. Written by the
+     * send path and read by the egress listener, both on this class's single duty thread, so no
+     * synchronization is needed and a primitive map keeps it allocation-free. MISSING_VALUE means
+     * "not ours or already matched" — a status for an unknown id is ignored rather than recorded,
+     * so a stray message cannot invent a latency sample.
+     *
+     * <p>The slot, not the offer instant: see {@link OrderRequest#scheduledNs}. Storing the offer
+     * instant subtracts out any time the order spent waiting for a busy generator or a full queue,
+     * which is exactly the delay a saturated engine causes.</p>
      */
     private final Long2LongHashMap inFlight = new Long2LongHashMap(Long.MIN_VALUE);
     private final boolean ultraLowLatency;
@@ -49,6 +53,12 @@ public class LoadGenerator {
     private final ExecutorService executorService;
     private final List<OrderPublisher> publishers;
     private final AtomicBoolean running = new AtomicBoolean(false);
+    /**
+     * False while the JIT warmup is running, true for the measured window. The producers watch it to
+     * rebase their fixed-rate schedule exactly once, so warmup-era debt is not charged to the
+     * measurement. Flipped by the duty thread, together with {@link MetricsCollector#reset()}.
+     */
+    private final AtomicBoolean measuring = new AtomicBoolean(false);
     private final AtomicLong messagesSent = new AtomicLong(0);
     private final ScheduledExecutorService metricsReporter;
 
@@ -161,6 +171,7 @@ public class LoadGenerator {
                 metrics,
                 messagesSent,
                 running,
+                measuring,
                 !useUI  // Only print worker messages if not using UI
             );
             publishers.add(publisher);
@@ -302,7 +313,20 @@ public class LoadGenerator {
             System.out.println("→ Warmup complete, starting measurement...");
             metrics.reset();  // Reset metrics after warmup
             messagesSent.set(0);
+            // Nothing from the warmup may be matched against the measured window's histograms.
+            // The warmup loop never populates the map, so this is belt and braces — and it stays,
+            // because the listener's "an unknown id is ignored" guarantee is only as good as the
+            // map being empty here.
+            inFlight.clear();
         }
+        // Everything scheduled before this instant belongs to the warmup, whenever it is finally
+        // drained. Captured before the flip so no producer can rebase ahead of it. With no warmup
+        // there is nothing to carry over, and a boundary here would race the producers' own start:
+        // this thread is started first, so an early slot could fall the wrong side of it.
+        final long measurementStartNs = warmupSeconds > 0 ? System.nanoTime() : Long.MIN_VALUE;
+        // Producers rebase their schedule on this edge (or start already measuring when warmup is 0).
+        measuring.set(true);
+        long carriedOver = 0;
 
         while (running.get() && !cluster.isClosed()) {
             int workCount = 0;
@@ -316,12 +340,20 @@ public class LoadGenerator {
             while (drainCount < maxDrainPerCycle && (order = orderQueue.poll()) != null) {
                 boolean success = sendOrder(order, buffer, headerEncoder, createOrderEncoder);
                 if (success) {
-                    final long sentNs = System.nanoTime();
-                    long latency = sentNs - order.enqueueTimeNs;
-                    metrics.recordSuccess(latency);
-                    // Same thread polls egress, so a plain primitive map is enough.
-                    inFlight.put(order.correlationId, sentNs);
                     messagesSent.incrementAndGet();
+                    if (order.scheduledNs < measurementStartNs) {
+                        // A warmup-slot order still in the queue when the window opened. The engine
+                        // does process it, so it counts toward throughput, but its latency is warmup
+                        // debt: measured from its slot it would land in the tail as a millisecond
+                        // outlier that no measured-window request ever experienced.
+                        carriedOver++;
+                    } else {
+                        metrics.recordSuccess(System.nanoTime() - order.enqueueTimeNs);
+                        // Same thread polls egress, so a plain primitive map is enough. The value is
+                        // the order's SCHEDULED slot, not sentNs: anything measured from sentNs has
+                        // already subtracted out the queueing delay a saturated engine causes.
+                        inFlight.put(order.correlationId, order.scheduledNs);
+                    }
                 } else {
                     metrics.recordFailure();
                 }
@@ -338,6 +370,15 @@ public class LoadGenerator {
             }
 
             idleStrategy.idle(workCount);
+        }
+
+        if (carriedOver > 0) {
+            // Not hidden in a log line nobody greps: these orders count as sent but produced no
+            // latency sample, so they are the difference between "sent" and full ack coverage.
+            System.out.printf(
+                "→ %,d warmup-slot orders drained inside the window (sent, not measured)%n",
+                carriedOver
+            );
         }
     }
 

@@ -22,8 +22,15 @@ public final class OrderRequest {
     public final long price;        // Fixed-point (8 decimals)
     public final long quantity;     // Fixed-point (8 decimals)
     public final long totalPrice;   // Fixed-point (8 decimals)
+    /** When this order actually entered the queue. Only the ingress metric may use it. */
     public final long enqueueTimeNs;
-    public volatile long sendTimeNs;  // Time when actually sent to cluster
+    /**
+     * The slot on the fixed-rate timeline this order was DUE to be sent, which is the t0 of the
+     * committed round trip. It is deliberately not the moment the order was generated or offered:
+     * once the system falls behind, those two move with the delay and hide it. Anchoring t0 to the
+     * schedule leaves the delay where it belongs — in the tail percentiles.
+     */
+    public final long scheduledNs;
 
     public OrderRequest(
         long userId,
@@ -33,7 +40,8 @@ public final class OrderRequest {
         double price,
         double quantity,
         double totalPrice,
-        long enqueueTimeNs
+        long enqueueTimeNs,
+        long scheduledNs
     ) {
         this.correlationId = CORRELATION_ID_GENERATOR.incrementAndGet();
         this.userId = userId;
@@ -45,5 +53,6 @@ public final class OrderRequest {
         this.quantity = FixedPoint.fromDouble(quantity);
         this.totalPrice = FixedPoint.fromDouble(totalPrice);
         this.enqueueTimeNs = enqueueTimeNs;
+        this.scheduledNs = scheduledNs;
     }
 }
