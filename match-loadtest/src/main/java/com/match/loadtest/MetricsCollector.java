@@ -11,6 +11,9 @@ import java.util.concurrent.atomic.LongAdder;
  */
 public class MetricsCollector {
 
+    /** Below this share of sent orders the committed percentiles are a biased sample, not a result. */
+    private static final double ACK_COVERAGE_MIN_PCT = 99.0;
+
     // Counters
     private final LongAdder successCount = new LongAdder();
     private final LongAdder failureCount = new LongAdder();
@@ -198,6 +201,7 @@ public class MetricsCollector {
             System.out.println("  CreateOrder offered -> first status back: replicated, committed,");
             System.out.println("  applied, answered. THIS is the number comparable to another system's.");
             System.out.printf("  Acknowledged:        %,10d orders%n", acks);
+            printAckCoverage(acks, totalSent);
             System.out.printf("  Min:                 %,10.2f μs%n", ack.min / 1000.0);
             System.out.printf("  p50:                 %,10.2f μs%n", ack.p50 / 1000.0);
             System.out.printf("  p95:                 %,10.2f μs%n", ack.p95 / 1000.0);
@@ -213,6 +217,30 @@ public class MetricsCollector {
         }
 
         writeHgrmFiles(acks > 0);
+    }
+
+    /**
+     * What fraction of the sent orders the round-trip percentiles were actually computed from.
+     *
+     * <p>A present COMMITTED block is not the same as a measured one. If most statuses never came
+     * back, the percentiles describe the minority that did — and the orders whose status is missing
+     * are not a random minority, they are the ones the engine had trouble with. So the coverage is
+     * printed next to the number, and below the threshold it is labelled as unpublishable rather
+     * than left for the reader to divide two figures and notice. A few orders still in flight when
+     * the window closes is normal; a coverage of 3% is a different measurement entirely.</p>
+     */
+    private static void printAckCoverage(final long acks, final long totalSent) {
+        if (totalSent <= 0) {
+            return;
+        }
+        final double pct = acks * 100.0 / totalSent;
+        System.out.printf("  Ack coverage:        %,10.2f %% of sent orders%n", pct);
+        if (pct < ACK_COVERAGE_MIN_PCT) {
+            System.out.printf(
+                "  ACK COVERAGE LOW (< %.0f%%) — SAMPLE IS BIASED, DO NOT PUBLISH THESE PERCENTILES%n",
+                ACK_COVERAGE_MIN_PCT
+            );
+        }
     }
 
     /**
