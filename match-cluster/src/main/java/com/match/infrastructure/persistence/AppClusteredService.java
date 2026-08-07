@@ -99,6 +99,13 @@ public class AppClusteredService implements ClusteredService {
     private final com.match.infrastructure.metrics.NodeMetrics nodeMetrics =
             new com.match.infrastructure.metrics.NodeMetrics();
     private com.match.infrastructure.metrics.NodeMetricsServer metricsServer;
+    // What this node answers about ITSELF. An orchestrator replaces the old
+    // external supervisor, and it asks two questions: should I kill this pod
+    // (/health) and may I move on to restarting the next one (/ready). Getting
+    // the second one wrong costs quorum, so it is deliberately pessimistic.
+    private final com.openexchange.cluster.NodeReadiness readiness =
+            new com.openexchange.cluster.NodeReadiness();
+    private com.openexchange.cluster.NodeEndpoint nodeEndpoint;
 
     // Lazy-initialized AeronArchive client used to confirm snapshot recordings are durable
     // before onTakeSnapshot returns. See awaitSnapshotRecorded() for the full reasoning.
@@ -431,11 +438,18 @@ public class AppClusteredService implements ClusteredService {
                             + "during a single-session blackout while match_last_egress_age_ms stays "
                             + "healthy (-1 = no session has delivered yet; match#140)",
                             () -> egressSessionMetrics.maxSessionOfferAgeMs(System.currentTimeMillis()));
-            metricsServer.start(port);
+            // One port, three answers. The metrics registry stays where it is;
+            // the endpoint just renders it alongside the probes.
+            nodeEndpoint = new com.openexchange.cluster.NodeEndpoint(readiness, metricsServer::render);
+            nodeEndpoint.start(port);
         } catch (Exception e) {
             // Metrics must never take a node down.
             System.err.println("METRICS: failed to start node metrics server: " + e.getMessage());
         }
+        // Started, but NOT ready: the snapshot is loaded and the log replay may
+        // still be running. Readiness waits for the first live role change,
+        // which Aeron delivers once recovery is behind us.
+        readiness.started();
     }
 
     // ---- P1.2 (match#31): open-order membership snapshot for OMS repair ----
@@ -977,6 +991,9 @@ public class AppClusteredService implements ClusteredService {
         System.out.flush();
         nodeMetrics.setRole(newRole.code());
         isLeader = newRole == Cluster.Role.LEADER;
+        // A live role is also the signal that recovery is behind us; CANDIDATE
+        // withdraws readiness, which is exactly when a rolling restart must wait.
+        readiness.roleChanged(newRole);
         // Always re-arm the flush timer chain on a role change. The chain is a
         // self-rescheduling cluster timer that only the LEADER schedules (a follower's
         // scheduleTimer is a no-op) and that does NOT survive a snapshot recover-into-leader
@@ -988,7 +1005,21 @@ public class AppClusteredService implements ClusteredService {
     }
 
     @Override
+    public int doBackgroundWork(final long nowNs) {
+        // Called every duty cycle on every member, busy or idle. This is the
+        // only signal that separates "quiet market" from "agent thread wedged",
+        // and the wedged case is the one that used to report itself healthy for
+        // hours. No work is done here beyond stamping the clock.
+        readiness.tick();
+        return 0;
+    }
+
+    @Override
     public void onTerminate(final Cluster cluster) {
+        readiness.stopping();
+        if (nodeEndpoint != null) {
+            nodeEndpoint.stop();
+        }
         if (metricsServer != null) {
             metricsServer.stop();
         }
