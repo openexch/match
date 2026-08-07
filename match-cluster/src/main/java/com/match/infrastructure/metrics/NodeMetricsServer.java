@@ -66,7 +66,7 @@ public final class NodeMetricsServer {
         }
     }
 
-    String render() {
+    public String render() {
         metrics.acquire(); // volatile read: makes agent-thread plain writes visible
         StringBuilder sb = new StringBuilder(4096);
 
