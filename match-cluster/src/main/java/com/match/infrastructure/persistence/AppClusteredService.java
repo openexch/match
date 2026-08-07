@@ -107,6 +107,15 @@ public class AppClusteredService implements ClusteredService {
             new com.openexchange.cluster.NodeReadiness();
     private com.openexchange.cluster.NodeEndpoint nodeEndpoint;
 
+    // What makes this cluster snapshot itself with no admin gateway running.
+    // Aeron calls onTakeSnapshot but nothing calls Aeron; the rhythm used to
+    // live in the gateway's Go scheduler, so an engine run on its own never
+    // truncated its log and eventually filled its disk (2026-07-25).
+    private final com.openexchange.cluster.SnapshotCadence snapshotCadence =
+            com.openexchange.cluster.SnapshotCadence.fromEnv();
+    // ...and what turns the snapshot into reclaimed disk on THIS node.
+    private com.openexchange.cluster.SnapshotLogPruner logPruner;
+
     // Lazy-initialized AeronArchive client used to confirm snapshot recordings are durable
     // before onTakeSnapshot returns. See awaitSnapshotRecorded() for the full reasoning.
     private AeronArchive snapshotArchive;
@@ -371,9 +380,56 @@ public class AppClusteredService implements ClusteredService {
         sbeDemuxer.setOpenOrdersSnapshotRequestHandler(this::emitOpenOrdersSnapshot);
 
         startMetricsServer();
+        startDurability(cluster);
 
         System.out.println("SERVICE onStart complete, markets initialized");
         System.out.flush();
+    }
+
+    /**
+     * Arm the snapshot rhythm and the log pruner.
+     *
+     * <p>Durability is not an add-on here: with no admin process in the picture,
+     * this is the only thing standing between a running engine and the disk it
+     * fills. Both are wired from the node's own Aeron client - no cluster
+     * directory to locate, no second JVM, nothing for an operator to remember to
+     * switch on.</p>
+     *
+     * <p>The cadence starts from {@code cluster.logPosition()}, which at this
+     * moment is the recovery position: the last snapshot's position on a node
+     * that recovered from one, 0 at genesis. Starting from 0 on a recovered node
+     * would make it believe the whole log had accumulated since its last
+     * snapshot and fire one immediately on every restart.</p>
+     */
+    private void startDurability(final Cluster cluster) {
+        try {
+            final int clusterId = cluster.context().clusterId();
+            snapshotCadence.bind(
+                    () -> com.openexchange.cluster.SnapshotCadence.findControlToggle(
+                            cluster.aeron(), clusterId),
+                    cluster.logPosition(), System.nanoTime());
+
+            if (com.openexchange.cluster.SnapshotCadence.booleanFromEnv(
+                    "SNAPSHOT_PRUNE_ENABLED", "snapshot.prune.enabled", true)) {
+                logPruner = new com.openexchange.cluster.SnapshotLogPruner(
+                        cluster.context().clusterDir(),
+                        cluster.context().archiveContext().clone(),
+                        cluster.aeron().countersReader(),
+                        clusterId,
+                        readiness::ready);
+                logPruner.start();
+            } else {
+                System.out.println("[PRUNE] disabled by SNAPSHOT_PRUNE_ENABLED=false — "
+                        + "this node's cluster log will grow until something else purges it");
+            }
+        } catch (final Exception e) {
+            // Loud, and NOT fatal: a node that cannot arm its own durability is
+            // still a node that must serve orders. But it is exactly the failure
+            // that used to be invisible, so it is reported as what it is.
+            System.err.println("SERVICE CRITICAL: snapshot cadence/log pruner did not start — "
+                    + "this cluster will not snapshot or reclaim disk on its own: " + e);
+            e.printStackTrace();
+        }
     }
 
     /** match#33: node /metrics on METRICS_PORT (default 9500 + nodeId). */
@@ -408,6 +464,24 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_unknown_timers_total", "Fired cluster timers with no runnable", timerManager::getUnknownTimerCount)
                     .counter("match_flush_timer_fires_total", "Egress flush timer fires", () -> flushTimerFireCount)
                     .counter("match_aeron_errors_total", "Aeron error handler invocations", AeronCluster.AERON_ERROR_COUNT::get)
+                    // Durability, scrapeable. With no admin gateway to ask, these four
+                    // are the whole answer to "is this cluster still writing restore
+                    // points and still reclaiming disk" — the question that went
+                    // unanswered for sixteen hours on 2026-07-25.
+                    .gauge("match_log_bytes_since_snapshot",
+                            "Cluster-log bytes written since the last snapshot; climbs to the "
+                            + "SNAPSHOT_LOG_BYTES threshold and drops back to 0",
+                            snapshotCadence::logBytesSinceSnapshot)
+                    .counter("match_snapshot_requests_total",
+                            "Snapshots this node requested while leading",
+                            snapshotCadence::requestCount)
+                    .counter("match_log_prunes_total",
+                            "Archive purges run on this node after a snapshot",
+                            () -> logPruner == null ? 0 : logPruner.prunesRun())
+                    .counter("match_log_bytes_reclaimed_total",
+                            "Cluster-log bytes reclaimed on this node; flat while the log grows "
+                            + "means the disk is filling",
+                            () -> logPruner == null ? 0 : logPruner.bytesReclaimed())
                     .gauge("match_egress_queue_oms", "Queued reliable OMS egress messages", omsEgressQueue::size)
                     .gauge("match_egress_queue_market", "Queued lossy market-data messages", marketDataQueue::size)
                     .gauge("match_egress_queue_oms_bytes", "Bytes queued for OMS egress", omsEgressBytes::get)
@@ -924,6 +998,10 @@ public class AppClusteredService implements ClusteredService {
         // /tmp/cluster-forensic2-033046/ROOT-CAUSE-V2.md for the full repro.
         awaitSnapshotRecorded(snapshotPublication);
         nodeMetrics.stampSnapshot(System.currentTimeMillis()); // match#33: wall-clock stamp, metrics only
+        // The baseline for the next snapshot, on EVERY member and whoever asked
+        // for this one — a snapshot taken by ClusterTool has to reset the rhythm
+        // exactly like one this node requested.
+        snapshotCadence.snapshotTaken(cluster.logPosition(), System.nanoTime());
     }
 
     /**
@@ -994,6 +1072,10 @@ public class AppClusteredService implements ClusteredService {
         // A live role is also the signal that recovery is behind us; CANDIDATE
         // withdraws readiness, which is exactly when a rolling restart must wait.
         readiness.roleChanged(newRole);
+        // A member that is no longer leader drops any snapshot request it was
+        // waiting on: the consensus module reads that toggle only while leading,
+        // so a request left in flight would block this node's cadence forever.
+        snapshotCadence.roleChanged(isLeader);
         // Always re-arm the flush timer chain on a role change. The chain is a
         // self-rescheduling cluster timer that only the LEADER schedules (a follower's
         // scheduleTimer is a no-op) and that does NOT survive a snapshot recover-into-leader
@@ -1011,12 +1093,18 @@ public class AppClusteredService implements ClusteredService {
         // and the wedged case is the one that used to report itself healthy for
         // hours. No work is done here beyond stamping the clock.
         readiness.tick();
-        return 0;
+        // ...and deciding, at most once a second and only on the leader, whether
+        // the cluster is due a snapshot. Everything past that gate is a long
+        // compare; nothing is allocated and nothing blocks.
+        return snapshotCadence.tick(nowNs, isLeader, cluster.logPosition());
     }
 
     @Override
     public void onTerminate(final Cluster cluster) {
         readiness.stopping();
+        if (logPruner != null) {
+            logPruner.stop();
+        }
         if (nodeEndpoint != null) {
             nodeEndpoint.stop();
         }
