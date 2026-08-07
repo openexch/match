@@ -113,7 +113,25 @@ Auto-snapshot used to call `compact` every cycle, silently corrupting recoverabi
 cycle now takes **only** a snapshot; disk is reclaimed by the live-safe `ArchiveHousekeeping`. For offline
 compaction, stop all nodes first (there is no live-safe ArchiveTool compaction).
 
-### Auto-Snapshot Schedule
+### Auto-Snapshot Schedule — **now the ENGINE's job, not the gateway's**
+The node takes its own snapshots and purges its own log. Nothing external has to be
+running: `cluster-kit`'s `SnapshotCadence` flips the consensus module's control toggle on
+the LEADER (so every member snapshots at the same log position), and `SnapshotLogPruner`
+purges log segments below the new snapshot on each node.
+
+| Setting | Env | System property | Default |
+|---|---|---|---|
+| Log bytes since last snapshot | `SNAPSHOT_LOG_BYTES` | `snapshot.log.bytes` | 1073741824 (1 GiB) |
+| Quiet-market floor | `SNAPSHOT_INTERVAL_MINUTES` | `snapshot.interval.minutes` | 5 |
+| Purge log after a snapshot | `SNAPSHOT_PRUNE_ENABLED` | `snapshot.prune.enabled` | true |
+
+0 disables a trigger; both 0 means the cluster never snapshots on its own (logged loudly).
+An unparseable value is refused at startup rather than silently defaulted.
+Scrape `match_log_bytes_since_snapshot`, `match_snapshot_requests_total`,
+`match_log_prunes_total`, `match_log_bytes_reclaimed_total` on `/metrics`.
+
+The gateway's Go scheduler is no longer started (`cloud-console/main.go`); the endpoints
+below still exist for a manual, one-off run against an engine too old to have a cadence.
 ```bash
 curl http://localhost:8082/api/admin/auto-snapshot                                 # Get current schedule
 curl -X POST http://localhost:8082/api/admin/auto-snapshot -d '{"intervalMinutes":30}'  # Enable
@@ -211,8 +229,13 @@ Logs at: `~/.local/log/cluster/`
   an admin restart (no monitor — admin-gateway#13); re-arm by API stop/start.
 
 ### ⚠️ Operational rules (from the 2026-07-02 incident — docs/incidents/)
-- **NEVER run snapshot/housekeeping while any node is down, lagging, or recovering** (match#35:
-  it strands the laggard PERMANENTLY; rejoin then corrupts its local archive via replication).
+- **NEVER run snapshot/housekeeping BY HAND while any node is down, lagging, or recovering**
+  (match#35: it strands the laggard PERMANENTLY; rejoin then corrupts its local archive via
+  replication). The engine's own pruner carries this risk knowingly and on purpose: it purges
+  below its own newest snapshot, so a member absent across a snapshot must be reseeded by hand
+  (etcd does the same with its compacted WAL, and B4's `reseed` subcommand is the recovery).
+  The bound narrows once the retention watermark moves into the engine (plan phase B3). A node
+  purges nothing while it is not caught up — `NodeReadiness.ready()` gates it.
 - Archives live on tmpfs: ~165 B/order/node → 16 GB /dev/shm fills in <1 min at max load. Housekeep
   between heavy load runs; a full shm wedges followers AND breaks ClusterTool/admin snapshot ops.
 - Stranded-member reseed (validated): stop a healthy follower, copy its `cluster/`+`archive/` dirs over

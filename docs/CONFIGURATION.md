@@ -22,6 +22,44 @@ Source: `AeronCluster`, `AppClusteredService`, `Engine`, `MarketPublisher`
 | `-Dmatch.engine.book.capacity` / `MATCH_ENGINE_BOOK_CAPACITY` | `131072` | Per-side resting-order pool for the array book; exhaustion is a loud `BOOK_FULL` reject |
 | `-Dmatch.egress.buffer.max` (sysprop only) | `200000` | Egress buffer entry cap (egress is also byte-bounded, about 176 MB end to end) |
 
+## match: snapshot cadence and log retention
+
+Source: `SnapshotCadence`, `SnapshotLogPruner` (cluster-kit), wired in
+`AppClusteredService`. The **Assets Engine reads the same names**, and so does
+anything else built on cluster-kit.
+
+The node takes its own snapshots and reclaims its own disk; nothing external has
+to be running. The decision is made on the leader only and travels through the
+consensus module, so every member snapshots at the same log position. An
+unparseable value here is refused at startup rather than silently defaulted.
+
+| Knob | Default | Purpose |
+|---|---|---|
+| `SNAPSHOT_LOG_BYTES` / `-Dsnapshot.log.bytes` | `1073741824` (1 GiB) | Cluster-log bytes since the last snapshot that force a new one; `0` disables the byte trigger |
+| `SNAPSHOT_INTERVAL_MINUTES` / `-Dsnapshot.interval.minutes` | `5` | Quiet-market floor, so a slow day still leaves a recent restore point; `0` disables the timer |
+| `SNAPSHOT_PRUNE_ENABLED` / `-Dsnapshot.prune.enabled` | `true` | Purge log segments below the newest snapshot after it completes |
+
+Both triggers at `0` means the cluster never snapshots on its own: its log grows
+without bound until the disk fills. It is logged loudly at startup and it is
+never what you want in production.
+
+**The byte trigger is the one that matters under load.** A fixed interval
+silently caps throughput, because the whole log between two snapshots has to fit
+in tmpfs. It also sets how often the leader pauses: taking a snapshot moves the
+consensus module out of `ACTIVE`, and a leader only polls ingress while `ACTIVE`,
+so no new order enters the log for the length of it. At 800k orders/s, 1 GiB is
+roughly eight seconds of log. Raising the threshold trades RAM for fewer pauses.
+
+**Purging strands a member that was offline across the snapshot** (match#35): it
+can no longer catch up from this node's log and has to be reseeded by hand. That
+is deliberate and it is what etcd does with its compacted WAL. A node purges
+nothing while it is not caught up.
+
+Observability on `/metrics`: `match_log_bytes_since_snapshot`,
+`match_snapshot_requests_total`, `match_log_prunes_total`,
+`match_log_bytes_reclaimed_total`. A flat reclaim counter under a climbing log is
+a disk that is filling.
+
 ## match: transport / media driver
 
 Source: `TransportConfig` (match-common). Full architecture:
