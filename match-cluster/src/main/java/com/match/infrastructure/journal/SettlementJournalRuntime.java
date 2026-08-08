@@ -50,7 +50,10 @@ public final class SettlementJournalRuntime implements AutoCloseable {
 
     private SettlementJournalRuntime(final int nodeId, final int portBase, final Path journalDir, final int ringBytes) {
         this.nodeId = nodeId;
-        this.controlPort = portBase + nodeId * 100 + InfrastructureConstants.JOURNAL_ARCHIVE_CONTROL_PORT_OFFSET;
+        // Same arithmetic every other component uses, and by default the stride is
+        // zero: one member per address, so this port is the same on every node.
+        this.controlPort = com.openexchange.cluster.ClusterPorts.port(
+                nodeId, portBase, InfrastructureConstants.JOURNAL_ARCHIVE_CONTROL_PORT_OFFSET);
         this.journalDir = journalDir;
         this.journal = new SettlementJournal(ringBytes);
         this.checkpoints = new JournalCheckpointFile(journalDir);
@@ -69,9 +72,11 @@ public final class SettlementJournalRuntime implements AutoCloseable {
         final String ringEnv = System.getenv("SETTLEMENT_JOURNAL_RING_BYTES");
         final int ringBytes = ringEnv == null || ringEnv.isBlank() ? DEFAULT_RING_BYTES : Integer.parseInt(ringEnv);
         final Path journalDir = Path.of(dir).resolve("node" + nodeId);
+        final SettlementJournalRuntime runtime =
+                new SettlementJournalRuntime(nodeId, portBase, journalDir, ringBytes);
         log.info("Settlement journal ENABLED: dir=" + journalDir + " ring=" + ringBytes
-                + " controlPort=" + (portBase + nodeId * 100 + InfrastructureConstants.JOURNAL_ARCHIVE_CONTROL_PORT_OFFSET));
-        return new SettlementJournalRuntime(nodeId, portBase, journalDir, ringBytes);
+                + " controlPort=" + runtime.controlPort);
+        return runtime;
     }
 
     /** The ring facade to arm on the event publisher (safe before {@link #start}: the ring buffers). */
