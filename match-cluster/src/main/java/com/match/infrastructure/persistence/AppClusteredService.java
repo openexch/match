@@ -416,7 +416,14 @@ public class AppClusteredService implements ClusteredService {
                         cluster.context().archiveContext().clone(),
                         cluster.aeron().countersReader(),
                         clusterId,
-                        readiness::ready);
+                        readiness::ready)
+                        // Computed on the leader after every snapshot and LOGGED, not
+                        // yet applied: it changes what gets deleted from a live ledger,
+                        // so the numbers get watched under real traffic first.
+                        .reportWatermark(
+                                com.openexchange.cluster.ClusterMemberPositions.from(
+                                        cluster.aeron(), cluster.context()),
+                                () -> isLeader);
                 logPruner.start();
             } else {
                 System.out.println("[PRUNE] disabled by SNAPSHOT_PRUNE_ENABLED=false — "
