@@ -14,7 +14,8 @@ Source: `AeronCluster`, `AppClusteredService`, `Engine`, `MarketPublisher`
 |---|---|---|
 | `CLUSTER_NODE` / `-Dnode.id` | `0` | This member's node id |
 | `CLUSTER_ADDRESSES` / `-Dcluster.addresses` | `localhost` | Comma-separated cluster member addresses |
-| `CLUSTER_PORT_BASE` / `-Dport.base` | `9000` | Base port; node N uses `base + 100*N` upward |
+| `CLUSTER_PORT_BASE` / `-Dport.base` | `9000` | Base port for every member's listeners |
+| `CLUSTER_PORT_STRIDE` / `-Dcluster.port.stride` | `0` | Extra ports per member id. **0 means every member listens on the same ports**, which is what one member per address wants. Set `100` when several members share a host |
 | `BASE_DIR` (env only) | `<cwd>/node<N>` | Cluster data directory (log, archive, mark files) |
 | `DNS_DELAY` (env only) | `false` | Startup delay before DNS resolution (Kubernetes) |
 | `METRICS_PORT` (env only) | `9500 + nodeId` | Prometheus node metrics port |
@@ -59,6 +60,24 @@ Observability on `/metrics`: `match_log_bytes_since_snapshot`,
 `match_snapshot_requests_total`, `match_log_prunes_total`,
 `match_log_bytes_reclaimed_total`. A flat reclaim counter under a climbing log is
 a disk that is filling.
+
+### Where a member listens
+
+`portBase + memberId * stride + offset`, with the offsets fixed at archive control 1,
+ingress 2, consensus 3, log 4, transfer 5. One copy of that arithmetic lives in
+`cluster-kit`'s `ClusterPorts`, because both engines, the settlement bridge, OMS,
+the load generators and the backup agent all derive it independently, and copies
+of a wire contract drift into a process dialling a port nobody is listening on.
+
+**The stride is a deployment-wide setting, like the port base and the host list.**
+Every process has to be told the same value. Two members with different strides
+compute different membership strings and never form a cluster; a client with the
+wrong stride dials the wrong port.
+
+The default of `0` is the distributed layout: one member per address, all of them
+on the same ports, one set of container ports and one service definition. Putting
+several members on one host is the special case, and forgetting to say so is not
+silent: the second member cannot bind and dies at startup.
 
 ## match: transport / media driver
 

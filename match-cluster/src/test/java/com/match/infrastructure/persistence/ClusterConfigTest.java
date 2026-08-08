@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.match.infrastructure.persistence;
 
+import com.openexchange.cluster.ClusterPorts;
+import org.junit.After;
 import org.junit.Test;
 
 import java.util.Arrays;
@@ -15,11 +17,52 @@ import static org.junit.Assert.*;
  */
 public class ClusterConfigTest {
 
+    /**
+     * Several members on one host: the historical layout, and now the special case.
+     * Set BEFORE the numbers are read, because the stride is resolved once.
+     */
+    private static void sharedHost() {
+        System.setProperty("cluster.port.stride", Integer.toString(ClusterConfig.PORTS_PER_NODE));
+        ClusterPorts.resetStrideForTest();
+    }
+
+    @After
+    public void restoreDefaultLayout() {
+        System.clearProperty("cluster.port.stride");
+        ClusterPorts.resetStrideForTest();
+    }
+
     // ==================== Port Constants ====================
 
     @Test
-    public void portsPerNodeConstant() {
+    public void portsPerNodeIsTheSharedHostStride() {
         assertEquals(100, ClusterConfig.PORTS_PER_NODE);
+        assertEquals(ClusterPorts.SHARED_HOST_STRIDE, ClusterConfig.PORTS_PER_NODE);
+    }
+
+    /**
+     * The default layout is one member per address, so the member id contributes
+     * nothing. This is the contract every client derives independently, and it is
+     * what makes a StatefulSet need one container port instead of one per ordinal.
+     */
+    @Test
+    public void byDefaultEveryMemberListensOnTheSamePorts() {
+        assertEquals(9002, ClusterConfig.calculatePort(0, 9000, ClusterConfig.CLIENT_FACING_PORT_OFFSET));
+        assertEquals(9002, ClusterConfig.calculatePort(1, 9000, ClusterConfig.CLIENT_FACING_PORT_OFFSET));
+        assertEquals(9002, ClusterConfig.calculatePort(2, 9000, ClusterConfig.CLIENT_FACING_PORT_OFFSET));
+    }
+
+    /** And the endpoints that go into the membership string follow it. */
+    @Test
+    public void byDefaultTheMembershipStringUsesOnePortSet() {
+        final String result = ClusterConfig.clusterMembers(
+                Arrays.asList("ing1", "ing2", "ing3"), Arrays.asList("cls1", "cls2", "cls3"), 9000);
+        final String[] members = result.split("\\|");
+        assertTrue(members[0].contains("ing1:9002"));
+        assertTrue(members[1].contains("ing2:9002"));
+        assertTrue(members[2].contains("ing3:9002"));
+        assertTrue(members[0].contains("cls1:9003"));
+        assertTrue(members[1].contains("cls2:9003"));
     }
 
     @Test
@@ -35,6 +78,7 @@ public class ClusterConfigTest {
 
     @Test
     public void calculatePortNode0() {
+        sharedHost();
         int port = ClusterConfig.calculatePort(0, 9000, ClusterConfig.CLIENT_FACING_PORT_OFFSET);
         // 9000 + (0 * 100) + 2 = 9002
         assertEquals(9002, port);
@@ -42,6 +86,7 @@ public class ClusterConfigTest {
 
     @Test
     public void calculatePortNode1() {
+        sharedHost();
         int port = ClusterConfig.calculatePort(1, 9000, ClusterConfig.CLIENT_FACING_PORT_OFFSET);
         // 9000 + (1 * 100) + 2 = 9102
         assertEquals(9102, port);
@@ -49,6 +94,7 @@ public class ClusterConfigTest {
 
     @Test
     public void calculatePortNode2() {
+        sharedHost();
         int port = ClusterConfig.calculatePort(2, 9000, ClusterConfig.ARCHIVE_CONTROL_PORT_OFFSET);
         // 9000 + (2 * 100) + 1 = 9201
         assertEquals(9201, port);
@@ -56,7 +102,8 @@ public class ClusterConfigTest {
 
     @Test
     public void calculatePortFormula() {
-        // Verify the formula: portBase + (nodeId * PORTS_PER_NODE) + offset
+        sharedHost();
+        // portBase + (nodeId * stride) + offset
         int nodeId = 5;
         int portBase = 10000;
         int offset = 3;
@@ -66,6 +113,7 @@ public class ClusterConfigTest {
 
     @Test
     public void calculatePortWithAllOffsets() {
+        sharedHost();
         int nodeId = 1;
         int portBase = 8000;
 
@@ -93,6 +141,7 @@ public class ClusterConfigTest {
 
     @Test
     public void clusterMembersThreeNodes() {
+        sharedHost();
         List<String> ingress = Arrays.asList("ing1", "ing2", "ing3");
         List<String> cluster = Arrays.asList("cls1", "cls2", "cls3");
 
@@ -121,6 +170,7 @@ public class ClusterConfigTest {
 
     @Test
     public void clusterMembersWithStartingMemberId() {
+        sharedHost();
         List<String> hosts = Arrays.asList("h1", "h2");
 
         String result = ClusterConfig.clusterMembers(10, hosts, hosts, 9000);
@@ -162,6 +212,7 @@ public class ClusterConfigTest {
 
     @Test
     public void ingressEndpointsThreeNodes() {
+        sharedHost();
         List<String> hosts = Arrays.asList("h1", "h2", "h3");
 
         String result = ClusterConfig.ingressEndpoints(hosts, 9000, ClusterConfig.CLIENT_FACING_PORT_OFFSET);
@@ -171,6 +222,7 @@ public class ClusterConfigTest {
 
     @Test
     public void ingressEndpointsWithStartingMemberId() {
+        sharedHost();
         List<String> hosts = Arrays.asList("a", "b");
 
         String result = ClusterConfig.ingressEndpoints(5, hosts, 9000, ClusterConfig.CLIENT_FACING_PORT_OFFSET);

@@ -43,34 +43,41 @@ import java.util.List;
 public final class ClusterConfig
 {
     /**
-     * Number of ports per node reserved.
+     * Ports per node when several members share a host. Zero by default now:
+     * see {@link com.openexchange.cluster.ClusterPorts}. Kept as a named
+     * constant because the historical layout is still what a one-host demo
+     * wants, and because callers used to read this to mean "the stride".
      */
-    public static final int PORTS_PER_NODE = 100;
+    public static final int PORTS_PER_NODE = com.openexchange.cluster.ClusterPorts.SHARED_HOST_STRIDE;
 
     /**
      * Offset from base port that the archive control channel is on.
      */
-    public static final int ARCHIVE_CONTROL_PORT_OFFSET = 1;
+    public static final int ARCHIVE_CONTROL_PORT_OFFSET =
+            com.openexchange.cluster.ClusterPorts.ARCHIVE_CONTROL_OFFSET;
 
     /**
      * Offset from base port that the client facing port is on for ingress.
      */
-    public static final int CLIENT_FACING_PORT_OFFSET = 2;
+    public static final int CLIENT_FACING_PORT_OFFSET =
+            com.openexchange.cluster.ClusterPorts.CLIENT_FACING_OFFSET;
 
     /**
      * Offset from base port that the member listens on for consensus traffic.
      */
-    public static final int MEMBER_FACING_PORT_OFFSET = 3;
+    public static final int MEMBER_FACING_PORT_OFFSET =
+            com.openexchange.cluster.ClusterPorts.MEMBER_FACING_OFFSET;
 
     /**
      * Offset from base port that the cluster log is on.
      */
-    public static final int LOG_PORT_OFFSET = 4;
+    public static final int LOG_PORT_OFFSET = com.openexchange.cluster.ClusterPorts.LOG_OFFSET;
 
     /**
      * Offset from base port that the transfer of files is on.
      */
-    public static final int TRANSFER_PORT_OFFSET = 5;
+    public static final int TRANSFER_PORT_OFFSET =
+            com.openexchange.cluster.ClusterPorts.TRANSFER_OFFSET;
 
     /**
      * Subdirectory into which archive files are stored.
@@ -593,10 +600,14 @@ public final class ClusterConfig
     }
 
     /**
-     * Calculates a port for use with a node based on a specific offset.  Can be used with the predefined offsets, e.g.
+     * Calculates a port for use with a node based on a specific offset. Can be used with the predefined offsets, e.g.
      * {@link ClusterConfig#ARCHIVE_CONTROL_PORT_OFFSET} or with custom offsets. For custom offsets select a value
-     * larger than largest predefined offsets.  A value larger than the largest predefined offset, but less than
-     * {@link ClusterConfig#PORTS_PER_NODE} is required.
+     * larger than the largest predefined offset, and smaller than the configured stride when there is one.
+     *
+     * <p>The arithmetic lives in {@link com.openexchange.cluster.ClusterPorts} because OMS, the
+     * settlement bridge, the load generators and the backup agent all derive these same numbers
+     * independently. By default every member listens on the SAME ports, one member per address;
+     * {@code CLUSTER_PORT_STRIDE=100} restores the layout where several members share a host.
      *
      * @param nodeId   The id for the member of the cluster.
      * @param portBase The port base to be used.
@@ -605,7 +616,7 @@ public final class ClusterConfig
      */
     public static int calculatePort(final int nodeId, final int portBase, final int offset)
     {
-        return portBase + (nodeId * PORTS_PER_NODE) + offset;
+        return com.openexchange.cluster.ClusterPorts.port(nodeId, portBase, offset);
     }
 
     private static String udpChannel(final int nodeId, final String hostname, final int portBase)
