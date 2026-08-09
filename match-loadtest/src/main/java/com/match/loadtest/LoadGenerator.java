@@ -89,31 +89,47 @@ public class LoadGenerator {
         this.warmupSeconds = warmupSeconds;
         this.ui = useUI ? new LoadTestUI(config) : null;
 
+        final boolean externalDriver = config.getAeronDir() != null;
+
         if (!useUI) {
             System.out.println("╔══════════════════════════════════════════════════════════════════════════════╗");
             System.out.println("║              Aeron Cluster Load Generator Starting...                       ║");
             System.out.println("╚══════════════════════════════════════════════════════════════════════════════╝");
             System.out.println();
-            System.out.println("→ Launching embedded Media Driver...");
+            System.out.println(externalDriver
+                ? "→ Attaching to external Media Driver: " + config.getAeronDir()
+                : "→ Launching embedded Media Driver...");
         }
 
-        // Initialize Media Driver with ultra-low latency settings
-        // Use unique directory to prevent conflicts with cluster nodes
-        String loadTestAeronDir = "/dev/shm/aeron-loadtest-" + System.nanoTime();
+        final String aeronDirectoryName;
+        if (externalDriver) {
+            // Attach to a driver someone else runs (the bench rig's pinned busy-spin
+            // aeronmd), so client-side driver noise stays out of the measurement. Not
+            // launched here, so not configured here either: an external driver owns its
+            // own threading, socket-buffer and lifecycle settings. mediaDriver stays
+            // null and stop() already skips the close for exactly that case.
+            this.mediaDriver = null;
+            aeronDirectoryName = config.getAeronDir();
+        } else {
+            // Initialize Media Driver with ultra-low latency settings
+            // Use unique directory to prevent conflicts with cluster nodes
+            String loadTestAeronDir = "/dev/shm/aeron-loadtest-" + System.nanoTime();
 
-        this.mediaDriver = MediaDriver.launchEmbedded(
-            new MediaDriver.Context()
-                .aeronDirectoryName(loadTestAeronDir)  // Unique dir to avoid conflicts
-                .threadingMode(ThreadingMode.SHARED)    // Single-threaded like gateway for reliable connectivity
-                .dirDeleteOnStart(true)
-                .dirDeleteOnShutdown(true)
-                .socketSndbufLength(SOCKET_BUFFER_LENGTH)  // 4MB to match cluster
-                .socketRcvbufLength(SOCKET_BUFFER_LENGTH)  // 4MB to match cluster
-                .publicationLingerTimeoutNs(1_000_000_000L)  // 1s instead of 5s for faster cleanup
-        );
+            this.mediaDriver = MediaDriver.launchEmbedded(
+                new MediaDriver.Context()
+                    .aeronDirectoryName(loadTestAeronDir)  // Unique dir to avoid conflicts
+                    .threadingMode(ThreadingMode.SHARED)    // Single-threaded like gateway for reliable connectivity
+                    .dirDeleteOnStart(true)
+                    .dirDeleteOnShutdown(true)
+                    .socketSndbufLength(SOCKET_BUFFER_LENGTH)  // 4MB to match cluster
+                    .socketRcvbufLength(SOCKET_BUFFER_LENGTH)  // 4MB to match cluster
+                    .publicationLingerTimeoutNs(1_000_000_000L)  // 1s instead of 5s for faster cleanup
+            );
+            aeronDirectoryName = mediaDriver.aeronDirectoryName();
+        }
 
         if (!useUI) {
-            System.out.println("✓ Media Driver launched");
+            System.out.println(externalDriver ? "✓ Media Driver attached" : "✓ Media Driver launched");
             System.out.println("→ Connecting to Aeron Cluster...");
         }
 
@@ -128,7 +144,7 @@ public class LoadGenerator {
             .egressListener(new LoadTestEgressListener(metrics, inFlight))
             .egressChannel(config.getEgressChannel())
             .ingressChannel(config.getIngressChannel())
-            .aeronDirectoryName(mediaDriver.aeronDirectoryName())
+            .aeronDirectoryName(aeronDirectoryName)
             .ingressEndpoints(ingressEndpoints);
 
         this.cluster = AeronCluster.connect(clusterCtx);
@@ -546,6 +562,7 @@ public class LoadGenerator {
                     .workerThreads(1)  // Single thread for ultra-low latency
                     .scenario(config.getScenario())
                     .clusterHosts(config.getClusterHosts())
+                    .aeronDir(config.getAeronDir())  // --ultra must not silently bring the embedded driver back
                     .build();
             }
 
@@ -580,7 +597,8 @@ public class LoadGenerator {
         return defaultValue;
     }
 
-    private static LoadConfig parseArgs(String[] args) {
+    // Package-private so the arg-parsing tests can exercise flag -> config directly.
+    static LoadConfig parseArgs(String[] args) {
         LoadConfig.Builder builder = LoadConfig.builder();
 
         for (int i = 0; i < args.length; i++) {
@@ -604,6 +622,9 @@ public class LoadGenerator {
                 case "--hosts":
                 case "-h":
                     builder.clusterHosts(List.of(args[++i].split(",")));
+                    break;
+                case "--aeron-dir":
+                    builder.aeronDir(args[++i]);
                     break;
                 case "--no-ui":
                 case "--ultra":
@@ -635,6 +656,7 @@ public class LoadGenerator {
         System.out.println("  -t, --threads <n>     Number of worker threads (default: 4)");
         System.out.println("  -s, --scenario <name> Scenario: BALANCED, MARKET_MAKER, AGGRESSIVE, SPIKE (default: BALANCED)");
         System.out.println("  -h, --hosts <list>    Cluster hosts comma-separated");
+        System.out.println("  --aeron-dir <dir>     Attach to an external Aeron media driver at <dir> instead of launching an embedded one");
         System.out.println("  --no-ui               Disable interactive UI (use text output)");
         System.out.println("  --ultra               Ultra-low latency mode (single thread, small batches)");
         System.out.println("  --warmup <n>          JIT warmup seconds at the START of --duration, metrics discarded (default: 0)");
