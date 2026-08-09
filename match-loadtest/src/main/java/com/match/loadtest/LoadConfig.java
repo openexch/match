@@ -20,6 +20,7 @@ public class LoadConfig {
     private final String ingressChannel;
     private final int maxRetries;
     private final long retryDelayMs;
+    private final String aeronDir;
 
     private LoadConfig(Builder builder) {
         this.targetOrdersPerSecond = builder.targetOrdersPerSecond;
@@ -33,6 +34,7 @@ public class LoadConfig {
         this.ingressChannel = builder.ingressChannel;
         this.maxRetries = builder.maxRetries;
         this.retryDelayMs = builder.retryDelayMs;
+        this.aeronDir = builder.aeronDir;
     }
 
     public int getTargetOrdersPerSecond() {
@@ -79,6 +81,15 @@ public class LoadConfig {
         return retryDelayMs;
     }
 
+    /**
+     * Directory of an external Aeron media driver to attach to, or null to launch an
+     * embedded one. On the bench rig each box runs a pinned busy-spin aeronmd; attaching
+     * to it keeps the generator's own driver threads out of the measurement.
+     */
+    public String getAeronDir() {
+        return aeronDir;
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -95,6 +106,7 @@ public class LoadConfig {
         private String ingressChannel = "aeron:udp?term-length=16m|mtu=8k"; // Match cluster config
         private int maxRetries = 10; // Increased retries but with shorter delays
         private long retryDelayMs = 0; // Remove sleep - use busy retry instead
+        private String aeronDir; // null = launch an embedded media driver
 
         public Builder targetOrdersPerSecond(int targetOrdersPerSecond) {
             this.targetOrdersPerSecond = targetOrdersPerSecond;
@@ -148,6 +160,11 @@ public class LoadConfig {
 
         public Builder retryDelayMs(long retryDelayMs) {
             this.retryDelayMs = retryDelayMs;
+            return this;
+        }
+
+        public Builder aeronDir(String aeronDir) {
+            this.aeronDir = aeronDir;
             return this;
         }
 
