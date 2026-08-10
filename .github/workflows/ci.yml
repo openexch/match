@@ -184,7 +184,7 @@ jobs:
           echo "builtAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::675715936685:role/openexch-ci-artifact-publisher
           aws-region: eu-central-1
