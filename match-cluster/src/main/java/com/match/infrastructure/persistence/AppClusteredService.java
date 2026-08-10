@@ -927,7 +927,9 @@ public class AppClusteredService implements ClusteredService {
     private void sendEgressKeepWarm() {
         keepWarmEncoder.wrapAndApplyHeader(keepWarmBuffer, 0, keepWarmHeaderEncoder);
         keepWarmEncoder
-            .nodeId(cluster.memberId())
+            // v8: nodeId is uint8 on the wire (member ids are 0-2); SBE's Java codec
+            // takes uint8 as short.
+            .nodeId((short) cluster.memberId())
             .timestamp(System.currentTimeMillis());
         int length = MessageHeaderEncoder.ENCODED_LENGTH + keepWarmEncoder.encodedLength();
 

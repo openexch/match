@@ -13,7 +13,7 @@ public final class OrderStatusBatchEncoder
     public static final int BLOCK_LENGTH = 12;
     public static final int TEMPLATE_ID = 24;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 7;
+    public static final int SCHEMA_VERSION = 8;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -246,7 +246,7 @@ public final class OrderStatusBatchEncoder
             final int limit = parentMessage.limit();
             initialLimit = limit;
             parentMessage.limit(limit + HEADER_SIZE);
-            buffer.putShort(limit + 0, (short)75, BYTE_ORDER);
+            buffer.putShort(limit + 0, (short)67, BYTE_ORDER);
             buffer.putShort(limit + 2, (short)count, BYTE_ORDER);
         }
 
@@ -289,7 +289,7 @@ public final class OrderStatusBatchEncoder
 
         public static int sbeBlockLength()
         {
-            return 75;
+            return 67;
         }
 
         public static int orderIdId()
@@ -624,58 +624,6 @@ public final class OrderStatusBatchEncoder
             return this;
         }
 
-        public static int timestampId()
-        {
-            return 8;
-        }
-
-        public static int timestampSinceVersion()
-        {
-            return 0;
-        }
-
-        public static int timestampEncodingOffset()
-        {
-            return 42;
-        }
-
-        public static int timestampEncodingLength()
-        {
-            return 8;
-        }
-
-        public static String timestampMetaAttribute(final MetaAttribute metaAttribute)
-        {
-            if (MetaAttribute.PRESENCE == metaAttribute)
-            {
-                return "required";
-            }
-
-            return "";
-        }
-
-        public static long timestampNullValue()
-        {
-            return -9223372036854775808L;
-        }
-
-        public static long timestampMinValue()
-        {
-            return -9223372036854775807L;
-        }
-
-        public static long timestampMaxValue()
-        {
-            return 9223372036854775807L;
-        }
-
-        public OrdersEncoder timestamp(final long value)
-        {
-            buffer.putLong(offset + 42, value, BYTE_ORDER);
-            return this;
-        }
-
-
         public static int omsOrderIdId()
         {
             return 9;
@@ -688,7 +636,7 @@ public final class OrderStatusBatchEncoder
 
         public static int omsOrderIdEncodingOffset()
         {
-            return 50;
+            return 42;
         }
 
         public static int omsOrderIdEncodingLength()
@@ -723,7 +671,7 @@ public final class OrderStatusBatchEncoder
 
         public OrdersEncoder omsOrderId(final long value)
         {
-            buffer.putLong(offset + 50, value, BYTE_ORDER);
+            buffer.putLong(offset + 42, value, BYTE_ORDER);
             return this;
         }
 
@@ -740,7 +688,7 @@ public final class OrderStatusBatchEncoder
 
         public static int statusSeqEncodingOffset()
         {
-            return 58;
+            return 50;
         }
 
         public static int statusSeqEncodingLength()
@@ -775,7 +723,7 @@ public final class OrderStatusBatchEncoder
 
         public OrdersEncoder statusSeq(final long value)
         {
-            buffer.putLong(offset + 58, value, BYTE_ORDER);
+            buffer.putLong(offset + 50, value, BYTE_ORDER);
             return this;
         }
 
@@ -792,7 +740,7 @@ public final class OrderStatusBatchEncoder
 
         public static int rejectReasonEncodingOffset()
         {
-            return 66;
+            return 58;
         }
 
         public static int rejectReasonEncodingLength()
@@ -827,7 +775,7 @@ public final class OrderStatusBatchEncoder
 
         public OrdersEncoder rejectReason(final short value)
         {
-            buffer.putByte(offset + 66, (byte)value);
+            buffer.putByte(offset + 58, (byte)value);
             return this;
         }
 
@@ -844,7 +792,7 @@ public final class OrderStatusBatchEncoder
 
         public static int egressSeqEncodingOffset()
         {
-            return 67;
+            return 59;
         }
 
         public static int egressSeqEncodingLength()
@@ -879,7 +827,7 @@ public final class OrderStatusBatchEncoder
 
         public OrdersEncoder egressSeq(final long value)
         {
-            buffer.putLong(offset + 67, value, BYTE_ORDER);
+            buffer.putLong(offset + 59, value, BYTE_ORDER);
             return this;
         }
 

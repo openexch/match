@@ -3,7 +3,6 @@ package com.match.loadtest;
 
 import com.match.infrastructure.generated.MessageHeaderDecoder;
 import com.match.infrastructure.generated.OrderStatusBatchDecoder;
-import com.match.infrastructure.generated.OrderStatusUpdateDecoder;
 import io.aeron.cluster.client.EgressListener;
 import io.aeron.logbuffer.Header;
 import org.agrona.DirectBuffer;
@@ -21,7 +20,6 @@ public class LoadTestEgressListener implements EgressListener {
     // Reused decoders — this runs on the duty thread inside pollEgress, so it must not allocate.
     private final MessageHeaderDecoder sbeHeader = new MessageHeaderDecoder();
     private final OrderStatusBatchDecoder statusBatch = new OrderStatusBatchDecoder();
-    private final OrderStatusUpdateDecoder statusUpdate = new OrderStatusUpdateDecoder();
 
     public LoadTestEgressListener(MetricsCollector metrics, Long2LongHashMap inFlight) {
         this.metrics = metrics;
@@ -57,6 +55,8 @@ public class LoadTestEgressListener implements EgressListener {
         if (length >= MessageHeaderDecoder.ENCODED_LENGTH) {
             sbeHeader.wrap(buffer, offset);
             final long nowNs = System.nanoTime();
+            // v8: only the batch form exists — the single OrderStatusUpdate message was
+            // removed from the schema (the cluster never emitted it).
             if (sbeHeader.templateId() == OrderStatusBatchDecoder.TEMPLATE_ID) {
                 statusBatch.wrapAndApplyHeader(buffer, offset, sbeHeader);
                 final OrderStatusBatchDecoder.OrdersDecoder orders = statusBatch.orders();
@@ -64,9 +64,6 @@ public class LoadTestEgressListener implements EgressListener {
                     orders.next();
                     recordAck(orders.omsOrderId(), nowNs);
                 }
-            } else if (sbeHeader.templateId() == OrderStatusUpdateDecoder.TEMPLATE_ID) {
-                statusUpdate.wrapAndApplyHeader(buffer, offset, sbeHeader);
-                recordAck(statusUpdate.omsOrderId(), nowNs);
             }
         }
 

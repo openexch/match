@@ -10,10 +10,10 @@ import org.agrona.DirectBuffer;
 @SuppressWarnings("all")
 public final class CreateOrderDecoder
 {
-    public static final int BLOCK_LENGTH = 46;
+    public static final int BLOCK_LENGTH = 38;
     public static final int TEMPLATE_ID = 1;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 7;
+    public static final int SCHEMA_VERSION = 8;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -285,57 +285,6 @@ public final class CreateOrderDecoder
     }
 
 
-    public static int totalPriceId()
-    {
-        return 4;
-    }
-
-    public static int totalPriceSinceVersion()
-    {
-        return 0;
-    }
-
-    public static int totalPriceEncodingOffset()
-    {
-        return 24;
-    }
-
-    public static int totalPriceEncodingLength()
-    {
-        return 8;
-    }
-
-    public static String totalPriceMetaAttribute(final MetaAttribute metaAttribute)
-    {
-        if (MetaAttribute.PRESENCE == metaAttribute)
-        {
-            return "required";
-        }
-
-        return "";
-    }
-
-    public static long totalPriceNullValue()
-    {
-        return -9223372036854775808L;
-    }
-
-    public static long totalPriceMinValue()
-    {
-        return -9223372036854775807L;
-    }
-
-    public static long totalPriceMaxValue()
-    {
-        return 9223372036854775807L;
-    }
-
-    public long totalPrice()
-    {
-        return buffer.getLong(offset + 24, BYTE_ORDER);
-    }
-
-
     public static int marketIdId()
     {
         return 5;
@@ -348,7 +297,7 @@ public final class CreateOrderDecoder
 
     public static int marketIdEncodingOffset()
     {
-        return 32;
+        return 24;
     }
 
     public static int marketIdEncodingLength()
@@ -383,7 +332,7 @@ public final class CreateOrderDecoder
 
     public int marketId()
     {
-        return buffer.getInt(offset + 32, BYTE_ORDER);
+        return buffer.getInt(offset + 24, BYTE_ORDER);
     }
 
 
@@ -399,7 +348,7 @@ public final class CreateOrderDecoder
 
     public static int orderTypeEncodingOffset()
     {
-        return 36;
+        return 28;
     }
 
     public static int orderTypeEncodingLength()
@@ -419,12 +368,12 @@ public final class CreateOrderDecoder
 
     public short orderTypeRaw()
     {
-        return ((short)(buffer.getByte(offset + 36) & 0xFF));
+        return ((short)(buffer.getByte(offset + 28) & 0xFF));
     }
 
     public OrderType orderType()
     {
-        return OrderType.get(((short)(buffer.getByte(offset + 36) & 0xFF)));
+        return OrderType.get(((short)(buffer.getByte(offset + 28) & 0xFF)));
     }
 
 
@@ -440,7 +389,7 @@ public final class CreateOrderDecoder
 
     public static int orderSideEncodingOffset()
     {
-        return 37;
+        return 29;
     }
 
     public static int orderSideEncodingLength()
@@ -460,12 +409,12 @@ public final class CreateOrderDecoder
 
     public short orderSideRaw()
     {
-        return ((short)(buffer.getByte(offset + 37) & 0xFF));
+        return ((short)(buffer.getByte(offset + 29) & 0xFF));
     }
 
     public OrderSide orderSide()
     {
-        return OrderSide.get(((short)(buffer.getByte(offset + 37) & 0xFF)));
+        return OrderSide.get(((short)(buffer.getByte(offset + 29) & 0xFF)));
     }
 
 
@@ -481,7 +430,7 @@ public final class CreateOrderDecoder
 
     public static int omsOrderIdEncodingOffset()
     {
-        return 38;
+        return 30;
     }
 
     public static int omsOrderIdEncodingLength()
@@ -516,7 +465,7 @@ public final class CreateOrderDecoder
 
     public long omsOrderId()
     {
-        return buffer.getLong(offset + 38, BYTE_ORDER);
+        return buffer.getLong(offset + 30, BYTE_ORDER);
     }
 
 
@@ -569,9 +518,6 @@ public final class CreateOrderDecoder
         builder.append('|');
         builder.append("quantity=");
         builder.append(this.quantity());
-        builder.append('|');
-        builder.append("totalPrice=");
-        builder.append(this.totalPrice());
         builder.append('|');
         builder.append("marketId=");
         builder.append(this.marketId());

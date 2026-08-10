@@ -202,7 +202,7 @@ public class EmbeddedClusterTest {
         long quantity = FixedPoint.fromDouble(1.0);
 
         // Send a limit BID order for BTC
-        UnsafeBuffer buffer = encodeCreateOrder(1001L, BTC_MARKET, true, "LIMIT", price, quantity, 0);
+        UnsafeBuffer buffer = encodeCreateOrder(1001L, BTC_MARKET, true, "LIMIT", price, quantity);
         offerToCluster(buffer, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
 
         // The order flows: SbeDemuxer -> Engine -> EventPublisher -> Disruptor
@@ -257,7 +257,7 @@ public class EmbeddedClusterTest {
         long quantity = FixedPoint.fromDouble(2.0);
 
         UnsafeBuffer askBuffer = encodeCreateOrder(
-                2001L, ETH_MARKET, false, "LIMIT", askPrice, quantity, 0);
+                2001L, ETH_MARKET, false, "LIMIT", askPrice, quantity);
         offerToCluster(askBuffer, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
 
         // The ask order will be placed on the book (no match yet);
@@ -269,7 +269,7 @@ public class EmbeddedClusterTest {
         egressMessages.clear();
 
         UnsafeBuffer bidBuffer = encodeCreateOrder(
-                2002L, ETH_MARKET, true, "LIMIT", askPrice, quantity, 0);
+                2002L, ETH_MARKET, true, "LIMIT", askPrice, quantity);
         offerToCluster(bidBuffer, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
 
         // The match happens synchronously in Engine.processCreate; trade events
@@ -332,7 +332,7 @@ public class EmbeddedClusterTest {
         long quantity = FixedPoint.fromDouble(0.5);
 
         UnsafeBuffer createBuffer = encodeCreateOrder(
-                3001L, BTC_MARKET, true, "LIMIT", price, quantity, 0);
+                3001L, BTC_MARKET, true, "LIMIT", price, quantity);
         offerToCluster(createBuffer, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
 
         // Wait for the NEW status, then capture the engine-assigned order ID
@@ -363,7 +363,7 @@ public class EmbeddedClusterTest {
         long btcQty = FixedPoint.fromDouble(0.1);
 
         UnsafeBuffer btcOrder = encodeCreateOrder(
-                4001L, BTC_MARKET, false, "LIMIT", btcPrice, btcQty, 0);
+                4001L, BTC_MARKET, false, "LIMIT", btcPrice, btcQty);
         offerToCluster(btcOrder, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
 
         // Place ASK order in SOL market (market 3)
@@ -371,7 +371,7 @@ public class EmbeddedClusterTest {
         long solQty = FixedPoint.fromDouble(10.0);
 
         UnsafeBuffer solOrder = encodeCreateOrder(
-                4002L, SOL_MARKET, false, "LIMIT", solPrice, solQty, 0);
+                4002L, SOL_MARKET, false, "LIMIT", solPrice, solQty);
         offerToCluster(solOrder, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
 
         // Wait for status updates from BOTH markets (content, not counts)
@@ -392,7 +392,7 @@ public class EmbeddedClusterTest {
         // Ensure the BTC book has a resting order (far from market, won't cross)
         long price = FixedPoint.fromDouble(120_000.0);
         long qty = FixedPoint.fromDouble(0.5);
-        UnsafeBuffer order = encodeCreateOrder(8001L, BTC_MARKET, false, "LIMIT", price, qty, 0);
+        UnsafeBuffer order = encodeCreateOrder(8001L, BTC_MARKET, false, "LIMIT", price, qty);
         offerToCluster(order, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
 
         // Let the resulting delta flush to the existing session first
@@ -465,15 +465,15 @@ public class EmbeddedClusterTest {
 
     /**
      * Encode a CreateOrder SBE message.
+     * v8: no totalPrice on the wire — a MARKET buy's budget rides in {@code price}.
      */
     private static UnsafeBuffer encodeCreateOrder(long userId, int marketId, boolean isBuy,
-                                                   String orderType, long price, long qty, long totalPrice) {
+                                                   String orderType, long price, long qty) {
         UnsafeBuffer buffer = new UnsafeBuffer(new byte[256]);
         createOrderEncoder.wrapAndApplyHeader(buffer, 0, headerEncoder);
         createOrderEncoder.userId(userId);
         createOrderEncoder.price(price);
         createOrderEncoder.quantity(qty);
-        createOrderEncoder.totalPrice(totalPrice);
         createOrderEncoder.marketId(marketId);
         createOrderEncoder.orderType(
                 "MARKET".equals(orderType) ? OrderType.MARKET :

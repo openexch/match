@@ -411,9 +411,11 @@ public class LoadGenerator {
         createOrderEncoder.wrapAndApplyHeader(buffer, 0, headerEncoder);
 
         createOrderEncoder.userId(order.userId);           // long
-        createOrderEncoder.price(order.price);             // long (fixed-point)
+        // SBE v8: no totalPrice on the wire — a MARKET buy's budget rides in the price
+        // field (LIMIT keeps its limit price; MARKET sells put 0 there, as before).
+        createOrderEncoder.price("MARKET".equals(order.orderType)
+            ? order.totalPrice : order.price);             // long (fixed-point)
         createOrderEncoder.quantity(order.quantity);       // long (fixed-point)
-        createOrderEncoder.totalPrice(order.totalPrice);   // long (fixed-point)
         createOrderEncoder.marketId(order.marketId);       // int
         createOrderEncoder.orderType(toOrderType(order.orderType));
         createOrderEncoder.orderSide(toOrderSide(order.orderSide));
