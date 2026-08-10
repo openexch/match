@@ -48,6 +48,8 @@ public class LoadGenerator {
     private final Long2LongHashMap inFlight = new Long2LongHashMap(Long.MIN_VALUE);
     private final boolean ultraLowLatency;
     private final int warmupSeconds;
+    /** --interval-log: once per second, one ILOG line per latency track (spike forensics). */
+    private final boolean intervalLog;
     private final MediaDriver mediaDriver;
     private final AeronCluster cluster;
     private final ExecutorService executorService;
@@ -73,20 +75,22 @@ public class LoadGenerator {
     private final boolean useUI;
 
     public LoadGenerator(LoadConfig config) throws Exception {
-        this(config, true, false, 0);
+        this(config, true, false, 0, false);
     }
 
     public LoadGenerator(LoadConfig config, boolean useUI) throws Exception {
-        this(config, useUI, false, 0);
+        this(config, useUI, false, 0, false);
     }
 
-    public LoadGenerator(LoadConfig config, boolean useUI, boolean ultraLowLatency, int warmupSeconds) throws Exception {
+    public LoadGenerator(LoadConfig config, boolean useUI, boolean ultraLowLatency, int warmupSeconds,
+                         boolean intervalLog) throws Exception {
         this.config = config;
         this.metrics = new MetricsCollector();
         this.orderQueue = new ManyToOneConcurrentArrayQueue<>(QUEUE_CAPACITY);
         this.useUI = useUI;
         this.ultraLowLatency = ultraLowLatency;
         this.warmupSeconds = warmupSeconds;
+        this.intervalLog = intervalLog;
         this.ui = useUI ? new LoadTestUI(config) : null;
 
         final boolean externalDriver = config.getAeronDir() != null;
@@ -218,6 +222,17 @@ public class LoadGenerator {
             this::updateMetrics,
             updateIntervalMs, updateIntervalMs, TimeUnit.MILLISECONDS
         );
+
+        // Optional per-second ILOG lines for benchmark forensics (align latency spikes with
+        // iostat/GC/bridge series). Same single-thread scheduler: both tasks are sub-ms, and
+        // sharing the thread means an ILOG tick never interleaves mid-snapshot.
+        if (intervalLog) {
+            metrics.enableIntervalLogging();
+            metricsReporter.scheduleAtFixedRate(
+                metrics::printIntervalLog,
+                1000, 1000, TimeUnit.MILLISECONDS
+            );
+        }
 
         // Start single cluster duty cycle thread
         clusterDutyCycleThread = new Thread(this::clusterDutyCycle, "cluster-duty-cycle");
@@ -554,6 +569,7 @@ public class LoadGenerator {
             boolean useUI = !hasFlag(args, "--no-ui");
             boolean ultraLowLatency = hasFlag(args, "--ultra");
             int warmupSeconds = getIntFlag(args, "--warmup", 0);
+            boolean intervalLog = hasFlag(args, "--interval-log");
 
             // Ultra-low latency mode implies single thread for minimum contention
             if (ultraLowLatency && config.getWorkerThreads() > 1) {
@@ -568,7 +584,7 @@ public class LoadGenerator {
                     .build();
             }
 
-            LoadGenerator generator = new LoadGenerator(config, useUI, ultraLowLatency, warmupSeconds);
+            LoadGenerator generator = new LoadGenerator(config, useUI, ultraLowLatency, warmupSeconds, intervalLog);
 
             Runtime.getRuntime().addShutdownHook(new Thread(generator::stop));
 
@@ -630,6 +646,7 @@ public class LoadGenerator {
                     break;
                 case "--no-ui":
                 case "--ultra":
+                case "--interval-log":
                     // Handled separately
                     break;
                 case "--warmup":
@@ -662,6 +679,7 @@ public class LoadGenerator {
         System.out.println("  --no-ui               Disable interactive UI (use text output)");
         System.out.println("  --ultra               Ultra-low latency mode (single thread, small batches)");
         System.out.println("  --warmup <n>          JIT warmup seconds at the START of --duration, metrics discarded (default: 0)");
+        System.out.println("  --interval-log        Print one ILOG line per latency track every second (that second's values, for spike forensics)");
         System.out.println("  --help                Show this help message");
         System.out.println();
         System.out.println("Examples:");

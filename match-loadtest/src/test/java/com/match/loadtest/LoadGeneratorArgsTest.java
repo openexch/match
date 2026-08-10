@@ -33,4 +33,19 @@ public class LoadGeneratorArgsTest {
 
         assertNull("null means launch the embedded driver, exactly as before", config.getAeronDir());
     }
+
+    @Test
+    public void intervalLogFlagIsAcceptedAlongsideTheBenchFlags() {
+        // The parse switch exits the JVM on unknown flags, so a dropped case here kills the
+        // whole bench invocation, not just the ILOG lines.
+        final LoadConfig config = LoadGenerator.parseArgs(new String[] {
+            "--rate", "1000",
+            "--interval-log",
+            "--no-ui",  // the bench path runs exactly this combination
+            "--aeron-dir", "/dev/shm/aeron-bench",
+        });
+
+        assertEquals("neighbouring flags must still parse", 1000, config.getTargetOrdersPerSecond());
+        assertEquals("/dev/shm/aeron-bench", config.getAeronDir());
+    }
 }
