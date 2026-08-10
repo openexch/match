@@ -101,7 +101,7 @@ public class Engine {
 
     /**
      * Resolve the matching-engine implementation flag.
-     * Precedence: -Dmatch.engine.impl, then MATCH_ENGINE_IMPL env var, default "direct".
+     * Precedence: -Dmatch.engine.impl, then MATCH_ENGINE_IMPL env var, default "array".
      */
     private static String resolveEngineImpl() {
         String p = System.getProperty("match.engine.impl");
