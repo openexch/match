@@ -135,11 +135,11 @@ jobs:
       - name: Package
         run: |
           set -euo pipefail
-          # Only the module this job publishes, and its in-reactor dependencies.
-          # A full reactor build pulls in modules that need artifacts the publish
-          # job has no reason to fetch (assets-bridge wants com.match:match-common,
-          # which the build job installs from a second checkout), and building them
-          # to throw them away is work either way.
+          # Only the modules this job publishes, and their in-reactor
+          # dependencies. A full reactor build would also build what this job
+          # never ships (match-gateway), and building it to throw it away is
+          # work either way. (The assets repo's twin of this step has an extra
+          # cross-repo install here; match needs none.)
           mvn -B -s .mvn-settings.xml clean package -pl "${JARS// /,}" -am -DskipTests \
             -DbuildSha=$(git rev-parse --short HEAD)
         env:
