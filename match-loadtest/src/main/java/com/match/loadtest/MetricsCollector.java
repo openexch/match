@@ -3,6 +3,10 @@ package com.match.loadtest;
 
 import org.HdrHistogram.Histogram;
 import org.HdrHistogram.SingleWriterRecorder;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -13,6 +17,21 @@ public class MetricsCollector {
 
     /** Below this share of sent orders the committed percentiles are a biased sample, not a result. */
     private static final double ACK_COVERAGE_MIN_PCT = 99.0;
+
+    /**
+     * Track names on the ILOG lines, shared with the hgrm artifacts
+     * (base-ingress.hgrm / base-committed.hgrm) so forensics tooling sees one vocabulary.
+     */
+    static final String TRACK_INGRESS = "ingress";
+    static final String TRACK_COMMITTED = "committed";
+
+    /**
+     * ILOG timestamp: UTC, always exactly three millisecond digits. NOT Instant.toString(),
+     * which drops trailing zero millis and would change the line shape once a second, breaking
+     * the single awk that parses this format across repos.
+     */
+    private static final DateTimeFormatter ILOG_TS =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC);
 
     // Counters
     private final LongAdder successCount = new LongAdder();
@@ -111,6 +130,56 @@ public class MetricsCollector {
 
     public LatencyStats getLatencyStats() {
         return latencyTracker.getStats();
+    }
+
+    /**
+     * Turn on per-second interval capture on both latency tracks (--interval-log).
+     * Off by default: without it the trackers keep their exact pre-existing behaviour.
+     */
+    public void enableIntervalLogging() {
+        latencyTracker.enableIntervalCapture();
+        ackLatency.enableIntervalCapture();
+    }
+
+    // Package-private per-track drains so tests can assert interval semantics directly.
+    IntervalStats takeIngressInterval() {
+        return latencyTracker.takeInterval();
+    }
+
+    IntervalStats takeCommittedInterval() {
+        return ackLatency.takeInterval();
+    }
+
+    /**
+     * One ILOG line per latency track for the second that just ended. Interval values only
+     * (not cumulative); printed even when n=0 so the shape is constant for the awk that
+     * aligns these against iostat/GC/bridge time series. Runs on the reporter thread —
+     * never on the duty thread.
+     */
+    public void printIntervalLog() {
+        final long epochMs = System.currentTimeMillis();
+        final IntervalStats ingress = takeIngressInterval();
+        final IntervalStats committed = takeCommittedInterval();
+        System.out.println(formatIntervalLine(epochMs, TRACK_INGRESS, ingress));
+        System.out.println(formatIntervalLine(epochMs, TRACK_COMMITTED, committed));
+    }
+
+    /**
+     * Pure formatter for one ILOG line (no trailing newline). The format is shared with a
+     * sibling repo — a single awk must parse both — so it is asserted verbatim in tests.
+     * Locale.ROOT: a comma decimal separator from the platform locale would break the parser.
+     * {@code epochMs} is the interval END; the caller stamps one value across all tracks of a tick.
+     */
+    static String formatIntervalLine(final long epochMs, final String track, final IntervalStats s) {
+        return String.format(Locale.ROOT,
+            "ILOG epoch_ms=%d ts=%s track=%s n=%d p50_ms=%.2f p99_ms=%.2f max_ms=%.2f",
+            epochMs,
+            ILOG_TS.format(Instant.ofEpochMilli(epochMs)),
+            track,
+            s.count,
+            s.p50 / 1e6,
+            s.p99 / 1e6,
+            s.max / 1e6);
     }
 
     /**
@@ -262,9 +331,9 @@ public class MetricsCollector {
         }
         final String base = prop.endsWith(".hgrm") ? prop.substring(0, prop.length() - ".hgrm".length()) : prop;
 
-        writeHgrm(base + "-ingress.hgrm", latencyTracker);
+        writeHgrm(base + "-" + TRACK_INGRESS + ".hgrm", latencyTracker);
         if (haveAcks) {
-            writeHgrm(base + "-committed.hgrm", ackLatency);
+            writeHgrm(base + "-" + TRACK_COMMITTED + ".hgrm", ackLatency);
         } else {
             System.out.println("  (committed hgrm NOT written: no acks matched)");
         }
@@ -295,6 +364,13 @@ public class MetricsCollector {
         private final SingleWriterRecorder recorder = new SingleWriterRecorder(3);
         private Histogram cumulative = new Histogram(3);
         private Histogram recycled;
+        /**
+         * Per-interval accumulator for --interval-log; null means capture is off (the default,
+         * with zero behaviour change). Fed on EVERY flip, no matter who triggered it: under the
+         * UI's 100ms getStats cadence the recorder is drained many times per ILOG tick, and any
+         * flip that bypassed this histogram would silently drop those samples from the interval.
+         */
+        private Histogram intervalAccum;
 
         public void record(long latencyNanos) {
             if (latencyNanos >= 0) {
@@ -306,12 +382,49 @@ public class MetricsCollector {
             recorder.reset();
             cumulative.reset();
             recycled = null;
+            if (intervalAccum != null) {
+                intervalAccum.reset(); // reset, not null out: capture stays enabled across warmup
+            }
+        }
+
+        /** Lazily switch on interval capture (idempotent). */
+        public synchronized void enableIntervalCapture() {
+            if (intervalAccum == null) {
+                intervalAccum = new Histogram(3);
+            }
+        }
+
+        /** The single drain point: recorder -> cumulative (and the interval accumulator when on). */
+        private void flip() {
+            recycled = recorder.getIntervalHistogram(recycled);
+            cumulative.add(recycled);
+            if (intervalAccum != null) {
+                intervalAccum.add(recycled);
+            }
+        }
+
+        /**
+         * Snapshot and clear the current interval. Values are nanoseconds for the samples
+         * recorded since the previous take (or enable/reset) only. One small allocation per
+         * call on the reporter thread; the duty-thread record() path is untouched.
+         */
+        public synchronized IntervalStats takeInterval() {
+            flip();
+            if (intervalAccum == null) {
+                return new IntervalStats(0, 0, 0, 0);
+            }
+            final IntervalStats stats = new IntervalStats(
+                    intervalAccum.getTotalCount(),
+                    intervalAccum.getValueAtPercentile(50.0),
+                    intervalAccum.getValueAtPercentile(99.0),
+                    intervalAccum.getMaxValue());
+            intervalAccum.reset();
+            return stats;
         }
 
         /** Cumulative snapshot. Cheap: a phaser flip + histogram add, no sort, no 8MB copy. */
         public synchronized LatencyStats getStats() {
-            recycled = recorder.getIntervalHistogram(recycled);
-            cumulative.add(recycled);
+            flip();
             if (cumulative.getTotalCount() == 0) {
                 return new LatencyStats(0, 0, 0, 0, 0, 0, 0, 0);
             }
@@ -328,9 +441,26 @@ public class MetricsCollector {
 
         /** Full distribution for the raw-data artifact (benchmark-as-code). */
         public synchronized void writeHgrm(final java.io.PrintStream out) {
-            recycled = recorder.getIntervalHistogram(recycled);
-            cumulative.add(recycled);
+            flip();
             cumulative.outputPercentileDistribution(out, 1000.0); // microseconds
+        }
+    }
+
+    /**
+     * One interval's latency snapshot in nanoseconds: that second's samples only, not
+     * cumulative. All-zero when the interval recorded nothing (n=0 still prints).
+     */
+    public static class IntervalStats {
+        public final long count;
+        public final long p50;
+        public final long p99;
+        public final long max;
+
+        public IntervalStats(long count, long p50, long p99, long max) {
+            this.count = count;
+            this.p50 = p50;
+            this.p99 = p99;
+            this.max = max;
         }
     }
 
