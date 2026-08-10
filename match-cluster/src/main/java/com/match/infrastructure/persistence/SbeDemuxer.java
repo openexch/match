@@ -117,11 +117,22 @@ public class SbeDemuxer {
         // Direct primitive access - NO string parsing, NO allocations
         createCommand.reset();
         createCommand.setUserId(createOrderDecoder.userId());
-        createCommand.setPrice(createOrderDecoder.price());
         createCommand.setQuantity(createOrderDecoder.quantity());
-        createCommand.setTotalPrice(createOrderDecoder.totalPrice());
         createCommand.setOrderSide(toDomainOrderSide(createOrderDecoder.orderSide()));
-        createCommand.setOrderType(toDomainOrderType(createOrderDecoder.orderType()));
+        final com.match.domain.enums.OrderType orderType = toDomainOrderType(createOrderDecoder.orderType());
+        createCommand.setOrderType(orderType);
+        // SBE v8: the wire has no totalPrice — a MARKET buy's spend budget rides in the
+        // price field. Internally the budget stays on the command's totalPrice field
+        // (Engine reads cmd.getTotalPrice() for MARKET buys), and the command's price
+        // stays 0 for MARKET so status egress publishes price=0 exactly as before v8.
+        final long price = createOrderDecoder.price();
+        if (orderType == com.match.domain.enums.OrderType.MARKET) {
+            createCommand.setPrice(0L);
+            createCommand.setTotalPrice(price);
+        } else {
+            createCommand.setPrice(price);
+            createCommand.setTotalPrice(0L);
+        }
         createCommand.setOmsOrderId(createOrderDecoder.omsOrderId());
 
         int marketId = createOrderDecoder.marketId();

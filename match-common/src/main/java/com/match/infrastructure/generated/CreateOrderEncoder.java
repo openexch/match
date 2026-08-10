@@ -10,10 +10,10 @@ import org.agrona.MutableDirectBuffer;
 @SuppressWarnings("all")
 public final class CreateOrderEncoder
 {
-    public static final int BLOCK_LENGTH = 46;
+    public static final int BLOCK_LENGTH = 38;
     public static final int TEMPLATE_ID = 1;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 7;
+    public static final int SCHEMA_VERSION = 8;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -253,58 +253,6 @@ public final class CreateOrderEncoder
     }
 
 
-    public static int totalPriceId()
-    {
-        return 4;
-    }
-
-    public static int totalPriceSinceVersion()
-    {
-        return 0;
-    }
-
-    public static int totalPriceEncodingOffset()
-    {
-        return 24;
-    }
-
-    public static int totalPriceEncodingLength()
-    {
-        return 8;
-    }
-
-    public static String totalPriceMetaAttribute(final MetaAttribute metaAttribute)
-    {
-        if (MetaAttribute.PRESENCE == metaAttribute)
-        {
-            return "required";
-        }
-
-        return "";
-    }
-
-    public static long totalPriceNullValue()
-    {
-        return -9223372036854775808L;
-    }
-
-    public static long totalPriceMinValue()
-    {
-        return -9223372036854775807L;
-    }
-
-    public static long totalPriceMaxValue()
-    {
-        return 9223372036854775807L;
-    }
-
-    public CreateOrderEncoder totalPrice(final long value)
-    {
-        buffer.putLong(offset + 24, value, BYTE_ORDER);
-        return this;
-    }
-
-
     public static int marketIdId()
     {
         return 5;
@@ -317,7 +265,7 @@ public final class CreateOrderEncoder
 
     public static int marketIdEncodingOffset()
     {
-        return 32;
+        return 24;
     }
 
     public static int marketIdEncodingLength()
@@ -352,7 +300,7 @@ public final class CreateOrderEncoder
 
     public CreateOrderEncoder marketId(final int value)
     {
-        buffer.putInt(offset + 32, value, BYTE_ORDER);
+        buffer.putInt(offset + 24, value, BYTE_ORDER);
         return this;
     }
 
@@ -369,7 +317,7 @@ public final class CreateOrderEncoder
 
     public static int orderTypeEncodingOffset()
     {
-        return 36;
+        return 28;
     }
 
     public static int orderTypeEncodingLength()
@@ -389,7 +337,7 @@ public final class CreateOrderEncoder
 
     public CreateOrderEncoder orderType(final OrderType value)
     {
-        buffer.putByte(offset + 36, (byte)value.value());
+        buffer.putByte(offset + 28, (byte)value.value());
         return this;
     }
 
@@ -405,7 +353,7 @@ public final class CreateOrderEncoder
 
     public static int orderSideEncodingOffset()
     {
-        return 37;
+        return 29;
     }
 
     public static int orderSideEncodingLength()
@@ -425,7 +373,7 @@ public final class CreateOrderEncoder
 
     public CreateOrderEncoder orderSide(final OrderSide value)
     {
-        buffer.putByte(offset + 37, (byte)value.value());
+        buffer.putByte(offset + 29, (byte)value.value());
         return this;
     }
 
@@ -441,7 +389,7 @@ public final class CreateOrderEncoder
 
     public static int omsOrderIdEncodingOffset()
     {
-        return 38;
+        return 30;
     }
 
     public static int omsOrderIdEncodingLength()
@@ -476,7 +424,7 @@ public final class CreateOrderEncoder
 
     public CreateOrderEncoder omsOrderId(final long value)
     {
-        buffer.putLong(offset + 38, value, BYTE_ORDER);
+        buffer.putLong(offset + 30, value, BYTE_ORDER);
         return this;
     }
 

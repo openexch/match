@@ -13,7 +13,7 @@ public final class OrderStatusBatchDecoder
     public static final int BLOCK_LENGTH = 12;
     public static final int TEMPLATE_ID = 24;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 7;
+    public static final int SCHEMA_VERSION = 8;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -313,7 +313,7 @@ public final class OrderStatusBatchDecoder
 
         public static int sbeBlockLength()
         {
-            return 75;
+            return 67;
         }
 
         public int actingBlockLength()
@@ -683,57 +683,6 @@ public final class OrderStatusBatchDecoder
         }
 
 
-        public static int timestampId()
-        {
-            return 8;
-        }
-
-        public static int timestampSinceVersion()
-        {
-            return 0;
-        }
-
-        public static int timestampEncodingOffset()
-        {
-            return 42;
-        }
-
-        public static int timestampEncodingLength()
-        {
-            return 8;
-        }
-
-        public static String timestampMetaAttribute(final MetaAttribute metaAttribute)
-        {
-            if (MetaAttribute.PRESENCE == metaAttribute)
-            {
-                return "required";
-            }
-
-            return "";
-        }
-
-        public static long timestampNullValue()
-        {
-            return -9223372036854775808L;
-        }
-
-        public static long timestampMinValue()
-        {
-            return -9223372036854775807L;
-        }
-
-        public static long timestampMaxValue()
-        {
-            return 9223372036854775807L;
-        }
-
-        public long timestamp()
-        {
-            return buffer.getLong(offset + 42, BYTE_ORDER);
-        }
-
-
         public static int omsOrderIdId()
         {
             return 9;
@@ -746,7 +695,7 @@ public final class OrderStatusBatchDecoder
 
         public static int omsOrderIdEncodingOffset()
         {
-            return 50;
+            return 42;
         }
 
         public static int omsOrderIdEncodingLength()
@@ -781,7 +730,7 @@ public final class OrderStatusBatchDecoder
 
         public long omsOrderId()
         {
-            return buffer.getLong(offset + 50, BYTE_ORDER);
+            return buffer.getLong(offset + 42, BYTE_ORDER);
         }
 
 
@@ -797,7 +746,7 @@ public final class OrderStatusBatchDecoder
 
         public static int statusSeqEncodingOffset()
         {
-            return 58;
+            return 50;
         }
 
         public static int statusSeqEncodingLength()
@@ -837,7 +786,7 @@ public final class OrderStatusBatchDecoder
                 return -9223372036854775808L;
             }
 
-            return buffer.getLong(offset + 58, BYTE_ORDER);
+            return buffer.getLong(offset + 50, BYTE_ORDER);
         }
 
 
@@ -853,7 +802,7 @@ public final class OrderStatusBatchDecoder
 
         public static int rejectReasonEncodingOffset()
         {
-            return 66;
+            return 58;
         }
 
         public static int rejectReasonEncodingLength()
@@ -893,7 +842,7 @@ public final class OrderStatusBatchDecoder
                 return (short)255;
             }
 
-            return ((short)(buffer.getByte(offset + 66) & 0xFF));
+            return ((short)(buffer.getByte(offset + 58) & 0xFF));
         }
 
 
@@ -909,7 +858,7 @@ public final class OrderStatusBatchDecoder
 
         public static int egressSeqEncodingOffset()
         {
-            return 67;
+            return 59;
         }
 
         public static int egressSeqEncodingLength()
@@ -949,7 +898,7 @@ public final class OrderStatusBatchDecoder
                 return -9223372036854775808L;
             }
 
-            return buffer.getLong(offset + 67, BYTE_ORDER);
+            return buffer.getLong(offset + 59, BYTE_ORDER);
         }
 
 
@@ -981,9 +930,6 @@ public final class OrderStatusBatchDecoder
             builder.append('|');
             builder.append("side=");
             builder.append(this.side());
-            builder.append('|');
-            builder.append("timestamp=");
-            builder.append(this.timestamp());
             builder.append('|');
             builder.append("omsOrderId=");
             builder.append(this.omsOrderId());

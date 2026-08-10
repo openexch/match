@@ -10,10 +10,10 @@ import org.agrona.DirectBuffer;
 @SuppressWarnings("all")
 public final class ClusterHeartbeatDecoder
 {
-    public static final int BLOCK_LENGTH = 16;
+    public static final int BLOCK_LENGTH = 9;
     public static final int TEMPLATE_ID = 21;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 7;
+    public static final int SCHEMA_VERSION = 8;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -149,7 +149,7 @@ public final class ClusterHeartbeatDecoder
 
     public static int nodeIdEncodingLength()
     {
-        return 8;
+        return 1;
     }
 
     public static String nodeIdMetaAttribute(final MetaAttribute metaAttribute)
@@ -162,24 +162,24 @@ public final class ClusterHeartbeatDecoder
         return "";
     }
 
-    public static long nodeIdNullValue()
+    public static short nodeIdNullValue()
     {
-        return -9223372036854775808L;
+        return (short)255;
     }
 
-    public static long nodeIdMinValue()
+    public static short nodeIdMinValue()
     {
-        return -9223372036854775807L;
+        return (short)0;
     }
 
-    public static long nodeIdMaxValue()
+    public static short nodeIdMaxValue()
     {
-        return 9223372036854775807L;
+        return (short)254;
     }
 
-    public long nodeId()
+    public short nodeId()
     {
-        return buffer.getLong(offset + 0, BYTE_ORDER);
+        return ((short)(buffer.getByte(offset + 0) & 0xFF));
     }
 
 
@@ -195,7 +195,7 @@ public final class ClusterHeartbeatDecoder
 
     public static int timestampEncodingOffset()
     {
-        return 8;
+        return 1;
     }
 
     public static int timestampEncodingLength()
@@ -230,7 +230,7 @@ public final class ClusterHeartbeatDecoder
 
     public long timestamp()
     {
-        return buffer.getLong(offset + 8, BYTE_ORDER);
+        return buffer.getLong(offset + 1, BYTE_ORDER);
     }
 
 

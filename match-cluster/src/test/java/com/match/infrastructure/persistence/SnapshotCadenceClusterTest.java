@@ -211,7 +211,6 @@ public class SnapshotCadenceClusterTest {
         createOrderEncoder.userId(userId);
         createOrderEncoder.price(FixedPoint.fromDouble(100_000.0));
         createOrderEncoder.quantity(FixedPoint.fromDouble(0.001));
-        createOrderEncoder.totalPrice(0);
         createOrderEncoder.marketId(BTC_MARKET);
         createOrderEncoder.orderType(OrderType.LIMIT);
         createOrderEncoder.orderSide(OrderSide.BID);

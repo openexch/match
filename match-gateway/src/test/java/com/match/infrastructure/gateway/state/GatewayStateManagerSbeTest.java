@@ -727,7 +727,6 @@ public class GatewayStateManagerSbeTest {
                 .remainingQty(fp(1.0))
                 .filledQty(0)
                 .side(OrderSide.BID)
-                .timestamp(timestamp)
                 .omsOrderId(9000 + i)
                 .statusSeq(i + 1);
         }

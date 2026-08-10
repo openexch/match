@@ -37,7 +37,9 @@ public class MarketOrderHandler implements OrderBookSide.OrderTypeSideHandler {
     }
 
     /**
-     * Market buy: spend totalPrice to buy as much as possible
+     * Market buy: spend the buy budget (Order.totalPrice) to buy as much as possible.
+     * Since SBE v8 the wire carries the budget in CreateOrder.price; SbeDemuxer feeds
+     * it into the command/order totalPrice field, so nothing changes below here.
      */
     private void handleMarketBuy(OrderBookSide side, Order taker, List<OrderMatch> matches) {
         long remainingTotalPrice = taker.getTotalPrice();

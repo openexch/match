@@ -119,7 +119,6 @@ public class MarketPublisher implements MarketEventHandler {
         long remainingQty;
         long filledQty;
         boolean isBuy;
-        long timestamp;
         long omsOrderId;
         long statusSeq;
         int rejectReason; // OrderRejectReason code (NONE=0 on non-rejects); carried on egress from SBE v6 (match#75)
@@ -625,7 +624,6 @@ public class MarketPublisher implements MarketEventHandler {
         entry.remainingQty = event.getRemainingQty();
         entry.filledQty = event.getFilledQty();
         entry.isBuy = event.isOrderIsBuy();
-        entry.timestamp = event.getTimestamp();
         entry.omsOrderId = event.getOmsOrderId();
         entry.statusSeq = seq;
         entry.rejectReason = event.getRejectReason();
@@ -981,7 +979,8 @@ public class MarketPublisher implements MarketEventHandler {
                 .remainingQty(entry.remainingQty)
                 .filledQty(entry.filledQty)
                 .side(entry.isBuy ? OrderSide.BID : OrderSide.ASK)
-                .timestamp(entry.timestamp)
+                // v8: no per-entry timestamp on the wire — consumers use the
+                // message-level timestamp above.
                 .omsOrderId(entry.omsOrderId)
                 .statusSeq(entry.statusSeq)
                 .rejectReason((short) entry.rejectReason)
