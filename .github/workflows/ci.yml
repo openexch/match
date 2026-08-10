@@ -398,7 +398,7 @@ jobs:
             fi
             gh pr create --repo "openexch/${REPO}" --base main --head "$BRANCH" \
               --title "build: match-common ${V}" \
-              --body "Automated wire-artifact bump from openexch/match@${GITHUB_SHA::7}. CI green = the new wire decodes; merge."
+              --body "Automated wire-artifact bump from openexch/match@${GITHUB_SHA::7}. CI green = the new wire decodes. Commits are unsigned BY DESIGN — signing keys never leave the operator's vault, so automation cannot sign. Where the base branch requires signatures: re-sign locally, then merge (the operator tooling squashes this PR into one signed commit and force-pushes; auto-merge finishes the rest)."
             gh pr merge --repo "openexch/${REPO}" --auto --squash "$BRANCH" \
               || echo "${REPO}: auto-merge unavailable; PR stays open for a human"
           done
