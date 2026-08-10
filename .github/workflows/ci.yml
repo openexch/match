@@ -104,7 +104,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
+      packages: write # deploys match-common (the cross-repo wire artifact) to GitHub Packages
       id-token: write # OIDC: no long-lived AWS keys in this repo
     env:
       BUCKET: openexch-build-artifacts-675715936685
@@ -321,3 +321,84 @@ jobs:
         env:
           DEST: ${{ steps.dest.outputs.prefix }}
         run: echo "published s3://${BUCKET}/${DEST}"
+
+      # ---- cross-repo wire artifact ----
+      # assets and oms consume com.match:match-common. Until now they resolved it by
+      # checking out match at FLOATING main and mvn-installing a permanently-static
+      # "1.0" into ~/.m2 — a mutable coordinate whose bytes change under every
+      # consumer silently (and whose stale local copies decode the wire wrongly with
+      # zero errors). From here every main push deploys an IMMUTABLE pinned version,
+      # 1.0.<utcstamp>.g<sha>, to GitHub Packages; consumers pin it in their poms.
+      # Runs after the S3 steps so a Packages failure cannot block the box artifact;
+      # it still fails the job loudly (a wire artifact that silently did not publish
+      # is how consumers drift).
+      - name: Deploy match-common to GitHub Packages
+        id: wire
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          V="1.0.$(date -u +%Y%m%d%H%M%S).g${GITHUB_SHA::7}"
+          # Rewrite the reactor version in CI's throwaway checkout only; nothing is committed.
+          mvn -B -q org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+            -DnewVersion="$V" -DgenerateBackupPoms=false
+          # ".," so the parent pom deploys too: match-common's pom references it, and a
+          # consumer resolving the module needs the parent resolvable as well.
+          mvn -B -s .mvn-settings.xml deploy -pl .,match-common -am -DskipTests \
+            -DaltDeploymentRepository=github::https://maven.pkg.github.com/openexch/match
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "published com.match:match-common:$V"
+
+      # Consumers must MOVE to the new version, and no human remembers that reliably:
+      # open the bump PRs from here. Commits go through the contents API so GitHub
+      # signs them (both consumer repos require signed commits). Needs a cross-repo
+      # fine-grained PAT in the CONSUMER_BUMP_TOKEN secret; until the secret exists
+      # this step skips and says so. continue-on-error: a failed bump must not
+      # unpublish anything — it shows yellow and the next push retries.
+      - name: Open consumer bump PRs
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.CONSUMER_BUMP_TOKEN }}
+          V: ${{ steps.wire.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "CONSUMER_BUMP_TOKEN not set; skipping consumer bump PRs (pins go stale until it exists)."
+            exit 0
+          fi
+          for REPO in assets oms; do
+            BRANCH="bump/match-common-${V}"
+            BASE=$(gh api "repos/openexch/${REPO}/git/ref/heads/main" --jq .object.sha)
+            gh api -X POST "repos/openexch/${REPO}/git/refs" \
+              -f ref="refs/heads/${BRANCH}" -f sha="$BASE" >/dev/null
+            # pom.xml: swap the <match.version> property in place.
+            CONTENT=$(gh api "repos/openexch/${REPO}/contents/pom.xml?ref=${BRANCH}" --jq .content | base64 -d)
+            NEW=$(printf '%s' "$CONTENT" \
+              | sed -E "s|(<match.version>)[^<]+(</match.version>)|\1${V}\2|")
+            if [ "$CONTENT" = "$NEW" ]; then
+              echo "${REPO}: no <match.version> property found; skipping"; continue
+            fi
+            SHA=$(gh api "repos/openexch/${REPO}/contents/pom.xml?ref=${BRANCH}" --jq .sha)
+            gh api -X PUT "repos/openexch/${REPO}/contents/pom.xml" \
+              -f message="build: match-common ${V}" \
+              -f content="$(printf '%s' "$NEW" | base64 -w0)" \
+              -f sha="$SHA" -f branch="$BRANCH" >/dev/null
+            # oms also records the producing sha for its e2e checkout pin.
+            if [ "$REPO" = "oms" ]; then
+              LSHA=$(gh api "repos/openexch/oms/contents/producers.lock?ref=${BRANCH}" --jq .sha 2>/dev/null || true)
+              if [ -n "$LSHA" ]; then
+                LOCK=$(gh api "repos/openexch/oms/contents/producers.lock?ref=${BRANCH}" --jq .content | base64 -d \
+                  | sed -E "s|^match=.*|match=${GITHUB_SHA}|")
+                gh api -X PUT "repos/openexch/oms/contents/producers.lock" \
+                  -f message="build: producers.lock match=${GITHUB_SHA::7}" \
+                  -f content="$(printf '%s' "$LOCK" | base64 -w0)" \
+                  -f sha="$LSHA" -f branch="$BRANCH" >/dev/null
+              fi
+            fi
+            gh pr create --repo "openexch/${REPO}" --base main --head "$BRANCH" \
+              --title "build: match-common ${V}" \
+              --body "Automated wire-artifact bump from openexch/match@${GITHUB_SHA::7}. CI green = the new wire decodes; merge."
+            gh pr merge --repo "openexch/${REPO}" --auto --squash "$BRANCH" \
+              || echo "${REPO}: auto-merge unavailable; PR stays open for a human"
+          done
