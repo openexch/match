@@ -33,17 +33,26 @@ public final class MarketDataPersistence implements AutoCloseable {
     }
 
     /**
-     * Build and start the persistence layer, or return null when disabled by
-     * environment (no MARKET_PG_PASSWORD, or MARKET_PG_ENABLED=false).
-     * Never throws and never blocks on a dead database.
+     * Build and start the persistence layer. Returns null ONLY when persistence was
+     * explicitly declared off with {@code MARKET_PG_ENABLED=false}; every other
+     * incomplete or broken configuration (missing password, unreadable password
+     * file, unreachable database, failed schema) THROWS and takes the gateway down
+     * with it. A market gateway that quietly holds weeks of candles in memory is a
+     * chart wipe scheduled for its next restart — misconfiguration must die at
+     * boot, where it is one log line instead of a data loss.
      */
     public static MarketDataPersistence startOrNull(GatewayStateManager stateManager) {
         MarketDataDbConfig cfg = MarketDataDbConfig.fromEnv();
         if (!cfg.enabled()) {
-            System.out.println("[market-pg] persistence disabled (no MARKET_PG_PASSWORD or MARKET_PG_ENABLED=false)");
+            System.out.println("[market-pg] persistence DISABLED by explicit MARKET_PG_ENABLED=false"
+                    + " (declared configuration: in-memory only, charts do not survive restarts)");
             return null;
         }
         MarketDataDb db = MarketDataDb.create(cfg);
+        if (!db.ensureSchema()) {
+            throw new IllegalStateException("market-data schema bootstrap failed at boot — refusing"
+                    + " to start on a half-configured database (see the [market-pg] lines above)");
+        }
         TimescaleReader reader = new TimescaleReader(db);
         TradeWriter writer = new TradeWriter(db);
         MarketDataReadService reads = new MarketDataReadService(db, reader);

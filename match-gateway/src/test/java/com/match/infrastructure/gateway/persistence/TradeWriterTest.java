@@ -27,7 +27,7 @@ public class TradeWriterTest {
     @Before
     public void setUp() {
         // Pool is never connected in these tests (initializationFailTimeout=-1)
-        db = MarketDataDb.create(new MarketDataDbConfig(
+        db = MarketDataDb.createLazy(new MarketDataDbConfig(
                 "jdbc:postgresql://127.0.0.1:1/never", "none", "none", true));
     }
 

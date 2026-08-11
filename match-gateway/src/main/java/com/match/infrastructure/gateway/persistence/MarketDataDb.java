@@ -16,10 +16,12 @@ import java.util.function.IntSupplier;
 
 /**
  * Connection pool + schema bootstrap + availability tracking for the
- * market-data TimescaleDB. The pool is constructed lazily-tolerant
- * (initializationFailTimeout = -1): a dead Postgres never fails or delays
- * gateway boot — uptime is priority 1. Availability transitions are logged
- * once per flip, never per failure.
+ * market-data TimescaleDB. BOOT is strict ({@link #create}: the first
+ * connection must succeed or the gateway refuses to start — no silent
+ * in-memory downgrade); RUNTIME is tolerant (an established gateway rides a
+ * database blip via {@link #markDown}/{@link #markUp}, loud and
+ * health-visible). Availability transitions are logged once per flip, never
+ * per failure.
  */
 public final class MarketDataDb implements AutoCloseable {
 
@@ -41,8 +43,29 @@ public final class MarketDataDb implements AutoCloseable {
         this.dataSource = dataSource;
     }
 
-    /** Never throws for "DB down": the pool retries internally on each getConnection(). */
+    /**
+     * BOOT is strict: the pool must hand out one real connection within
+     * {@code initializationFailTimeout} or creation THROWS and the gateway dies loudly —
+     * a configured-but-unreachable database at startup is a misconfiguration, not a
+     * condition to ride out in memory. RUNTIME stays tolerant: an established gateway
+     * rides a database blip via {@link #markDown}/{@link #markUp} (loud lines, health
+     * visible) and the pool retries on each getConnection().
+     */
     public static MarketDataDb create(MarketDataDbConfig cfg) {
+        return new MarketDataDb(new HikariDataSource(poolConfig(cfg, 10_000)));
+    }
+
+    /**
+     * Lazy-init variant for RUNTIME-behavior tests only: simulates an established
+     * gateway whose database has died (markDown/markUp, fallbacks, overflow) without
+     * needing a live PG. Production boot always goes through {@link #create} and its
+     * strict first-connection gate.
+     */
+    static MarketDataDb createLazy(MarketDataDbConfig cfg) {
+        return new MarketDataDb(new HikariDataSource(poolConfig(cfg, -1)));
+    }
+
+    private static HikariConfig poolConfig(MarketDataDbConfig cfg, long initializationFailTimeoutMs) {
         HikariConfig hc = new HikariConfig();
         hc.setJdbcUrl(cfg.url());
         hc.setUsername(cfg.user());
@@ -52,12 +75,12 @@ public final class MarketDataDb implements AutoCloseable {
         hc.setConnectionTimeout(3_000);
         hc.setValidationTimeout(2_000);
         hc.setKeepaliveTime(30_000);
-        hc.setInitializationFailTimeout(-1);
+        hc.setInitializationFailTimeout(initializationFailTimeoutMs);
         hc.setPoolName("market-pg");
         hc.addDataSourceProperty("socketTimeout", "10");
         hc.addDataSourceProperty("loginTimeout", "3");
         hc.addDataSourceProperty("ApplicationName", "market-gateway");
-        return new MarketDataDb(new HikariDataSource(hc));
+        return hc;
     }
 
     public Connection getConnection() throws java.sql.SQLException {
