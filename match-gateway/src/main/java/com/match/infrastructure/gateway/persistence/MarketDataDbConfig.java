@@ -10,15 +10,13 @@ import java.util.function.UnaryOperator;
  * Mirrors the OMS config conventions (URL/user/password env vars, password-file
  * variant for secrets).
  *
- * <p><b>There is no silent fallback.</b> Persistence is either configured, or
- * EXPLICITLY declared off with {@code MARKET_PG_ENABLED=false} — a missing
- * password is a refused startup, not a quiet downgrade to in-memory candles.
- * The one prior outage this rule comes from: the password was never
- * provisioned, the gateway "ran fine" for weeks on memory alone, and the first
- * restart silently discarded every chart. A loud refusal at boot would have
- * surfaced that on day one.</p>
+ * <p><b>There is no fallback and no off switch.</b> The gateway requires its
+ * database: a missing password is a refused startup, not a quiet downgrade to
+ * in-memory candles. The prior outage this rule comes from: the password was
+ * never provisioned, the gateway "ran fine" for weeks on memory alone, and the
+ * first restart silently discarded every chart.</p>
  */
-public record MarketDataDbConfig(String url, String user, String password, boolean enabled) {
+public record MarketDataDbConfig(String url, String user, String password) {
 
     public static MarketDataDbConfig fromEnv() {
         return fromEnv(System::getenv);
@@ -28,19 +26,14 @@ public record MarketDataDbConfig(String url, String user, String password, boole
     static MarketDataDbConfig fromEnv(UnaryOperator<String> env) {
         String url = env(env, "MARKET_PG_URL", "jdbc:postgresql://localhost:5432/marketdata");
         String user = env(env, "MARKET_PG_USER", "market");
-        boolean explicitlyDisabled = "false".equalsIgnoreCase(env(env, "MARKET_PG_ENABLED", "true"));
-        if (explicitlyDisabled) {
-            return new MarketDataDbConfig(url, user, null, false);
-        }
         String password = secret(env, "MARKET_PG_PASSWORD");
         if (password == null || password.isEmpty()) {
             throw new IllegalStateException(
-                    "market-data persistence is not configured: set MARKET_PG_PASSWORD (or"
-                            + " MARKET_PG_PASSWORD_FILE), or declare MARKET_PG_ENABLED=false to run"
-                            + " WITHOUT persistence (in-memory only: candles and tickers will not"
-                            + " survive a restart). Refusing to start on a silent default.");
+                    "market-data persistence is not configured: set MARKET_PG_PASSWORD or"
+                            + " MARKET_PG_PASSWORD_FILE. The market gateway does not run without its"
+                            + " database — there is no in-memory mode; charts must survive restarts.");
         }
-        return new MarketDataDbConfig(url, user, password, true);
+        return new MarketDataDbConfig(url, user, password);
     }
 
     private static String env(UnaryOperator<String> env, String name, String defaultValue) {

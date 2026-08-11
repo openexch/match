@@ -7,15 +7,13 @@ import java.util.Map;
 import java.util.function.UnaryOperator;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 /**
- * The no-silent-fallback contract: persistence is either configured or EXPLICITLY
- * declared off — an absent password refuses startup instead of quietly running
- * in-memory (which is a chart wipe scheduled for the next restart).
+ * The no-fallback contract: persistence is mandatory — an absent password refuses
+ * startup instead of quietly running in-memory (a chart wipe scheduled for the
+ * next restart). There is deliberately no off switch to test.
  */
 public class MarketDataDbConfigTest {
 
@@ -27,18 +25,17 @@ public class MarketDataDbConfigTest {
     public void configuredPasswordEnablesPersistence() {
         MarketDataDbConfig cfg = MarketDataDbConfig.fromEnv(env(Map.of(
                 "MARKET_PG_PASSWORD", "hunter2")));
-        assertTrue(cfg.enabled());
         assertEquals("hunter2", cfg.password());
         assertEquals("jdbc:postgresql://localhost:5432/marketdata", cfg.url());
         assertEquals("market", cfg.user());
     }
 
     @Test
-    public void explicitDisableIsTheOnlyWayToRunWithoutPersistence() {
-        MarketDataDbConfig cfg = MarketDataDbConfig.fromEnv(env(Map.of(
-                "MARKET_PG_ENABLED", "false")));
-        assertFalse(cfg.enabled());
-        assertNull(cfg.password());
+    public void thereIsNoOffSwitch() {
+        // MARKET_PG_ENABLED used to declare persistence off; the mode is gone — the
+        // flag is ignored and the password requirement stands.
+        assertThrows(IllegalStateException.class,
+                () -> MarketDataDbConfig.fromEnv(env(Map.of("MARKET_PG_ENABLED", "false"))));
     }
 
     @Test
@@ -47,8 +44,8 @@ public class MarketDataDbConfigTest {
                 () -> MarketDataDbConfig.fromEnv(env(Map.of())));
         assertTrue("the refusal must say how to fix it: " + e.getMessage(),
                 e.getMessage().contains("MARKET_PG_PASSWORD"));
-        assertTrue("and how to declare persistence off on purpose: " + e.getMessage(),
-                e.getMessage().contains("MARKET_PG_ENABLED=false"));
+        assertTrue("and that there is deliberately no in-memory mode: " + e.getMessage(),
+                e.getMessage().contains("does not run without its database"));
     }
 
     @Test

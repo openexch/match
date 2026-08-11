@@ -165,7 +165,7 @@ public class TickerStats {
             }
             volume = baseQuoteVol24h + liveQuoteVol;
         } else {
-            // Legacy since-boot semantics (DB down or persistence disabled)
+            // Database blip: since-boot semantics, served while markDown (loud + health-visible)
             open = openPrice;
             high = high24h;
             low = low24h == Double.MAX_VALUE ? 0 : low24h;

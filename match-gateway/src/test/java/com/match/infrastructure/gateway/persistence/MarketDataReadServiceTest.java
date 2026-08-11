@@ -53,7 +53,7 @@ public class MarketDataReadServiceTest {
     @Before
     public void setUp() {
         db = MarketDataDb.createLazy(new MarketDataDbConfig(
-                "jdbc:postgresql://127.0.0.1:1/never", "none", "none", true));
+                "jdbc:postgresql://127.0.0.1:1/never", "none", "none"));
         service = new MarketDataReadService(db, new FakeReader());
     }
 
