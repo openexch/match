@@ -204,6 +204,22 @@ public final class TransportConfig {
     }
 
     /**
+     * Term buffer length for the cluster SNAPSHOT channel (aeron:ipc), in Aeron
+     * URI syntax. Separate from {@link #logTermLength()} because a snapshot
+     * publication opens a fresh non-sparse 3-term buffer every cycle: at the old
+     * hardcoded 64m that is a 192MB allocation in /dev/shm per snapshot, which on
+     * a co-located box (two clusters sharing one tmpfs) exhausts the archive and
+     * fails the snapshot with StorageSpaceException — so nothing prunes and the
+     * log grows without bound. Snapshots are ~6MB, so a small term is ample; the
+     * 64m default preserves the historical value for hosts that never set it.
+     *
+     * @return snapshot channel term length string.
+     */
+    public static String snapshotTermLength() {
+        return envOrProp("TRANSPORT_SNAPSHOT_TERM_LENGTH", "transport.snapshot.term.length", "64m");
+    }
+
+    /**
      * Build a UDP channel URI with the configured term-length, MTU and optional interface
      * applied consistently. Accepts a base with or without existing URI params, e.g.
      * "aeron:udp" or "aeron:udp?endpoint=host:port".

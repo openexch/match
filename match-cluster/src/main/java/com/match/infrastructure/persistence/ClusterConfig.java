@@ -227,8 +227,13 @@ public final class ClusterConfig
                 .controlResponseChannel(archiveContext.localControlChannel())
                 .aeronDirectoryName(aeronDirName);
 
-        // Snapshot channel: 64MB term buffer -> 8MB max message size (snapshots are ~6MB)
-        final String snapshotChannel = "aeron:ipc?term-length=67108864";
+        // Snapshot channel term-length is configurable (TRANSPORT_SNAPSHOT_TERM_LENGTH):
+        // a snapshot publication maps a fresh 3-term buffer per cycle, so 64m = 192MB in
+        // /dev/shm every snapshot. On a co-located box (two clusters, one tmpfs) that
+        // exhausts the archive and fails the snapshot; nothing prunes, the log grows.
+        // Small/co-located hosts set this down (snapshots are ~6MB); default stays 64m
+        // (8MB max message) to preserve prod behavior. See TransportConfig#snapshotTermLength.
+        final String snapshotChannel = "aeron:ipc?term-length=" + TransportConfig.snapshotTermLength();
 
         // ==================== ULTRA-LOW LATENCY CONSENSUS MODULE CONFIG ====================
         final ConsensusModule.Context consensusModuleContext = new ConsensusModule.Context()
