@@ -18,7 +18,7 @@ public class MarketGatewayMain implements AutoCloseable {
     private final MarketDataWebSocket marketDataWebSocket;
     private final GatewayStateManager stateManager;
     private final ClusterStatus clusterStatus;
-    private final MarketDataPersistence persistence; // null when disabled by env
+    private final MarketDataPersistence persistence; // never null: the gateway does not run without it
     private final EdgePublisher edgePublisher; // null when MARKET_EDGE_URL unset
 
     public MarketGatewayMain() {
@@ -29,7 +29,7 @@ public class MarketGatewayMain implements AutoCloseable {
 
         // Market-data persistence (TimescaleDB): the source of truth for
         // chart/time-series data. Null (pure in-memory) when not configured.
-        this.persistence = MarketDataPersistence.startOrNull(stateManager);
+        this.persistence = MarketDataPersistence.start(stateManager);
         this.stateManager.setPersistence(persistence);
 
         this.aeronGateway = new AeronGateway();
@@ -58,9 +58,7 @@ public class MarketGatewayMain implements AutoCloseable {
         // cluster: AeronCluster.connect() can already dispatch egress messages
         // (and thus ring writes) during session establishment, and seed()
         // must never run after live trades have entered the rings.
-        if (persistence != null) {
-            persistence.hydrate(stateManager.inMemoryCandleProvider());
-        }
+        persistence.hydrate(stateManager.inMemoryCandleProvider());
 
         // Connect to cluster
         aeronGateway.connect();
@@ -87,9 +85,7 @@ public class MarketGatewayMain implements AutoCloseable {
             aeronGateway.close();
         }
         // After the egress producer stops, so the final drain sees everything
-        if (persistence != null) {
-            persistence.close();
-        }
+        persistence.close();
     }
 
     public static void main(String[] args) {

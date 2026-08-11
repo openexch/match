@@ -42,7 +42,7 @@ public class TimescaleIntegrationTest {
         Assume.assumeTrue("set MARKET_PG_TEST_URL to run TimescaleDB integration tests", url != null);
         db = MarketDataDb.create(new MarketDataDbConfig(url,
                 System.getenv().getOrDefault("MARKET_PG_TEST_USER", null),
-                System.getenv().getOrDefault("MARKET_PG_TEST_PASSWORD", null), true));
+                System.getenv().getOrDefault("MARKET_PG_TEST_PASSWORD", null)));
         reader = new TimescaleReader(db);
         assertTrue("schema bootstrap must succeed", db.ensureSchema());
         assertTrue("schema bootstrap must be idempotent", db.ensureSchema());
