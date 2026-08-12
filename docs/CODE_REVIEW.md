@@ -1,3 +1,5 @@
+> ⚠️ **ARŞİV — GÜNCEL DEĞİL.** Bu, Ocak 2026 tarihli eski bir kod incelemesidir ("test yok / auth yok / %60 hazır") ve bugünkü durumu YANSITMAZ. Güncel değerlendirme: 2026-08-11 tam kod-kalite denetimi. Bu dosya tarihsel kayıt olarak tutuluyor.
+
 # Matching Engine Code Quality Review
 
 **Date:** January 28, 2026  
