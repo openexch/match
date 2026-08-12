@@ -51,6 +51,34 @@ jobs:
           java-version: 21
           cache: maven
 
+      # The SBE codecs under match-common are committed sources that Maven
+      # regenerates at generate-sources from the schema XML (order-schema id=1 and
+      # settlement-journal id=3). A schema edit — or a stale hand-edit — that lands
+      # without the regenerated Java leaves the committed codecs describing a
+      # different wire than the schema, and the published match-common jar carries
+      # that drift to every consumer (this is how the G-1 stale SCHEMA_VERSION=2
+      # codecs survived: nothing regenerated them, so nothing noticed them). Fail
+      # the build on any diff so committed == schema is enforced, not trusted.
+      # git status (not `git diff --exit-code`) so a NEW but uncommitted codec is
+      # caught too — git diff ignores untracked files.
+      - name: SBE codec drift check
+        run: |
+          set -euo pipefail
+          mvn -B -s .mvn-settings.xml -pl match-common generate-sources
+          DRIFT=$(git status --porcelain --untracked-files=all -- \
+            match-common/src/main/java/com/match/infrastructure/generated/ \
+            match-common/src/main/java/com/match/infrastructure/journal/generated/)
+          if [ -n "$DRIFT" ]; then
+            echo "::error::Generated SBE codecs are out of sync with the schema. Run 'mvn -pl match-common generate-sources' and commit the result."
+            echo "$DRIFT"
+            git diff -- \
+              match-common/src/main/java/com/match/infrastructure/generated/ \
+              match-common/src/main/java/com/match/infrastructure/journal/generated/
+            exit 1
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build and test
         run: mvn -B -s .mvn-settings.xml clean verify
         env:
