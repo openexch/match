@@ -168,12 +168,28 @@ public class AppClusteredService implements ClusteredService {
     private final AtomicLong marketDataBytes = new AtomicLong(0);
     private final AtomicLong omsEgressBytes = new AtomicLong(0);
 
+    // C-3: per-drain work cap. drainQueue() processes at most this many messages per call, so a
+    // freshly promoted leader inheriting a full warm-standby omsEgressQueue (up to
+    // OMS_EGRESS_QUEUE_CAPACITY = 262144 entries) does not stall behind one unbounded drain before it
+    // can handle a new command (the AE 60s failover-blindness mechanism). Override with env
+    // MATCH_EGRESS_DRAIN_MAX or -Dmatch.egress.drain.max; read once at startup. An explicitly set but
+    // unparseable or non-positive value is REFUSED at startup (see resolveEgressDrainMax), never
+    // silently defaulted, matching the SnapshotCadence tunables. The leftover backlog is never
+    // dropped; the next flush drains it and match_egress_drain_capped_total counts the deferrals.
+    static final int DEFAULT_EGRESS_DRAIN_MAX = 4096;
+    private static final int EGRESS_DRAIN_MAX = resolveEgressDrainMax(
+            System.getenv("MATCH_EGRESS_DRAIN_MAX"), System.getProperty("match.egress.drain.max"));
+    // Drains that hit the cap with work still queued (deferred to the next flush, no loss). Climbs
+    // during a leader takeover inheriting a deep queue; must not stay pinned high in steady state.
+    private final AtomicLong drainCapped = new AtomicLong(0);
+
     // P1.5/P1.1 (match#32/#30): overflow rejects are counted in Engine at order
     // admission (notional does not fit 64-bit fixed-point) and read from there
     // for the EGRESS-DIAG lines below.
 
     // Simple wrapper for queued SBE messages (holds copy of buffer content)
-    private static final class QueuedMessage {
+    // Package-private (was private) so the C-3 drain-cap test can enqueue synthetic messages.
+    static final class QueuedMessage {
         final byte[] data;
         final int length;
 
@@ -299,55 +315,6 @@ public class AppClusteredService implements ClusteredService {
             }
         }
 
-        private boolean drainQueue(Queue<QueuedMessage> queue, AtomicLong queuedBytes, List<ClientSession> sessions) {
-            QueuedMessage msg;
-            // match#140: signal is now delivery-based, not poll-based. beginDrain() resets the
-            // per-drain flag; recordDelivered() (positive offer) sets it. The RETURN value tells
-            // flush() whether any session actually received a frame this drain.
-            egressSessionMetrics.beginDrain();
-            while ((msg = queue.poll()) != null) {
-                queuedBytes.addAndGet(-msg.length);
-                broadcastBuffer.putBytes(0, msg.data, 0, msg.length);
-
-                // Send to all connected sessions
-                for (ClientSession session : sessions) {
-                    int retries = 0;
-                    while (retries < 3) {
-                        long result = session.offer(broadcastBuffer, 0, msg.length);
-                        if (result > 0) {
-                            // match#140: real delivery to this session — record its last-offer time.
-                            egressSessionMetrics.recordDelivered(session.id(), System.currentTimeMillis());
-                            break;
-                        } else if (result == Publication.BACK_PRESSURED || result == Publication.ADMIN_ACTION) {
-                            retries++;
-                            if (cluster != null) {
-                                cluster.idleStrategy().idle();
-                            }
-                        } else {
-                            // Session closed or not connected - skip it. Behavior UNCHANGED (still
-                            // break, no retry, nothing dropped differently). match#140: previously
-                            // this was invisible — count the disposition and per-session tally so a
-                            // whole session going dark is greppable + on /metrics.
-                            recordEgressSkip(session.id(), result);
-                            break;
-                        }
-                    }
-                    // match#115 audit: retries exhausted = the message was silently LOST for this
-                    // session with no accounting anywhere — the exact "frames skip between emit and
-                    // apply" shape. Count it loudly so egress loss is never invisible again.
-                    if (retries >= 3) {
-                        long n = egressOfferGiveUps.incrementAndGet();
-                        if (n == 1 || n % 1000 == 0) {
-                            System.err.println("CRITICAL: egress offer gave up after " + retries
-                                + " backpressured retries (session=" + session.id() + ", len=" + msg.length
-                                + ", totalGiveUps=" + n + ") — frame lost; gateway will see a chain break");
-                        }
-                    }
-                }
-            }
-            return egressSessionMetrics.deliveredThisDrain();
-        }
-
         @Override
         public boolean hasSubscribers() {
             // Only leader should broadcast market data
@@ -358,6 +325,112 @@ public class AppClusteredService implements ClusteredService {
             return !clientSessions.getAllSessions().isEmpty();
         }
     };
+
+    // Drains queued egress to every connected session. Moved verbatim out of the aeronBroadcaster
+    // anonymous class onto the enclosing class (behavior identical, only re-indented) so the C-3
+    // per-drain cap has a package-private unit-test seam; the two call sites in flush() bind here.
+    //
+    // C-3: one call processes at most EGRESS_DRAIN_MAX messages. Without the cap a freshly promoted
+    // leader empties its entire warm-standby omsEgressQueue before it can process one new command,
+    // stalling the node at the worst moment (the AE 60s failover-blindness mechanism). The remainder
+    // stays queued and the next flush drains it; nothing is lost, only the per-cycle work is bounded.
+    // The return value and the per-message / per-session retry logic are unchanged.
+    boolean drainQueue(Queue<QueuedMessage> queue, AtomicLong queuedBytes, List<ClientSession> sessions) {
+        QueuedMessage msg;
+        // match#140: signal is now delivery-based, not poll-based. beginDrain() resets the
+        // per-drain flag; recordDelivered() (positive offer) sets it. The RETURN value tells
+        // flush() whether any session actually received a frame this drain.
+        egressSessionMetrics.beginDrain();
+        int processed = 0;
+        while (processed < EGRESS_DRAIN_MAX && (msg = queue.poll()) != null) {
+            queuedBytes.addAndGet(-msg.length);
+            broadcastBuffer.putBytes(0, msg.data, 0, msg.length);
+
+            // Send to all connected sessions
+            for (ClientSession session : sessions) {
+                int retries = 0;
+                while (retries < 3) {
+                    long result = session.offer(broadcastBuffer, 0, msg.length);
+                    if (result > 0) {
+                        // match#140: real delivery to this session — record its last-offer time.
+                        egressSessionMetrics.recordDelivered(session.id(), System.currentTimeMillis());
+                        break;
+                    } else if (result == Publication.BACK_PRESSURED || result == Publication.ADMIN_ACTION) {
+                        retries++;
+                        if (cluster != null) {
+                            cluster.idleStrategy().idle();
+                        }
+                    } else {
+                        // Session closed or not connected - skip it. Behavior UNCHANGED (still
+                        // break, no retry, nothing dropped differently). match#140: previously
+                        // this was invisible — count the disposition and per-session tally so a
+                        // whole session going dark is greppable + on /metrics.
+                        recordEgressSkip(session.id(), result);
+                        break;
+                    }
+                }
+                // match#115 audit: retries exhausted = the message was silently LOST for this
+                // session with no accounting anywhere — the exact "frames skip between emit and
+                // apply" shape. Count it loudly so egress loss is never invisible again.
+                if (retries >= 3) {
+                    long n = egressOfferGiveUps.incrementAndGet();
+                    if (n == 1 || n % 1000 == 0) {
+                        System.err.println("CRITICAL: egress offer gave up after " + retries
+                            + " backpressured retries (session=" + session.id() + ", len=" + msg.length
+                            + ", totalGiveUps=" + n + ") — frame lost; gateway will see a chain break");
+                    }
+                }
+            }
+            processed++;
+        }
+        // C-3: stopped early with work still queued, so this drain was capped. The backlog is
+        // deferred to the next flush (no loss). Count it (loud on the first hit and every 1000th)
+        // so a takeover inheriting a deep queue is observable; a value pinned high in steady state
+        // means egress cannot keep up with ingress.
+        if (processed >= EGRESS_DRAIN_MAX && !queue.isEmpty()) {
+            long n = drainCapped.incrementAndGet();
+            if (n == 1 || n % 1000 == 0) {
+                System.err.println("CRITICAL: egress drain hit per-cycle cap of " + EGRESS_DRAIN_MAX
+                    + " with messages still queued (remaining=" + queue.size()
+                    + ", cappedTotal=" + n + "); backlog deferred to the next flush (no loss)");
+            }
+        }
+        return egressSessionMetrics.deliveredThisDrain();
+    }
+
+    // C-3 config: env MATCH_EGRESS_DRAIN_MAX wins over -Dmatch.egress.drain.max wins over the default.
+    // Package-private and pure (takes the raw values) so the parse, the default, and the refusal are
+    // unit testable. An explicitly set but unparseable or non-positive value is refused at startup
+    // rather than silently defaulted (the strict-config house style; same posture as SnapshotCadence).
+    static int resolveEgressDrainMax(final String envValue, final String propValue) {
+        final String raw = envValue != null ? envValue : propValue;
+        if (raw == null) {
+            return DEFAULT_EGRESS_DRAIN_MAX;
+        }
+        final String source = envValue != null ? "MATCH_EGRESS_DRAIN_MAX" : "match.egress.drain.max";
+        final int value;
+        try {
+            value = Integer.parseInt(raw.trim());
+        } catch (final NumberFormatException e) {
+            throw new IllegalArgumentException(source + "=" + raw
+                    + " is not a valid integer; refusing to start with an ambiguous egress drain cap");
+        }
+        if (value <= 0) {
+            throw new IllegalArgumentException(source + "=" + value
+                    + " must be a positive per-drain message cap; refusing to start");
+        }
+        return value;
+    }
+
+    // package-private: lets the C-3 drain-cap test size its input to the configured cap.
+    static int egressDrainMax() {
+        return EGRESS_DRAIN_MAX;
+    }
+
+    // package-private: metric source (match_egress_drain_capped_total) and C-3 test assertion.
+    long drainCappedTotal() {
+        return drainCapped.get();
+    }
 
     @Override
     public void onStart(final Cluster cluster, final Image snapshotImage) {
@@ -478,6 +551,7 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_follower_egress_skipped_total", "Lossy market-data egress skipped on followers (no consumer)", followerSkipped::get)
                     .counter("match_dropped_oms_egress_total", "Reliable OMS egress drops (should stay 0)", droppedOmsEgress::get)
                     .counter("match_egress_offer_giveups_total", "Frames lost to exhausted backpressure retries at session.offer (should stay 0)", egressOfferGiveUps::get)
+                    .counter("match_egress_drain_capped_total", "Egress drains that hit the C-3 per-cycle cap (EGRESS_DRAIN_MAX) with work still queued; backlog deferred to the next flush (no loss). Climbs during a leader takeover inheriting a deep queue", this::drainCappedTotal)
                     .counter("match_publisher_dropped_trade_total", "Reliable OMS trade-egress dropped by market publishers (buffer-full or flush error; should stay 0)", eventPublisher::droppedTradeEgressTotal)
                     .counter("match_publisher_dropped_status_total", "Reliable OMS status-egress dropped by market publishers (buffer-full or flush error; should stay 0)", eventPublisher::droppedStatusEgressTotal)
                     .counter("match_unknown_timers_total", "Fired cluster timers with no runnable", timerManager::getUnknownTimerCount)
@@ -759,8 +833,19 @@ public class AppClusteredService implements ClusteredService {
             logger.info("Event publishing initialized for {} markets with Aeron broadcaster",
                 MarketConfig.ALL_MARKETS.length);
         } catch (Exception e) {
-            logger.warn("Failed to initialize event publishing: " + e.getMessage());
-            // Continue without publishing - engine will still work
+            // A-9: fail-fast. An egress-less node keeps matching, but its trades and status never
+            // reach OMS/AE, so orders vanish silently, and its tradeId counter forks on a partially
+            // initialized replica. The node exits before joining the cluster instead of serving
+            // blind; the other two nodes keep quorum. If the cause is permanent this becomes a clean
+            // fail-fast loop for the operator to fix, not a silent half-alive node.
+            final String reason = e.getClass().getName() + ": " + e.getMessage();
+            final String critical = "CRITICAL: event publishing failed to initialize (" + reason
+                    + "); an egress-less node loses orders silently (OMS/AE never see them). "
+                    + "Exiting so this node never joins the cluster; the other two nodes keep quorum.";
+            logger.error(critical);
+            System.err.println(critical); // visible even if the logger is suppressed
+            e.printStackTrace();
+            System.exit(1);
         }
     }
 
