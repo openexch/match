@@ -13,7 +13,7 @@ public final class OrderStatusBatchDecoder
     public static final int BLOCK_LENGTH = 12;
     public static final int TEMPLATE_ID = 24;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 8;
+    public static final int SCHEMA_VERSION = 9;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -313,7 +313,7 @@ public final class OrderStatusBatchDecoder
 
         public static int sbeBlockLength()
         {
-            return 67;
+            return 75;
         }
 
         public int actingBlockLength()
@@ -902,6 +902,57 @@ public final class OrderStatusBatchDecoder
         }
 
 
+        public static int clusterTimestampId()
+        {
+            return 14;
+        }
+
+        public static int clusterTimestampSinceVersion()
+        {
+            return 0;
+        }
+
+        public static int clusterTimestampEncodingOffset()
+        {
+            return 67;
+        }
+
+        public static int clusterTimestampEncodingLength()
+        {
+            return 8;
+        }
+
+        public static String clusterTimestampMetaAttribute(final MetaAttribute metaAttribute)
+        {
+            if (MetaAttribute.PRESENCE == metaAttribute)
+            {
+                return "required";
+            }
+
+            return "";
+        }
+
+        public static long clusterTimestampNullValue()
+        {
+            return -9223372036854775808L;
+        }
+
+        public static long clusterTimestampMinValue()
+        {
+            return -9223372036854775807L;
+        }
+
+        public static long clusterTimestampMaxValue()
+        {
+            return 9223372036854775807L;
+        }
+
+        public long clusterTimestamp()
+        {
+            return buffer.getLong(offset + 67, BYTE_ORDER);
+        }
+
+
         public StringBuilder appendTo(final StringBuilder builder)
         {
             if (null == buffer)
@@ -942,6 +993,9 @@ public final class OrderStatusBatchDecoder
             builder.append('|');
             builder.append("egressSeq=");
             builder.append(this.egressSeq());
+            builder.append('|');
+            builder.append("clusterTimestamp=");
+            builder.append(this.clusterTimestamp());
             builder.append(')');
 
             return builder;

@@ -8,6 +8,7 @@ import com.match.domain.enums.OrderSide;
 import com.match.domain.enums.OrderType;
 import org.agrona.ExpandableArrayBuffer;
 import org.agrona.collections.Int2ObjectHashMap;
+import org.agrona.collections.Long2LongHashMap;
 import org.junit.Test;
 
 import java.util.Arrays;
@@ -127,6 +128,81 @@ public class SnapshotCodecTest {
         assertEquals(9, e.getOrderIdGenerator());
         assertEquals(3, d.tradeIdGenerator);
         assertTrue("timer counter must be absent, not garbage", !d.timerCorrelationIdPresent);
+    }
+
+    /** A-1: the orderId -> omsOrderId correlation map round-trips exactly and stays byte-deterministic. */
+    @Test
+    public void omsOrderIdMapRoundTripsExactly() {
+        Engine orig = varied();
+        // A-1 added this map to the snapshot. Populate it with entries whose natural hash-map
+        // iteration order is NOT ascending, so the round-trip proves both fidelity and the sort.
+        long[][] pairs = {{17, 1700}, {3, 300}, {42, 4200}, {8, 800}, {25, 2500}, {1, 100}};
+        for (long[] p : pairs) {
+            orig.getOrderIdToOmsOrderId().put(p[0], p[1]);
+        }
+
+        ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
+        int len = SnapshotCodec.serialize(orig, TRADE_ID_IN, TIMER_ID_IN, buf);
+
+        Engine restored = new Engine();
+        SnapshotCodec.deserialize(buf, 0, len, restored);
+
+        Long2LongHashMap rm = restored.getOrderIdToOmsOrderId();
+        assertEquals("oms map size restored", orig.getOrderIdToOmsOrderId().size(), rm.size());
+        for (long[] p : pairs) {
+            assertEquals("omsOrderId restored for orderId " + p[0], p[1], rm.get(p[0]));
+        }
+
+        // Determinism: the same populated state serializes byte-identically twice.
+        ExpandableArrayBuffer buf2 = new ExpandableArrayBuffer();
+        int len2 = SnapshotCodec.serialize(orig, TRADE_ID_IN, TIMER_ID_IN, buf2);
+        assertEquals("payload length stable with oms map", len, len2);
+        assertArrayEquals("snapshot with oms map must be byte-deterministic", bytes(buf, len), bytes(buf2, len2));
+    }
+
+    /**
+     * A-1 determinism: the oms map is written ASCENDING by orderId, independent of insertion order.
+     * {@link Long2LongHashMap} iterates in slot order (hash-derived), not sorted, so without the sort
+     * the serialized orderIds would follow that scrambled order and this fails — which is exactly the
+     * cross-replica snapshot fork the sort prevents.
+     */
+    @Test
+    public void omsOrderIdMapIsSerializedAscendingByOrderId() {
+        Engine e = new Engine();
+        long[] insertOrder = {17, 3, 42, 8, 25, 1, 99, 12, 6, 30, 2, 51};
+        for (long id : insertOrder) {
+            e.getOrderIdToOmsOrderId().put(id, id * 100);
+        }
+
+        ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
+        int len = SnapshotCodec.serialize(e, TRADE_ID_IN, TIMER_ID_IN, buf);
+
+        long[] serializedIds = extractOmsMapOrderIds(buf);
+        long[] expected = insertOrder.clone();
+        Arrays.sort(expected);
+        assertArrayEquals("A-1: oms map orderIds must be written ascending (cross-replica determinism)",
+                expected, serializedIds);
+    }
+
+    /** Walk the snapshot byte format and return the oms-map section's orderIds in wire order. */
+    private static long[] extractOmsMapOrderIds(ExpandableArrayBuffer b) {
+        int pos = 0;
+        pos += 8; // orderIdGenerator
+        pos += 8; // tradeIdGenerator
+        int numMarkets = b.getInt(pos); pos += 4;
+        for (int m = 0; m < numMarkets; m++) {
+            pos += 4; // marketId
+            int numBid = b.getInt(pos); pos += 4; pos += numBid * 4 * 8;
+            int numAsk = b.getInt(pos); pos += 4; pos += numAsk * 4 * 8;
+        }
+        pos += 8; // timerCorrelationId
+        int count = b.getInt(pos); pos += 4;
+        long[] ids = new long[count];
+        for (int i = 0; i < count; i++) {
+            ids[i] = b.getLong(pos); pos += 8; // orderId
+            pos += 8;                           // omsOrderId
+        }
+        return ids;
     }
 
     // ---- helpers ----

@@ -123,6 +123,7 @@ public class MarketPublisher implements MarketEventHandler {
         long statusSeq;
         int rejectReason; // OrderRejectReason code (NONE=0 on non-rejects); carried on egress from SBE v6 (match#75)
         long egressSeq;   // Aeron log position of the producing command; OMS ordering key (Layer 2, SBE v7)
+        long clusterTimestamp; // v9 (C-5): deterministic cluster timestamp of the producing command (event.getTimestamp())
     }
 
     // P1.2 (match#31): per-market monotonic sequence over OrderStatus events,
@@ -146,6 +147,7 @@ public class MarketPublisher implements MarketEventHandler {
         long takerOmsOrderId;
         long makerOmsOrderId;
         long egressSeq;   // Aeron log position of the producing command; OMS ordering key (Layer 2, SBE v7)
+        long clusterTimestamp; // v9 (C-5): deterministic cluster timestamp of the producing command (event.getTimestamp())
     }
 
     // Change detection - use engine version numbers to detect any book change
@@ -199,6 +201,11 @@ public class MarketPublisher implements MarketEventHandler {
         int tradeCount;
         long lastTimestamp;
         boolean takerIsBuy; // Aggressor side of every trade in this bucket
+        // v9 (#136): tradeId of the FIRST (min-tradeId) trade folded into this bucket. Trades
+        // arrive in monotonic tradeId order, so the first one has the minimum id; it is set once
+        // when the bucket is created and never changes as later trades merge in. Deterministic
+        // candle-OPEN key + D-2 dedup for downstream consumers.
+        long firstTradeId;
 
         void reset() {
             price = 0;
@@ -206,6 +213,7 @@ public class MarketPublisher implements MarketEventHandler {
             tradeCount = 0;
             lastTimestamp = 0;
             takerIsBuy = false;
+            firstTradeId = 0;
         }
 
         void add(long quantity, long timestamp) {
@@ -360,6 +368,10 @@ public class MarketPublisher implements MarketEventHandler {
             agg.reset();
             agg.price = price;
             agg.takerIsBuy = event.isTakerIsBuy();
+            // v9 (#136): first trade of a freshly-created bucket = min tradeId (monotonic arrival).
+            // Set only here, so later trades merging into the same (price, taker side) bucket never
+            // move it.
+            agg.firstTradeId = event.getTradeId();
             tradesByPriceSide.put(key, agg);
         }
 
@@ -378,6 +390,7 @@ public class MarketPublisher implements MarketEventHandler {
         tradeEntry.takerOmsOrderId = event.getTakerOmsOrderId();
         tradeEntry.makerOmsOrderId = event.getMakerOmsOrderId();
         tradeEntry.egressSeq = event.getEgressSeq();
+        tradeEntry.clusterTimestamp = event.getTimestamp(); // v9 (C-5): deterministic cluster time
         tradeExecutionBuffer.add(tradeEntry);
 
         // Capture book version for correlation (read from both books)
@@ -628,6 +641,7 @@ public class MarketPublisher implements MarketEventHandler {
         entry.statusSeq = seq;
         entry.rejectReason = event.getRejectReason();
         entry.egressSeq = event.getEgressSeq();
+        entry.clusterTimestamp = event.getTimestamp(); // v9 (C-5): deterministic cluster time
         orderStatusBuffer.add(entry);
     }
 
@@ -663,7 +677,8 @@ public class MarketPublisher implements MarketEventHandler {
                 .quantity(agg.totalQuantity)
                 .tradeCount(agg.tradeCount)
                 .timestamp(agg.lastTimestamp)
-                .takerSide(agg.takerIsBuy ? OrderSide.BID : OrderSide.ASK);
+                .takerSide(agg.takerIsBuy ? OrderSide.BID : OrderSide.ASK)
+                .firstTradeId(agg.firstTradeId); // v9 (#136): bucket's min tradeId
         }
 
         // Reset version range for next batch
@@ -984,7 +999,8 @@ public class MarketPublisher implements MarketEventHandler {
                 .omsOrderId(entry.omsOrderId)
                 .statusSeq(entry.statusSeq)
                 .rejectReason((short) entry.rejectReason)
-                .egressSeq(entry.egressSeq);
+                .egressSeq(entry.egressSeq)
+                .clusterTimestamp(entry.clusterTimestamp); // v9 (C-5)
         }
 
         return MessageHeaderEncoder.ENCODED_LENGTH + orderStatusBatchEncoder.encodedLength();
@@ -1027,7 +1043,8 @@ public class MarketPublisher implements MarketEventHandler {
                 .takerSide(entry.takerIsBuy ? OrderSide.BID : OrderSide.ASK)
                 .takerOmsOrderId(entry.takerOmsOrderId)
                 .makerOmsOrderId(entry.makerOmsOrderId)
-                .egressSeq(entry.egressSeq);
+                .egressSeq(entry.egressSeq)
+                .clusterTimestamp(entry.clusterTimestamp); // v9 (C-5)
         }
 
         return MessageHeaderEncoder.ENCODED_LENGTH + tradeExecutionBatchEncoder.encodedLength();

@@ -13,7 +13,7 @@ public final class TradesBatchDecoder
     public static final int BLOCK_LENGTH = 12;
     public static final int TEMPLATE_ID = 23;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 8;
+    public static final int SCHEMA_VERSION = 9;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -313,7 +313,7 @@ public final class TradesBatchDecoder
 
         public static int sbeBlockLength()
         {
-            return 29;
+            return 37;
         }
 
         public int actingBlockLength()
@@ -601,6 +601,57 @@ public final class TradesBatchDecoder
         }
 
 
+        public static int firstTradeIdId()
+        {
+            return 6;
+        }
+
+        public static int firstTradeIdSinceVersion()
+        {
+            return 0;
+        }
+
+        public static int firstTradeIdEncodingOffset()
+        {
+            return 29;
+        }
+
+        public static int firstTradeIdEncodingLength()
+        {
+            return 8;
+        }
+
+        public static String firstTradeIdMetaAttribute(final MetaAttribute metaAttribute)
+        {
+            if (MetaAttribute.PRESENCE == metaAttribute)
+            {
+                return "required";
+            }
+
+            return "";
+        }
+
+        public static long firstTradeIdNullValue()
+        {
+            return -9223372036854775808L;
+        }
+
+        public static long firstTradeIdMinValue()
+        {
+            return -9223372036854775807L;
+        }
+
+        public static long firstTradeIdMaxValue()
+        {
+            return 9223372036854775807L;
+        }
+
+        public long firstTradeId()
+        {
+            return buffer.getLong(offset + 29, BYTE_ORDER);
+        }
+
+
         public StringBuilder appendTo(final StringBuilder builder)
         {
             if (null == buffer)
@@ -623,6 +674,9 @@ public final class TradesBatchDecoder
             builder.append('|');
             builder.append("takerSide=");
             builder.append(this.takerSide());
+            builder.append('|');
+            builder.append("firstTradeId=");
+            builder.append(this.firstTradeId());
             builder.append(')');
 
             return builder;

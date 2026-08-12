@@ -6,6 +6,9 @@ import com.match.application.orderbook.MatchingEngine;
 import org.agrona.DirectBuffer;
 import org.agrona.MutableDirectBuffer;
 import org.agrona.collections.Int2ObjectHashMap;
+import org.agrona.collections.Long2LongHashMap;
+
+import java.util.Arrays;
 
 /**
  * Pure serialize / deserialize of matching-engine snapshot state to and from a byte buffer,
@@ -27,6 +30,9 @@ import org.agrona.collections.Int2ObjectHashMap;
  *     [numBidOrders  : int][bidOrders : numBidOrders * 4 longs]   // orderId, userId, price, qty
  *     [numAskOrders  : int][askOrders : numAskOrders * 4 longs]
  *   [timerCorrelationId : long]   // trailing; pre-match#25 snapshots may omit it
+ *   [omsMapCount : int]           // v9 (A-1); orderId -> omsOrderId correlation map
+ *   repeat omsMapCount:           // written in ASCENDING orderId order for cross-replica determinism
+ *     [orderId : long][omsOrderId : long]
  * </pre>
  *
  * <p>All scalars use the buffer's native byte order (Agrona default), identical to the
@@ -129,6 +135,31 @@ public final class SnapshotCodec {
         dst.putLong(pos, timerCorrelationId);
         pos += 8;
 
+        // v9 (A-1): the orderId -> omsOrderId correlation map (maker omsOrderId lookup on a fill).
+        // Long2LongHashMap iteration order is NOT deterministic across nodes that inserted in a
+        // different sequence, so writing it in native iteration order would fork snapshot bytes
+        // between replicas and break byte-determinism / cross-impl tests. Write it in ASCENDING
+        // orderId order: collect keys, Arrays.sort, emit (orderId, omsOrderId) pairs. The snapshot
+        // is not a hot path, so the sort cost is acceptable.
+        final Long2LongHashMap omsMap = engine.getOrderIdToOmsOrderId();
+        final int omsMapCount = omsMap.size();
+        final long[] sortedOrderIds = new long[omsMapCount];
+        int k = 0;
+        final Long2LongHashMap.KeyIterator keyIter = omsMap.keySet().iterator();
+        while (keyIter.hasNext()) {
+            sortedOrderIds[k++] = keyIter.nextValue();
+        }
+        Arrays.sort(sortedOrderIds);
+        dst.putInt(pos, omsMapCount);
+        pos += 4;
+        for (int i = 0; i < omsMapCount; i++) {
+            final long orderId = sortedOrderIds[i];
+            dst.putLong(pos, orderId);
+            pos += 8;
+            dst.putLong(pos, omsMap.get(orderId));
+            pos += 8;
+        }
+
         return pos;
     }
 
@@ -198,6 +229,25 @@ public final class SnapshotCodec {
             timerCorrelationId = src.getLong(pos);
             pos += 8;
             timerPresent = true;
+        }
+
+        // v9 (A-1): restore the orderId -> omsOrderId map, written ascending by serialize(). Cleared
+        // first so a reused engine can't retain stale entries. Guarded like the trailing timer field
+        // so a hand-built partial buffer (unit tests) or a pre-v9 snapshot lacking this section
+        // decodes cleanly; a real v9 snapshot always carries at least the 4-byte count. Restored
+        // directly into the engine — no Decoded field is needed.
+        final Long2LongHashMap omsMap = engine.getOrderIdToOmsOrderId();
+        omsMap.clear();
+        if (pos + 4 <= end) {
+            final int omsMapCount = src.getInt(pos);
+            pos += 4;
+            for (int i = 0; i < omsMapCount; i++) {
+                final long orderId = src.getLong(pos);
+                pos += 8;
+                final long omsOrderId = src.getLong(pos);
+                pos += 8;
+                omsMap.put(orderId, omsOrderId);
+            }
         }
 
         return new Decoded(orderIdGen, tradeIdGen, timerCorrelationId, timerPresent,
