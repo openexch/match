@@ -22,6 +22,27 @@ import static com.match.domain.FixedPoint.SCALE_FACTOR;
  * Centralized state manager for Market Gateway.
  * Coordinates order book, trades, and orders state.
  * Implements EgressMessageListener to receive cluster messages.
+ *
+ * <p><b>EXECUTABLE SPEC — FROZEN FOR THE C++ GATEWAY PORT. DO NOT REFACTOR BEHAVIOR.</b>
+ *
+ * <p>The book dedup/staleness ladder in {@link #onBookSnapshot} and {@link #onBookDelta}
+ * — leader-switchover dedup (match#19), stale-snapshot dedup (match#95), chain-break drift
+ * detection and snapshot re-anchoring (match#96), and the four distinct drop/break counters —
+ * is, together with {@link GatewayOrderBook}, the ONLY behavioral specification for the C++
+ * market-gateway rewrite. The cluster deliberately does NOT dedup its egress across leader
+ * switchovers: it only produces the book-version chain ({@code MarketPublisher}) and
+ * periodically resnapshots ({@code AppClusteredService}); every consumer-side guarantee
+ * lives in this class and nowhere else.
+ *
+ * <p>Pinning tests (the executable part of the spec):
+ * {@code GatewayStateManagerSbeTest} (the ladder itself, over real SBE frames),
+ * {@code GatewayOrderBookTest} (book/stale-flag mechanics),
+ * {@code GatewayStateManagerTest} (accessor surface).
+ *
+ * <p>Behavior-changing refactors are FORBIDDEN until the port lands. Any intentional
+ * behavior change is a SPEC change: it must update {@code docs/gateway-port-spec.md} and
+ * the pinning tests in the same commit, and say so in the commit message. See
+ * {@code docs/gateway-port-spec.md} for the invariant map and port checklist.
  */
 public class GatewayStateManager implements AeronGateway.EgressMessageListener {
     private static final Logger logger = Logger.getLogger(GatewayStateManager.class);

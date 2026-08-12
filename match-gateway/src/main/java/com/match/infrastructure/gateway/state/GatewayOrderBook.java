@@ -10,6 +10,26 @@ import java.util.concurrent.locks.StampedLock;
  * Local order book state maintained from BOOK_SNAPSHOT messages.
  * Thread-safe for concurrent reads, single-writer (egress thread).
  * Uses StampedLock for optimistic reads.
+ *
+ * <p><b>EXECUTABLE SPEC — FROZEN FOR THE C++ GATEWAY PORT. DO NOT REFACTOR BEHAVIOR.</b>
+ *
+ * <p>This class carries the state half of the dedup/staleness ladder driven by
+ * {@link GatewayStateManager}: the per-side monotonic-version dedup predicate
+ * ({@link #isStaleUpdate}, match#19), the stale flag after a chain break
+ * ({@link #markStale}/{@link #isStale}, match#96) with its {@code "stale":true} JSON
+ * marker (absent on a healthy book — byte-compat), snapshot re-anchoring via
+ * {@link #update}, the v4 book-version chain with the legacy per-side-max fallback
+ * ({@link #updateVersions}), and the 64-level retention/backfill semantics of
+ * {@link #applyDelta} (match#70). Together with GatewayStateManager it is the ONLY
+ * behavioral specification for the C++ market-gateway rewrite.
+ *
+ * <p>Pinning tests (the executable part of the spec): {@code GatewayOrderBookTest} and
+ * {@code GatewayStateManagerSbeTest}.
+ *
+ * <p>Behavior-changing refactors are FORBIDDEN until the port lands. Any intentional
+ * behavior change is a SPEC change: it must update {@code docs/gateway-port-spec.md} and
+ * the pinning tests in the same commit, and say so in the commit message. See
+ * {@code docs/gateway-port-spec.md} for the invariant map and port checklist.
  */
 public class GatewayOrderBook {
     // Retention depth. Must be comfortably DEEPER than what UIs render
