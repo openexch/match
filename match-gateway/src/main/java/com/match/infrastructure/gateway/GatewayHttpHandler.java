@@ -208,9 +208,30 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
                 break;
             }
         }
-        String json = "{\"status\":\"ok\",\"orderBook\":" + hasAnyOrderBook +
-                      ",\"trades\":" + stateManager.getTrades().hasData() + "}";
-        sendJson(ctx, json);
+        String dataFields = "\"orderBook\":" + hasAnyOrderBook +
+                      ",\"trades\":" + stateManager.getTrades().hasData();
+
+        // D-1: 200 only while the Aeron bridge to the cluster is delivering, so probers
+        // (cloud-console probeHealth, future k8s) see a wedged gateway as DOWN. Signals
+        // are the ones already tracked for /metrics and the M6 stale-egress reconnect;
+        // the leader's ~1s keep-warm means a healthy link never idles near the threshold.
+        // No bridge wired (test-only constructor) = nothing to judge, legacy 200.
+        if (aeronGateway != null) {
+            boolean connected = aeronGateway.isConnected();
+            long egressAgeMs = aeronGateway.getEgressAgeMs();
+            String reason = !connected ? "cluster session not connected"
+                    : egressAgeMs > AeronGateway.STALE_EGRESS_TIMEOUT_MS
+                            ? "no egress from cluster for " + egressAgeMs + "ms" : null;
+            String clusterFields = ",\"clusterConnected\":" + connected + ",\"egressAgeMs\":" + egressAgeMs;
+            if (reason != null) {
+                sendJson(ctx, HttpResponseStatus.SERVICE_UNAVAILABLE,
+                        "{\"status\":\"unhealthy\",\"reason\":\"" + reason + "\"," + dataFields + clusterFields + "}");
+            } else {
+                sendJson(ctx, "{\"status\":\"ok\"," + dataFields + clusterFields + "}");
+            }
+            return;
+        }
+        sendJson(ctx, "{\"status\":\"ok\"," + dataFields + "}");
     }
 
     private String parseQueryString(String uri, String param, String defaultValue) {
@@ -244,9 +265,13 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
     }
 
     private void sendJson(ChannelHandlerContext ctx, String json) {
+        sendJson(ctx, HttpResponseStatus.OK, json);
+    }
+
+    private void sendJson(ChannelHandlerContext ctx, HttpResponseStatus status, String json) {
         FullHttpResponse response = new DefaultFullHttpResponse(
             HttpVersion.HTTP_1_1,
-            HttpResponseStatus.OK,
+            status,
             Unpooled.copiedBuffer(json, CharsetUtil.UTF_8)
         );
         response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
