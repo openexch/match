@@ -468,6 +468,9 @@ public class AppClusteredService implements ClusteredService {
                             "Ingress frames dropped because the engine/apply path threw an unexpected exception — a bug, ~always zero (A-4)",
                             sbeDemuxer::applyErrorCount)
                     .counter("match_orders_terminal_total", "Terminal order statuses published", eventPublisher::terminalStatusCount)
+                    .counter("match_egress_disruptor_exceptions_total",
+                            "OMS-lane Disruptor handler exceptions swallowed (event lost pre-statusSeq); should be ~zero (C-6)",
+                            eventPublisher::disruptorExceptionCount)
                     .counter("match_overflow_rejects_total", "Orders rejected for fixed-point overflow", engine::getOverflowRejectCount)
                     .counter("match_invalid_qty_rejects_total", "Orders rejected for non-positive quantity", engine::getInvalidQuantityRejectCount)
                     .counter("match_trades_total", "Trades executed (trade id high-water mark)", eventPublisher::getTradeIdGenerator)

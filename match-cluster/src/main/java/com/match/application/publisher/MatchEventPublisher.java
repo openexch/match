@@ -74,6 +74,16 @@ public class MatchEventPublisher implements MatchEventSink {
     // and the diag reader both run on the cluster service thread.
     private long terminalStatusCount;
 
+    // C-6 diag counter: the per-market Disruptor default exception handler (see initMarket)
+    // swallows any exception thrown by a market's MarketEventHandler. That event dies BEFORE
+    // a statusSeq is stamped on the wire, so it leaves neither a wire gap nor an OMS-side
+    // reconciliation trigger; it is completely invisible without this counter. AtomicLong,
+    // NOT a plain long like terminalStatusCount: the handlers run on the per-market publisher
+    // threads (multiple writers) and the /metrics scraper reads it from another thread, so the
+    // single-thread discipline that makes terminalStatusCount safe does not hold here. Should
+    // be ~zero; any non-zero value is a silently-dropped OMS-lane egress event.
+    private final AtomicLong disruptorExceptionCount = new AtomicLong();
+
     // Settlement journal (money-loss surface): every trade and every terminal status is
     // appended HERE, on the deterministic service thread, BEFORE the sheddable Disruptor —
     // so the journal sees every settlement-relevant event on every replica regardless of
@@ -129,15 +139,29 @@ public class MatchEventPublisher implements MatchEventSink {
         disruptor.setDefaultExceptionHandler(new ExceptionHandler<PublishEvent>() {
             @Override
             public void handleEventException(Throwable ex, long sequence, PublishEvent event) {
-                logger.warn("Exception in event handler for market " + mktId + ": " + ex.getMessage());
+                // C-6: KEEP SWALLOWING (rethrow would kill this market's publisher thread and
+                // wedge all of its egress), but make it counted and LOUD. The event dies here,
+                // before any statusSeq is stamped, so it leaves no wire gap and triggers no
+                // OMS-side reconciliation; this counter and ERROR line are the only trace it
+                // ever leaves. logged at ERROR (not WARN) because the default level is ERROR
+                // and WARN was being suppressed. No rate-limit: these should ~never fire.
+                disruptorExceptionCount.incrementAndGet();
+                logger.error("EGRESS EVENT LOST (C-6): market=" + mktId + " sequence=" + sequence
+                        + " swallowed handler exception " + ex.getClass().getName() + ": " + ex.getMessage()
+                        + "; event dropped before statusSeq was stamped (no wire gap, no OMS"
+                        + " reconciliation); count exported as match_egress_disruptor_exceptions_total");
             }
             @Override
             public void handleOnStartException(Throwable ex) {
-                logger.warn("Exception in onStart for market " + mktId + ": " + ex.getMessage());
+                // Lifecycle, not per-event: raised to ERROR so it is not suppressed. Not folded
+                // into disruptorExceptionCount, which tracks per-event egress loss specifically.
+                logger.error("Exception in onStart for market " + mktId + ": "
+                        + ex.getClass().getName() + ": " + ex.getMessage());
             }
             @Override
             public void handleOnShutdownException(Throwable ex) {
-                logger.warn("Exception in onShutdown for market " + mktId + ": " + ex.getMessage());
+                logger.error("Exception in onShutdown for market " + mktId + ": "
+                        + ex.getClass().getName() + ": " + ex.getMessage());
             }
         });
 
@@ -443,6 +467,17 @@ public class MatchEventPublisher implements MatchEventSink {
 
     public long terminalStatusCount() {
         return terminalStatusCount;
+    }
+
+    /**
+     * Count of OMS-lane Disruptor handler exceptions swallowed by the per-market default
+     * exception handler (C-6). Each one is an egress event lost before its statusSeq was
+     * stamped (no wire gap, no OMS reconciliation), so this counter is its only signal.
+     * Read off the hot path (metrics scrape thread); should be ~zero. Exported as
+     * match_egress_disruptor_exceptions_total.
+     */
+    public long disruptorExceptionCount() {
+        return disruptorExceptionCount.get();
     }
 
     /**
