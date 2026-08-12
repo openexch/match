@@ -764,24 +764,34 @@ public class AppClusteredService implements ClusteredService {
     private void loadSnapshot(final Image snapshotImage) {
         System.out.println("[SNAPSHOT] loadSnapshot called, image position: " + snapshotImage.position());
 
-        // Use FragmentAssembler to reassemble messages that span multiple fragments.
-        // Without this, snapshots larger than MTU (8KB) would be delivered as separate
-        // fragments, and the handler would try to parse an incomplete snapshot — causing
-        // either IndexOutOfBoundsException or silently corrupted state.
+        // A-2 fix: the snapshot is offered as one OR MORE Aeron messages (chunked on the way out to
+        // stay under maxMessageLength). FragmentAssembler reassembles each MESSAGE from its MTU
+        // fragments; we then ACCUMULATE the reassembled messages, in arrival order, into one
+        // contiguous payload and decode it ONCE. The snapshot is written by a single
+        // ExclusivePublication → a single ordered image, so the concatenation is byte-identical to
+        // SnapshotCodec.serialize's output. Decoding per-message (the old behaviour) silently
+        // corrupted state the moment a snapshot spanned more than one chunk.
+        final ExpandableArrayBuffer accum = new ExpandableArrayBuffer();
+        final int[] accumLen = {0};
         final io.aeron.FragmentAssembler assembler = new io.aeron.FragmentAssembler(
             (buf, offset, length, header) -> {
-                System.out.println("[SNAPSHOT] Reassembled message: offset=" + offset + ", length=" + length);
-                processSnapshotPayload(buf, offset, length);
+                accum.putBytes(accumLen[0], buf, offset, length);
+                accumLen[0] += length;
             }
         );
 
         // Higher fragment limit shortens replay time on restart. Snapshots are one-shot at
         // startup so spending more time inside one poll() call is fine.
-        int fragmentCount = 0;
+        int fragmentBatches = 0;
         while (snapshotImage.poll(assembler, 64) > 0) {
-            fragmentCount++;
+            fragmentBatches++;
         }
-        System.out.println("[SNAPSHOT] Total fragments polled: " + fragmentCount);
+        System.out.println("[SNAPSHOT] Reassembled " + accumLen[0] + " byte(s) in "
+                + fragmentBatches + " poll batch(es)");
+
+        if (accumLen[0] > 0) {
+            processSnapshotPayload(accum, 0, accumLen[0]);
+        }
     }
 
     /**
@@ -998,23 +1008,19 @@ public class AppClusteredService implements ClusteredService {
                 + " TimerCorrelationId=" + timerCorrelationId
                 + " totalBytes=" + pos);
 
-        // Bounded retry — a wedged snapshot publication used to spin forever, masking the
-        // problem. 30s wall-clock is generous (cluster timeouts are seconds, not minutes).
-        long result;
-        long startMs = System.currentTimeMillis();
-        long deadlineMs = startMs + 30_000;
-        long attempts = 0;
-        while ((result = snapshotPublication.offer(buffer, 0, pos)) < 0) {
-            attempts++;
-            if (System.currentTimeMillis() > deadlineMs) {
-                throw new IllegalStateException("Snapshot offer stuck after 30s: lastResult=" + result
-                        + ", attempts=" + attempts + ", payloadBytes=" + pos);
-            }
-            cluster.idleStrategy().idle();
-        }
-        System.out.println("[SNAPSHOT] Publication result: " + result
-                + " (success after " + attempts + " retries, "
-                + (System.currentTimeMillis() - startMs) + "ms)");
+        // A-2 fix: CHUNK the snapshot. A single offer() throws IllegalArgumentException the moment
+        // the payload exceeds the publication's maxMessageLength (snapshot term / 8) — and the old
+        // retry loop only caught NEGATIVE-return back-pressure, never the size-exceeded throw, so a
+        // snapshot larger than maxMessageLength failed PERMANENTLY (log never pruned, tmpfs fills).
+        // Splitting into maxMessageLength-sized messages keeps every offer legal; a payload that
+        // already fits is sent as one message (byte-identical to the historical single-offer path).
+        // The bounded 30s retry — a wedged publication used to spin forever — is preserved across
+        // ALL chunks as one overall deadline. Byte format is unchanged; the receiver reassembles.
+        final long startMs = System.currentTimeMillis();
+        final int chunks = offerSnapshotChunked(snapshotPublication, buffer, pos, cluster.idleStrategy());
+        System.out.println("[SNAPSHOT] Publication complete: " + pos + " byte(s) in " + chunks
+                + " chunk(s) (maxMessageLength=" + snapshotPublication.maxMessageLength() + ") in "
+                + (System.currentTimeMillis() - startMs) + "ms");
 
         // Block until the Aeron Archive has read all the bytes we offered into its on-disk
         // recording file. Without this, onTakeSnapshot returns while the recording is still in
@@ -1027,6 +1033,46 @@ public class AppClusteredService implements ClusteredService {
         // for this one — a snapshot taken by ClusterTool has to reset the rhythm
         // exactly like one this node requested.
         snapshotCadence.snapshotTaken(cluster.logPosition(), System.nanoTime());
+    }
+
+    /**
+     * Offer a serialized snapshot payload as one or more Aeron messages, each no larger than the
+     * publication's {@code maxMessageLength} (the snapshot channel's term length / 8). Extracted
+     * from {@link #onTakeSnapshot} so the multi-chunk transport path is unit-testable against a real
+     * Aeron publication (see {@code SnapshotChunkingTransportTest}).
+     *
+     * <p>When {@code pos <= maxMessageLength} exactly one message is offered — byte-identical to the
+     * historical single-offer snapshot, so no regression for the common case. The bounded 30s retry
+     * is shared across every chunk (one overall deadline) so a wedged publication fails loudly
+     * instead of spinning forever. Chunk COUNT is a purely local I/O detail — each node splits with
+     * its own {@code maxMessageLength} and the receiver reassembles by raw byte concatenation, so
+     * there is deliberately no cross-node framing or alignment.</p>
+     *
+     * @return the number of chunks (messages) offered.
+     */
+    static int offerSnapshotChunked(final ExclusivePublication snapshotPublication,
+                                    final DirectBuffer buffer, final int pos,
+                                    final org.agrona.concurrent.IdleStrategy idleStrategy) {
+        final int maxLen = snapshotPublication.maxMessageLength();
+        int sent = 0;
+        int chunks = 0;
+        long attempts = 0;
+        final long deadlineMs = System.currentTimeMillis() + 30_000;
+        while (sent < pos) {
+            final int chunk = Math.min(maxLen, pos - sent);
+            long result;
+            while ((result = snapshotPublication.offer(buffer, sent, chunk)) < 0) {
+                attempts++;
+                if (System.currentTimeMillis() > deadlineMs) {
+                    throw new IllegalStateException("Snapshot offer stuck after 30s: lastResult=" + result
+                            + ", attempts=" + attempts + ", sent=" + sent + "/" + pos + " bytes");
+                }
+                idleStrategy.idle();
+            }
+            sent += chunk;
+            chunks++;
+        }
+        return chunks;
     }
 
     /**
