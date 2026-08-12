@@ -13,7 +13,7 @@ public final class OrderStatusBatchEncoder
     public static final int BLOCK_LENGTH = 12;
     public static final int TEMPLATE_ID = 24;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 8;
+    public static final int SCHEMA_VERSION = 9;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -246,7 +246,7 @@ public final class OrderStatusBatchEncoder
             final int limit = parentMessage.limit();
             initialLimit = limit;
             parentMessage.limit(limit + HEADER_SIZE);
-            buffer.putShort(limit + 0, (short)67, BYTE_ORDER);
+            buffer.putShort(limit + 0, (short)75, BYTE_ORDER);
             buffer.putShort(limit + 2, (short)count, BYTE_ORDER);
         }
 
@@ -289,7 +289,7 @@ public final class OrderStatusBatchEncoder
 
         public static int sbeBlockLength()
         {
-            return 67;
+            return 75;
         }
 
         public static int orderIdId()
@@ -828,6 +828,58 @@ public final class OrderStatusBatchEncoder
         public OrdersEncoder egressSeq(final long value)
         {
             buffer.putLong(offset + 59, value, BYTE_ORDER);
+            return this;
+        }
+
+
+        public static int clusterTimestampId()
+        {
+            return 14;
+        }
+
+        public static int clusterTimestampSinceVersion()
+        {
+            return 0;
+        }
+
+        public static int clusterTimestampEncodingOffset()
+        {
+            return 67;
+        }
+
+        public static int clusterTimestampEncodingLength()
+        {
+            return 8;
+        }
+
+        public static String clusterTimestampMetaAttribute(final MetaAttribute metaAttribute)
+        {
+            if (MetaAttribute.PRESENCE == metaAttribute)
+            {
+                return "required";
+            }
+
+            return "";
+        }
+
+        public static long clusterTimestampNullValue()
+        {
+            return -9223372036854775808L;
+        }
+
+        public static long clusterTimestampMinValue()
+        {
+            return -9223372036854775807L;
+        }
+
+        public static long clusterTimestampMaxValue()
+        {
+            return 9223372036854775807L;
+        }
+
+        public OrdersEncoder clusterTimestamp(final long value)
+        {
+            buffer.putLong(offset + 67, value, BYTE_ORDER);
             return this;
         }
 

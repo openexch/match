@@ -13,7 +13,7 @@ public final class TradesBatchEncoder
     public static final int BLOCK_LENGTH = 12;
     public static final int TEMPLATE_ID = 23;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 8;
+    public static final int SCHEMA_VERSION = 9;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
@@ -246,7 +246,7 @@ public final class TradesBatchEncoder
             final int limit = parentMessage.limit();
             initialLimit = limit;
             parentMessage.limit(limit + HEADER_SIZE);
-            buffer.putShort(limit + 0, (short)29, BYTE_ORDER);
+            buffer.putShort(limit + 0, (short)37, BYTE_ORDER);
             buffer.putShort(limit + 2, (short)count, BYTE_ORDER);
         }
 
@@ -289,7 +289,7 @@ public final class TradesBatchEncoder
 
         public static int sbeBlockLength()
         {
-            return 29;
+            return 37;
         }
 
         public static int priceId()
@@ -535,6 +535,58 @@ public final class TradesBatchEncoder
             buffer.putByte(offset + 28, (byte)value.value());
             return this;
         }
+
+        public static int firstTradeIdId()
+        {
+            return 6;
+        }
+
+        public static int firstTradeIdSinceVersion()
+        {
+            return 0;
+        }
+
+        public static int firstTradeIdEncodingOffset()
+        {
+            return 29;
+        }
+
+        public static int firstTradeIdEncodingLength()
+        {
+            return 8;
+        }
+
+        public static String firstTradeIdMetaAttribute(final MetaAttribute metaAttribute)
+        {
+            if (MetaAttribute.PRESENCE == metaAttribute)
+            {
+                return "required";
+            }
+
+            return "";
+        }
+
+        public static long firstTradeIdNullValue()
+        {
+            return -9223372036854775808L;
+        }
+
+        public static long firstTradeIdMinValue()
+        {
+            return -9223372036854775807L;
+        }
+
+        public static long firstTradeIdMaxValue()
+        {
+            return 9223372036854775807L;
+        }
+
+        public TradesEncoder firstTradeId(final long value)
+        {
+            buffer.putLong(offset + 29, value, BYTE_ORDER);
+            return this;
+        }
+
     }
 
     public String toString()
