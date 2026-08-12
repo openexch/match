@@ -60,6 +60,13 @@ public class MatchEventPublisher implements MatchEventSink {
     // 64K events provides ~1-2 seconds buffer at 50K events/sec peak
     private static final int RING_BUFFER_SIZE = 65536;
 
+    // C-1: bounded spin budget for claimSlotOrHalt before it declares the egress ring wedged.
+    // A full egress ring means the per-market publisher thread cannot keep up; parking the
+    // consensus thread on ringBuffer.next() would livelock the whole node (this was the
+    // mechanism behind the 60s failover blindness). Once this budget is spent with the ring
+    // still full, the node halts instead of parking.
+    private static final int RING_FULL_MAX_SPINS = 1000;
+
     // Per-market Disruptors, ring buffers, and handlers
     private final Int2ObjectHashMap<Disruptor<PublishEvent>> disruptors;
     private final Int2ObjectHashMap<RingBuffer<PublishEvent>> ringBuffers;
@@ -202,6 +209,42 @@ public class MatchEventPublisher implements MatchEventSink {
     }
 
     /**
+     * Claim the next egress ring slot for {@code marketId}, or halt the node if the ring is wedged (C-1).
+     *
+     * <p>Happy path (the ring has capacity): a single {@link RingBuffer#remainingCapacity()} read
+     * then {@link RingBuffer#next()}, zero allocation. Only when the ring is full do we spin a
+     * bounded number of times ({@link #RING_FULL_MAX_SPINS}) waiting for the per-market publisher
+     * thread to drain a slot. If the ring is STILL full after that budget the ring is wedged: we
+     * log loudly and {@link Runtime#halt(int)} the node. We do NOT call {@code next()} on a full
+     * ring, because next() would park THIS thread (the cluster service / consensus thread) until
+     * the publisher drains, livelocking the node (the mechanism behind the 60s failover blindness).
+     *
+     * <p>This is leader-side egress, NOT replicated state, so halting one node here does not diverge
+     * cluster state; it just removes a node that can no longer ship egress.
+     *
+     * @return a claimed ring sequence; only returns when a slot is available (otherwise it halts).
+     */
+    private long claimSlotOrHalt(RingBuffer<PublishEvent> ringBuffer, int marketId) {
+        if (ringBuffer.remainingCapacity() == 0) {
+            int spins = 0;
+            while (ringBuffer.remainingCapacity() == 0 && spins < RING_FULL_MAX_SPINS) {
+                Thread.onSpinWait();
+                spins++;
+            }
+            if (ringBuffer.remainingCapacity() == 0) {
+                // Allocation here is fine: this path halts the JVM, it is not the hot path.
+                String crit = "CRITICAL: egress ring buffer for market " + marketId + " still full after "
+                        + RING_FULL_MAX_SPINS + " spins; halting node to avoid livelocking the consensus thread "
+                        + "(C-1). A wedged egress ring means the market publisher cannot keep up.";
+                logger.error(crit);
+                System.err.println(crit);
+                Runtime.getRuntime().halt(1);
+            }
+        }
+        return ringBuffer.next();
+    }
+
+    /**
      * Publish trade execution event.
      * ZERO allocations - uses pre-allocated ring buffer slot.
      *
@@ -235,29 +278,17 @@ public class MatchEventPublisher implements MatchEventSink {
                     takerOmsOrderId, makerOmsOrderId);
         }
 
-        // Check ring buffer capacity and apply backpressure if needed
+        // Early-warning log when the egress ring is running low. The full-ring case
+        // (bounded backpressure and, if wedged, halt) is handled by claimSlotOrHalt below.
         long remaining = ringBuffer.remainingCapacity();
         long bufferSize = ringBuffer.getBufferSize();
         if (remaining < bufferSize / 2) {
             logger.warn("RING BUFFER LOW: market=" + marketId + ", remaining=" + remaining + "/" + bufferSize);
         }
-        if (remaining == 0) {
-            logger.error("RING BUFFER FULL - applying backpressure! market=" + marketId);
-            // Spin wait with limit to prevent indefinite blocking
-            int spinCount = 0;
-            final int MAX_SPINS = 1000;
-            while (ringBuffer.remainingCapacity() == 0 && spinCount < MAX_SPINS) {
-                Thread.onSpinWait();
-                spinCount++;
-            }
-            if (spinCount >= MAX_SPINS) {
-                logger.error("RING BUFFER still full after " + MAX_SPINS + " spins - forcing publish");
-            }
-        }
 
-        // Get next sequence - this may block briefly if buffer is full
-        // In a well-tuned system with backpressure, this should rarely block
-        long sequence = ringBuffer.next();
+        // Claim a slot, or halt the node if the egress ring is wedged (C-1). Never parks the
+        // consensus thread on a full ring.
+        long sequence = claimSlotOrHalt(ringBuffer, marketId);
         try {
             PublishEvent event = ringBuffer.get(sequence);
             event.setTradeExecution(
@@ -294,7 +325,7 @@ public class MatchEventPublisher implements MatchEventSink {
             return false;
         }
 
-        long sequence = ringBuffer.next();
+        long sequence = claimSlotOrHalt(ringBuffer, marketId);
         try {
             PublishEvent event = ringBuffer.get(sequence);
             event.setOrderBookLevelUpdate(
@@ -325,7 +356,7 @@ public class MatchEventPublisher implements MatchEventSink {
             return false;
         }
 
-        long sequence = ringBuffer.next();
+        long sequence = claimSlotOrHalt(ringBuffer, marketId);
         try {
             PublishEvent event = ringBuffer.get(sequence);
             event.setOrderBookSnapshot(
@@ -398,7 +429,7 @@ public class MatchEventPublisher implements MatchEventSink {
             }
         }
 
-        long sequence = ringBuffer.next();
+        long sequence = claimSlotOrHalt(ringBuffer, marketId);
         try {
             PublishEvent event = ringBuffer.get(sequence);
             event.setOrderStatusUpdate(

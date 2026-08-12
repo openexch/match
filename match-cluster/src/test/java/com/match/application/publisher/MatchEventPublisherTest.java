@@ -277,6 +277,52 @@ public class MatchEventPublisherTest {
         assertEquals(2, handler2.events.get(0).marketId);
     }
 
+    // ==================== C-1: claimSlotOrHalt slot claiming ====================
+
+    /**
+     * C-1: every publish method now claims its ring slot through claimSlotOrHalt, which halts the
+     * node only when the ring stays full past the spin budget. This drives a burst that stays well
+     * within ring capacity (the full-ring branch is never entered), asserting that (a) the helper
+     * returns a valid slot for every publish so all events are delivered, and (b) the node is NOT
+     * halted and the publisher keeps running.
+     *
+     * The halt branch, and the "spin briefly then a slot frees" recovery, are both decided inside
+     * the RING_FULL_MAX_SPINS (sub-millisecond) window; they cannot be forced deterministically
+     * from a test without sub-microsecond cross-thread timing, and the halt outcome would kill the
+     * JVM/test run. Those two paths are covered by code review (see claimSlotOrHalt): after the
+     * bounded spin, a freed slot falls through to next() (safe under ProducerType.SINGLE), a still
+     * full ring logs loudly and calls Runtime.halt(1).
+     */
+    @Test
+    public void claimSlotOrHaltDeliversBurstWithoutHalting() throws Exception {
+        MatchEventPublisher p = new MatchEventPublisher();
+        CountingHandler counting = new CountingHandler(MARKET_ID);
+        p.initMarket(MARKET_ID, counting);
+        p.start();
+        try {
+            // 3 publishes per iteration; 3000 total events sit far below the 65536 ring even if
+            // the consumer never drained, so remainingCapacity never reaches 0 and the helper
+            // never spins or halts.
+            final int burst = 1000;
+            for (int i = 0; i < burst; i++) {
+                assertTrue("trade publish " + i + " should claim a slot",
+                        p.publishTradeExecution(MARKET_ID, i, i, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L));
+                assertTrue("book publish " + i + " should claim a slot",
+                        p.publishOrderBookLevelUpdate(MARKET_ID, i, 60L, 20L, 3, false));
+                assertTrue("status publish " + i + " should claim a slot",
+                        p.publishOrderStatusUpdate(MARKET_ID, i, 1L, 1L, OrderStatusType.NEW, 100L, 0L, 50L, true, 0L, 0, 0L));
+            }
+
+            final int expected = burst * 3;
+            pollUntil(() -> counting.count.get() == expected, 5000,
+                    "all " + expected + " burst events should be delivered through claimSlotOrHalt");
+            assertEquals("every claimed slot was delivered", expected, counting.count.get());
+            assertTrue("publisher must not have halted under a within-capacity burst", p.isRunning());
+        } finally {
+            p.shutdown();
+        }
+    }
+
     // ==================== C-6: swallowed Disruptor handler exceptions ====================
 
     /**
@@ -358,6 +404,29 @@ public class MatchEventPublisherTest {
             copy.takerIsBuy = event.isTakerIsBuy();
             copy.isSnapshot = event.isSnapshot();
             events.add(copy);
+        }
+
+        @Override
+        public int getMarketId() {
+            return marketId;
+        }
+    }
+
+    /**
+     * C-1 helper: minimal handler that only counts delivered events (no per-event allocation
+     * growth), so a burst test can push thousands of events cheaply.
+     */
+    private static class CountingHandler implements MarketEventHandler {
+        final AtomicInteger count = new AtomicInteger();
+        private final int marketId;
+
+        CountingHandler(int marketId) {
+            this.marketId = marketId;
+        }
+
+        @Override
+        public void onEvent(PublishEvent event, long sequence, boolean endOfBatch) {
+            count.incrementAndGet();
         }
 
         @Override
