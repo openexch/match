@@ -6,7 +6,9 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.Assert.*;
 
@@ -275,6 +277,56 @@ public class MatchEventPublisherTest {
         assertEquals(2, handler2.events.get(0).marketId);
     }
 
+    // ==================== C-6: swallowed Disruptor handler exceptions ====================
+
+    /**
+     * C-6: a MarketEventHandler that throws must NOT silently vanish. The per-market
+     * Disruptor default exception handler swallows the throw (rethrowing would kill the
+     * publisher thread), but it must (a) increment disruptorExceptionCount so the loss is
+     * observable, and (b) leave the publisher thread alive so later events still flow.
+     */
+    @Test
+    public void swallowedHandlerExceptionIsCountedAndPublisherSurvives() throws Exception {
+        MatchEventPublisher p = new MatchEventPublisher();
+        ThrowOnceHandler throwing = new ThrowOnceHandler(MARKET_ID);
+        p.initMarket(MARKET_ID, throwing);
+        p.start();
+        try {
+            assertEquals("no exceptions before anything is published", 0L, p.disruptorExceptionCount());
+
+            // First event: handler throws. The Disruptor calls handleEventException, which
+            // swallows + counts it, then advances past the failed event.
+            p.publishTradeExecution(MARKET_ID, 111L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L);
+            pollUntil(() -> p.disruptorExceptionCount() >= 1, 3000,
+                    "disruptorExceptionCount should reach >= 1 after the handler throws");
+            assertTrue("swallowed exception was counted", p.disruptorExceptionCount() >= 1);
+
+            // Second event: the publisher thread must have survived the throw and keep working.
+            p.publishTradeExecution(MARKET_ID, 222L, 3L, 3L, 4L, 4L, 60L, 5L, false, 0L, 0L, 0L);
+            pollUntil(() -> !throwing.capturedTimestamps.isEmpty(), 3000,
+                    "publisher thread should still deliver events after swallowing an exception");
+            assertEquals("the surviving thread delivered the post-exception event",
+                    222L, (long) throwing.capturedTimestamps.get(0));
+
+            assertTrue("publisher still running after a swallowed handler exception", p.isRunning());
+        } finally {
+            p.shutdown();
+        }
+    }
+
+    /** Poll {@code cond} up to {@code timeoutMs}, failing the test if it never becomes true. */
+    private static void pollUntil(BooleanSupplier cond, long timeoutMs, String message)
+            throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (cond.getAsBoolean()) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        fail("timed out after " + timeoutMs + "ms: " + message);
+    }
+
     // ==================== Test Handler ====================
 
     private static class CapturedEvent {
@@ -306,6 +358,33 @@ public class MatchEventPublisherTest {
             copy.takerIsBuy = event.isTakerIsBuy();
             copy.isSnapshot = event.isSnapshot();
             events.add(copy);
+        }
+
+        @Override
+        public int getMarketId() {
+            return marketId;
+        }
+    }
+
+    /**
+     * C-6 helper: throws on its FIRST event (to trip the Disruptor exception handler), then
+     * captures every event after that (to prove the publisher thread survived the throw).
+     */
+    private static class ThrowOnceHandler implements MarketEventHandler {
+        final CopyOnWriteArrayList<Long> capturedTimestamps = new CopyOnWriteArrayList<>();
+        private final int marketId;
+        private final AtomicInteger invocations = new AtomicInteger();
+
+        ThrowOnceHandler(int marketId) {
+            this.marketId = marketId;
+        }
+
+        @Override
+        public void onEvent(PublishEvent event, long sequence, boolean endOfBatch) {
+            if (invocations.getAndIncrement() == 0) {
+                throw new RuntimeException("test-injected handler failure");
+            }
+            capturedTimestamps.add(event.getTimestamp());
         }
 
         @Override
