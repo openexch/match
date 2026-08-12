@@ -9,6 +9,7 @@ import org.agrona.CloseHelper;
 import org.agrona.MutableDirectBuffer;
 import org.agrona.concurrent.Agent;
 import org.agrona.concurrent.BackoffIdleStrategy;
+import org.agrona.concurrent.ControlledMessageHandler;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.ringbuffer.OneToOneRingBuffer;
 
@@ -52,6 +53,7 @@ public final class JournalWriterAgent implements Agent {
     private volatile long writtenEntries;
     private volatile long journalPosition;
     private volatile long connectFailures;
+    private volatile long reconnects;
 
     public JournalWriterAgent(
             final OneToOneRingBuffer ring,
@@ -73,7 +75,7 @@ public final class JournalWriterAgent implements Agent {
         if (publication == null) {
             return tryConnect() ? 1 : 0;
         }
-        return ring.read(this::onRingMessage, DRAIN_LIMIT);
+        return ring.controlledRead(this::onRingMessage, DRAIN_LIMIT);
     }
 
     /**
@@ -103,14 +105,26 @@ public final class JournalWriterAgent implements Agent {
         }
     }
 
-    private void onRingMessage(
+    private ControlledMessageHandler.Action onRingMessage(
             final int msgTypeId, final MutableDirectBuffer buffer, final int index, final int length) {
-        // Blocking offer: the ring handler owns backpressure. A CLOSED/MAX_POSITION result is
-        // unrecoverable for this publication — surface it hard (the errorHandler restarts us).
+        // Blocking offer inside the handler owns backpressure: a transient negative result
+        // (BACK_PRESSURED, NOT_CONNECTED, ADMIN_ACTION) is retried inline with idle backoff.
+        // A CLOSED or MAX_POSITION_EXCEEDED result means this publication is permanently unusable,
+        // so close it and null it (the next doWork reconnects with a fresh recorded publication),
+        // then ABORT so the entry stays in the ring and is retried after reconnect. Never drop
+        // (see the class failure policy): controlledRead ABORT does not advance the read position,
+        // so this same message is re-presented on the next drain instead of being consumed.
         long result;
         while ((result = publication.offer(buffer, index, length)) < 0) {
             if (result == Publication.CLOSED || result == Publication.MAX_POSITION_EXCEEDED) {
-                throw new IllegalStateException("settlement journal publication unusable: " + result);
+                CloseHelper.quietClose(publication);
+                CloseHelper.quietClose(archive);
+                publication = null;
+                archive = null;
+                reconnects = reconnects + 1;
+                log.error("Settlement journal publication unusable (" + result
+                        + "); reconnecting, entry preserved and retried (reconnects=" + reconnects + ")");
+                return ControlledMessageHandler.Action.ABORT;
             }
             offerIdle.idle();
         }
@@ -125,6 +139,7 @@ public final class JournalWriterAgent implements Agent {
             checkpoints.append(lastEgressSeq, journalPosition);
             lastCheckpointedSegmentBase = segmentBase;
         }
+        return ControlledMessageHandler.Action.COMMIT;
     }
 
     public long writtenEntries() {
@@ -133,6 +148,11 @@ public final class JournalWriterAgent implements Agent {
 
     public long journalPosition() {
         return journalPosition;
+    }
+
+    /** Count of publication reconnects forced by a CLOSED / MAX_POSITION_EXCEEDED offer result. */
+    public long reconnects() {
+        return reconnects;
     }
 
     @Override
