@@ -458,6 +458,15 @@ public class AppClusteredService implements ClusteredService {
             int port = env != null ? Integer.parseInt(env) : 9500 + nodeId;
             metricsServer = new com.match.infrastructure.metrics.NodeMetricsServer(nodeMetrics)
                     .counter("match_orders_submitted_total", "Orders admitted by the engine", sbeDemuxer::createOrderCount)
+                    .counter("match_ingress_schema_rejects_total",
+                            "Ingress frames dropped for a schemaId/version mismatch before decode (G-2)",
+                            sbeDemuxer::schemaRejectCount)
+                    .counter("match_ingress_decode_rejects_total",
+                            "Ingress frames dropped for a body-decode failure, e.g. an out-of-range enum byte (A-4)",
+                            sbeDemuxer::decodeRejectCount)
+                    .counter("match_ingress_apply_errors_total",
+                            "Ingress frames dropped because the engine/apply path threw an unexpected exception — a bug, ~always zero (A-4)",
+                            sbeDemuxer::applyErrorCount)
                     .counter("match_orders_terminal_total", "Terminal order statuses published", eventPublisher::terminalStatusCount)
                     .counter("match_overflow_rejects_total", "Orders rejected for fixed-point overflow", engine::getOverflowRejectCount)
                     .counter("match_invalid_qty_rejects_total", "Orders rejected for non-positive quantity", engine::getInvalidQuantityRejectCount)
@@ -867,8 +876,15 @@ public class AppClusteredService implements ClusteredService {
         try {
             sbeDemuxer.dispatch(buffer, offset, length, timestamp);
         } catch (Exception e) {
-            System.err.println("ORDER ERROR: " + e.getMessage());
-            throw new RuntimeException(e);
+            // A-4: NEVER rethrow into Aeron. SbeDemuxer already catches decode failures and
+            // drops the frame internally, so nothing should reach here. If a future edit lets
+            // an Exception escape dispatch, we still must not let it out: a throw here does not
+            // crash the single frame but, on repeat, trips match's IDENTICAL_ERROR_EXIT_THRESHOLD
+            // halt(2) and can crash-loop the node on replay (a rolling-upgrade schema-skew
+            // trigger). Count the escaped frame as an ingress drop (scrapeable) and log loudly.
+            sbeDemuxer.recordDispatchEscape();
+            System.err.println("INGRESS DROP (dispatch escape): swallowed to keep the consensus "
+                    + "thread alive — " + e.getClass().getSimpleName() + ": " + e.getMessage());
         }
         if (sampled) {
             nodeMetrics.recordOrderLatency(System.nanoTime() - t0);

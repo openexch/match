@@ -387,6 +387,52 @@ public class EmbeddedClusterTest {
                 "Received " + egressMessages.size() + " egress messages.");
     }
 
+    /**
+     * A-4/G-2 regression guard: a CreateOrder carrying an out-of-range OrderSide byte must be
+     * DROPPED deterministically, not thrown into Aeron. Byte 7 is not a legal OrderSide
+     * ({0=BID, 1=ASK, 255=NULL}); the generated OrderSide.get() throws IllegalArgumentException,
+     * which used to escape SbeDemuxer -> onSessionMessage -> Aeron and, on repeat, trip match's
+     * IDENTICAL_ERROR_EXIT_THRESHOLD halt(2) and crash-loop the node on replay. Fresh users so the
+     * test is independent of the chained state the earlier tests leave behind.
+     */
+    @Test
+    public void test7_PoisonEnumByteIsDroppedNotFatal() throws Exception {
+        egressMessages.clear();
+
+        final long poisonUser = 7001L;
+        final long cleanUser = 7002L;
+        // Resting BIDs inside the BTC price band [50k,150k] but below the best ask (~105k from
+        // test6) so the clean order rests as NEW without crossing. (40k would be below minPrice
+        // and get REJECTED, not NEW.)
+        long price = FixedPoint.fromDouble(60_000.0);
+        long qty = FixedPoint.fromDouble(0.25);
+
+        // 1) Encode a VALID CreateOrder, then poke a poison OrderSide byte at its absolute wire
+        //    offset (message header 8 bytes + orderSide field offset 29 = 37). 7 is out of range.
+        UnsafeBuffer poison = encodeCreateOrder(poisonUser, BTC_MARKET, true, "LIMIT", price, qty);
+        poison.putByte(MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.orderSideEncodingOffset(),
+                (byte) 7);
+        offerToCluster(poison, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
+
+        // 2) A CLEAN order AFTER the poison. Aeron ingress is FIFO per session, so if this order is
+        //    processed the poison frame was already handled without stalling the agent or wedging
+        //    the log position.
+        UnsafeBuffer clean = encodeCreateOrder(cleanUser, BTC_MARKET, true, "LIMIT", price, qty);
+        offerToCluster(clean, MessageHeaderEncoder.ENCODED_LENGTH + CreateOrderEncoder.BLOCK_LENGTH);
+
+        // (i) The clean order still reaches NEW — the agent survived the poison and advanced.
+        assertTrue("Clean order placed AFTER a poison frame must still be processed "
+                        + "(agent survived the poison enum byte; the log position advanced)",
+                awaitEgress(() -> findOrderId(BTC_MARKET, cleanUser, OrderStatus.NEW) > 0, 5000));
+
+        // (ii) The poison order produced NO OrderStatus at all — it was dropped, never applied.
+        assertEquals("Poison order must be dropped, never applied (no OrderStatus egress for it)",
+                -1L, findOrderId(BTC_MARKET, poisonUser, OrderStatus.NEW));
+
+        System.out.println("Poison enum-byte drop test passed: clean order NEW id="
+                + findOrderId(BTC_MARKET, cleanUser, OrderStatus.NEW) + ", poison user dropped.");
+    }
+
     @Test
     public void test8_SilentSecondClientReceivesFullSnapshotOnConnect() throws Exception {
         // Ensure the BTC book has a resting order (far from market, won't cross)
