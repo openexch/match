@@ -99,7 +99,8 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     // a just-elected leader / freshly-reconnected session time to start egress before we reconnect,
     // avoiding reconnect churn during the election window, while still recovering far faster than 30s.
     private volatile long lastEgressMessageMs = System.currentTimeMillis();
-    private static final long STALE_EGRESS_TIMEOUT_MS = 10_000; // no egress (incl. 1s keep-warm) for 10s = stale
+    // Package-private: /health uses the same threshold, so probe and self-heal agree on "stale".
+    static final long STALE_EGRESS_TIMEOUT_MS = 10_000; // no egress (incl. 1s keep-warm) for 10s = stale
 
     /** Counter incremented every time the Aeron error handler fires. */
     private final java.util.concurrent.atomic.AtomicLong aeronErrorCount = new java.util.concurrent.atomic.AtomicLong();

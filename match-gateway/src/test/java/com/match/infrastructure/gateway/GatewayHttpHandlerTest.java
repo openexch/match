@@ -83,6 +83,54 @@ public class GatewayHttpHandlerTest {
         channel.finish();
     }
 
+    // ==================== Health vs cluster bridge (D-1) ====================
+
+    /** AeronGateway stub reporting fixed bridge signals — never touches a real cluster. */
+    private static AeronGateway stubGateway(boolean connected, long egressAgeMs) {
+        return new AeronGateway() {
+            @Override public boolean isConnected() { return connected; }
+            @Override public long getEgressAgeMs() { return egressAgeMs; }
+        };
+    }
+
+    private FullHttpResponse healthWithBridge(boolean connected, long egressAgeMs) {
+        EmbeddedChannel channel = new EmbeddedChannel(
+            new GatewayHttpHandler(stateManager, null, stubGateway(connected, egressAgeMs)));
+        FullHttpResponse response = sendRequest(channel, HttpMethod.GET, "/health");
+        channel.finish();
+        return response;
+    }
+
+    @Test
+    public void testHealthReturns200WhenBridgeDelivering() {
+        FullHttpResponse response = healthWithBridge(true, 100);
+        assertEquals(HttpResponseStatus.OK, response.status());
+        String body = getBody(response);
+        assertTrue(body.contains("\"status\":\"ok\""));
+        assertTrue(body.contains("\"orderBook\":false")); // legacy fields must survive
+        assertTrue(body.contains("\"clusterConnected\":true"));
+        assertTrue(body.contains("\"egressAgeMs\":100"));
+    }
+
+    @Test
+    public void testHealthReturns503WhenBridgeDisconnected() {
+        FullHttpResponse response = healthWithBridge(false, 100);
+        assertEquals(HttpResponseStatus.SERVICE_UNAVAILABLE, response.status());
+        String body = getBody(response);
+        assertTrue(body.contains("\"status\":\"unhealthy\""));
+        assertTrue(body.contains("\"reason\":\"cluster session not connected\""));
+        assertTrue(body.contains("\"clusterConnected\":false"));
+    }
+
+    @Test
+    public void testHealthReturns503WhenConnectedButEgressStale() {
+        FullHttpResponse response = healthWithBridge(true, 60_000);
+        assertEquals(HttpResponseStatus.SERVICE_UNAVAILABLE, response.status());
+        String body = getBody(response);
+        assertTrue(body.contains("\"status\":\"unhealthy\""));
+        assertTrue(body.contains("\"reason\":\"no egress from cluster for 60000ms\""));
+    }
+
     // ==================== Order Book ====================
 
     @Test
