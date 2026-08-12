@@ -384,6 +384,16 @@ jobs:
       # fine-grained PAT in the CONSUMER_BUMP_TOKEN secret; until the secret exists
       # this step skips and says so. continue-on-error: a failed bump must not
       # unpublish anything — it shows yellow and the next push retries.
+      #
+      # ONE branch per producer, not one per version. A version-scoped branch name
+      # opened a NEW pr on every push, and because every bump edits the same two
+      # lines of pom.xml (and, in oms, the same producers.lock), the queue was
+      # self-conflicting: merging any one of them turned all the others DIRTY. On
+      # 2026-08-12 that queue reached 16 open PRs in oms and 11 in assets, all
+      # blocked on required_signatures, all superseded by each other. The fixed
+      # branch is instead RESET to the consumer's main on every push, so the open
+      # PR is always exactly this bump on top of current main: never stale, never
+      # conflicting with its own base, and never more than one per producer.
       - name: Open consumer bump PRs
         continue-on-error: true
         env:
@@ -396,10 +406,19 @@ jobs:
             exit 0
           fi
           for REPO in assets oms; do
-            BRANCH="bump/match-common-${V}"
+            BRANCH="bump/match-common"
             BASE=$(gh api "repos/openexch/${REPO}/git/ref/heads/main" --jq .object.sha)
-            gh api -X POST "repos/openexch/${REPO}/git/refs" \
-              -f ref="refs/heads/${BRANCH}" -f sha="$BASE" >/dev/null
+            # Create the branch, or force it back onto main if a previous bump is
+            # still open. Force is safe here precisely because nothing but this job
+            # writes this branch, and whatever it carried was an older version of
+            # the very pin about to be rewritten.
+            if gh api "repos/openexch/${REPO}/git/ref/heads/${BRANCH}" >/dev/null 2>&1; then
+              gh api -X PATCH "repos/openexch/${REPO}/git/refs/heads/${BRANCH}" \
+                -f sha="$BASE" -F force=true >/dev/null
+            else
+              gh api -X POST "repos/openexch/${REPO}/git/refs" \
+                -f ref="refs/heads/${BRANCH}" -f sha="$BASE" >/dev/null
+            fi
             # pom.xml: swap the <match.version> property in place.
             CONTENT=$(gh api "repos/openexch/${REPO}/contents/pom.xml?ref=${BRANCH}" --jq .content | base64 -d)
             NEW=$(printf '%s' "$CONTENT" \
@@ -412,21 +431,37 @@ jobs:
               -f message="build: match-common ${V}" \
               -f content="$(printf '%s' "$NEW" | base64 -w0)" \
               -f sha="$SHA" -f branch="$BRANCH" >/dev/null
-            # oms also records the producing sha for its e2e checkout pin.
+            # oms also records the producing sha for its e2e checkout pin. One
+            # file per producer, so this bump and the assets one never touch the
+            # same lines and stay independently mergeable. oms's e2e fails if
+            # this write is skipped while the pom pin moved, so a partial bump
+            # is loud rather than a green build of a combination nobody ships.
             if [ "$REPO" = "oms" ]; then
-              LSHA=$(gh api "repos/openexch/oms/contents/producers.lock?ref=${BRANCH}" --jq .sha 2>/dev/null || true)
+              LPATH="producers/match.lock"
+              LSHA=$(gh api "repos/openexch/oms/contents/${LPATH}?ref=${BRANCH}" --jq .sha 2>/dev/null || true)
               if [ -n "$LSHA" ]; then
-                LOCK=$(gh api "repos/openexch/oms/contents/producers.lock?ref=${BRANCH}" --jq .content | base64 -d \
-                  | sed -E "s|^match=.*|match=${GITHUB_SHA}|")
-                gh api -X PUT "repos/openexch/oms/contents/producers.lock" \
-                  -f message="build: producers.lock match=${GITHUB_SHA::7}" \
+                LOCK=$(gh api "repos/openexch/oms/contents/${LPATH}?ref=${BRANCH}" --jq .content | base64 -d \
+                  | sed -E "s|^[0-9a-f]{7,40}$|${GITHUB_SHA}|")
+                gh api -X PUT "repos/openexch/oms/contents/${LPATH}" \
+                  -f message="build: ${LPATH} match=${GITHUB_SHA::7}" \
                   -f content="$(printf '%s' "$LOCK" | base64 -w0)" \
                   -f sha="$LSHA" -f branch="$BRANCH" >/dev/null
+              else
+                echo "oms: ${LPATH} missing; pom pin moved without the lock (e2e will fail loudly)"
               fi
             fi
-            gh pr create --repo "openexch/${REPO}" --base main --head "$BRANCH" \
-              --title "build: match-common ${V}" \
-              --body "Automated wire-artifact bump from openexch/match@${GITHUB_SHA::7}. CI green = the new wire decodes. Commits are unsigned BY DESIGN — signing keys never leave the operator's vault, so automation cannot sign. Where the base branch requires signatures: re-sign locally, then merge (the operator tooling squashes this PR into one signed commit and force-pushes; auto-merge finishes the rest)."
+            # Reuse the open PR when there is one: retitle it to the version it now
+            # carries (a stale title is a lie about what would merge) instead of
+            # stacking another PR behind it.
+            BODY="Automated wire-artifact bump from openexch/match@${GITHUB_SHA::7}. CI green = the new wire decodes. This PR is REUSED by every match main push: its branch is reset onto ${REPO}'s main and re-stamped, so it always shows the current pin and never has to be rebased. Commits are unsigned BY DESIGN — signing keys never leave the operator's vault, so automation cannot sign. Where the base branch requires signatures: re-sign locally, then merge (the operator tooling squashes this PR into one signed commit and force-pushes; auto-merge finishes the rest)."
+            PR=$(gh pr list --repo "openexch/${REPO}" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+            if [ -n "$PR" ]; then
+              gh pr edit "$PR" --repo "openexch/${REPO}" --title "build: match-common ${V}" --body "$BODY"
+              echo "${REPO}: refreshed existing bump PR #${PR} to ${V}"
+            else
+              gh pr create --repo "openexch/${REPO}" --base main --head "$BRANCH" \
+                --title "build: match-common ${V}" --body "$BODY"
+            fi
             gh pr merge --repo "openexch/${REPO}" --auto --squash "$BRANCH" \
               || echo "${REPO}: auto-merge unavailable; PR stays open for a human"
           done
