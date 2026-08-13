@@ -46,6 +46,8 @@ public class EmbeddedClusterTest {
     private static MediaDriver clientMediaDriver;
     private static AeronCluster client;
     private static File baseDir;
+    // Held so tests can reach the service's own state (e.g. NodeReadiness)
+    private static AppClusteredService service;
 
     // Random port to avoid conflicts with running production cluster
     private static final int PORT_BASE = 19000 + (int) (Math.random() * 10000);
@@ -79,6 +81,7 @@ public class EmbeddedClusterTest {
         List<String> hostnames = List.of("localhost");
 
         // Create cluster config with real AppClusteredService
+        service = new AppClusteredService();
         ClusterConfig config = ClusterConfig.create(
                 0,       // startingMemberId
                 0,       // memberId
@@ -86,7 +89,7 @@ public class EmbeddedClusterTest {
                 hostnames,
                 PORT_BASE,
                 baseDir,
-                new AppClusteredService());
+                service);
 
         // Set error handler that logs but doesn't crash
         config.errorHandler(t -> System.err.println("Cluster error: " + t.getMessage()));
@@ -192,6 +195,26 @@ public class EmbeddedClusterTest {
         System.out.println("Connected with session ID: " + client.clusterSessionId());
     }
 
+
+    @Test
+    public void test2_NodeReportsReadyAfterElection() throws Exception {
+        // cluster-kit#15: readiness is fed from the duty-cycle role poll in
+        // doBackgroundWork, not only from the onRoleChange callback. Reach the
+        // service's NodeReadiness (the same object the /ready probe serves) and
+        // require it to go ready on a REAL elected cluster.
+        java.lang.reflect.Field f = AppClusteredService.class.getDeclaredField("readiness");
+        f.setAccessible(true);
+        com.openexchange.cluster.NodeReadiness readiness =
+                (com.openexchange.cluster.NodeReadiness) f.get(service);
+
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (!readiness.ready() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50);
+        }
+        assertTrue("elected node must report ready (was: " + readiness.describe() + ")",
+                readiness.ready());
+        System.out.println("Node readiness test passed: " + readiness.describe());
+    }
 
     @Test
     public void test3_LimitOrderPlacement() throws Exception {

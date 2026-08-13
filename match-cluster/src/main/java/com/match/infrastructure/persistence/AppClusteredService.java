@@ -106,6 +106,10 @@ public class AppClusteredService implements ClusteredService {
     private final com.openexchange.cluster.NodeReadiness readiness =
             new com.openexchange.cluster.NodeReadiness();
     private com.openexchange.cluster.NodeEndpoint nodeEndpoint;
+    // cluster-kit#15: the last role this duty cycle OBSERVED via cluster.role().
+    // Only feeds readiness in doBackgroundWork; isLeader and the rest of the
+    // role bookkeeping stay driven by the onRoleChange callback.
+    private Role lastObservedRole;
 
     // What makes this cluster snapshot itself with no admin gateway running.
     // Aeron calls onTakeSnapshot but nothing calls Aeron; the rhythm used to
@@ -1252,6 +1256,22 @@ public class AppClusteredService implements ClusteredService {
         // and the wedged case is the one that used to report itself healthy for
         // hours. No work is done here beyond stamping the clock.
         readiness.tick();
+        // cluster-kit#15: feed readiness by POLLING the role, never by trusting
+        // onRoleChange alone. Aeron fires that callback only on role TRANSITIONS,
+        // so a node that boots straight into FOLLOWER and stays there never gets
+        // it: /ready answered "catching up" forever and SnapshotLogPruner never
+        // pruned on that node (observed live 2026-08-12). An enum compare per
+        // cycle is free; the callback keeps its other side effects (isLeader,
+        // cadence, flush timer) and readiness.roleChanged is idempotent.
+        final Role observedRole = cluster.role();
+        if (observedRole != lastObservedRole) {
+            lastObservedRole = observedRole;
+            readiness.roleChanged(observedRole);
+            if (observedRole == Role.LEADER || observedRole == Role.FOLLOWER) {
+                System.out.println("READINESS: role " + observedRole
+                        + " observed via duty-cycle poll (cluster-kit#15)");
+            }
+        }
         // ...and deciding, at most once a second and only on the leader, whether
         // the cluster is due a snapshot. Everything past that gate is a long
         // compare; nothing is allocated and nothing blocks.
