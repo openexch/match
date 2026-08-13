@@ -54,14 +54,22 @@ public class SbeDemuxer {
     // NodeMetrics.acquire(). NOT replicated state and NOT snapshotted — pure local
     // observability. The DROP they record is deterministic: identical bytes are dropped
     // identically on every replica, so consensus is unaffected.
-    private long schemaRejectCount;  // G-2: header schemaId/version did not match this build
+    private long schemaRejectCount;  // G-2: header schemaId/version outside this build's supported range
     private long decodeRejectCount;  // A-4: a body decode threw (e.g. out-of-range enum byte) — poison input, expected
     private long applyErrorCount;    // A-4: an UNEXPECTED exception from the engine/apply path — a bug, not poison input
 
     // The wire identity every ingress frame must carry. All order-schema messages share the
-    // schema id/version, so a single header gate covers every template.
+    // schema id, so a single header gate covers every template. The version gate is a RANGE
+    // [MIN_SUPPORTED_SCHEMA_VERSION, EXPECTED_SCHEMA_VERSION], not an exact match: additive
+    // schema evolution must let an older-but-supported producer keep flowing during a rolling
+    // upgrade instead of forcing a lockstep multi-repo deploy.
     private static final int EXPECTED_SCHEMA_ID = MessageHeaderDecoder.SCHEMA_ID;
     private static final int EXPECTED_SCHEMA_VERSION = MessageHeaderDecoder.SCHEMA_VERSION;
+
+    // Floor of the supported ingress version range. Advances ONLY when pre-v9 producers and
+    // pre-v9 frames in any replayable log are provably gone — never as a side effect of a
+    // routine schema bump. Package-private so the gate tests track the real constant.
+    static final int MIN_SUPPORTED_SCHEMA_VERSION = 9;
 
     // Loud-log the first reject of each kind, then one in every REJECT_LOG_INTERVAL, so a
     // storm of poison frames cannot flood the log. Mirrors EgressSessionMetrics.shouldLog.
@@ -99,20 +107,24 @@ public class SbeDemuxer {
 
         headerDecoder.wrap(buffer, offset);
 
-        // G-2: schema/version gate. A frame whose header does not match the wire schema this
-        // build speaks (schemaId=1, version=8 today) is dropped BEFORE any body decode — no
-        // generated accessor runs, so a stale-schema frame (e.g. a soon-to-be-deleted codec)
-        // or a version-skew frame from a rolling upgrade can never reach an out-of-range enum.
-        // Today all ingress is schemaId=1/version=8, so this rejects no legitimate traffic.
+        // G-2: schema/version gate. A frame whose header is outside the supported range is
+        // dropped BEFORE any body decode — no generated accessor runs, so a stale or skewed
+        // frame can never reach an out-of-range enum. The version check is a RANGE, not an
+        // exact match: additive schema evolution must let an older-but-supported producer keep
+        // flowing during a rolling upgrade; anything below the floor (pre-range history) or
+        // above this build's ceiling (fields this build cannot decode) is still dropped here.
         final int schemaId = headerDecoder.schemaId();
         final int version = headerDecoder.version();
-        if (schemaId != EXPECTED_SCHEMA_ID || version != EXPECTED_SCHEMA_VERSION) {
+        if (schemaId != EXPECTED_SCHEMA_ID
+                || version < MIN_SUPPORTED_SCHEMA_VERSION
+                || version > EXPECTED_SCHEMA_VERSION) {
             final long n = ++schemaRejectCount;
             if (shouldLogReject(n)) {
                 System.err.println("INGRESS DROP (schema): dropping frame schemaId=" + schemaId
                         + " version=" + version + " templateId=" + headerDecoder.templateId()
-                        + " — this build speaks schemaId=" + EXPECTED_SCHEMA_ID + " version="
-                        + EXPECTED_SCHEMA_VERSION + "; schemaRejects=" + n);
+                        + " — this build speaks schemaId=" + EXPECTED_SCHEMA_ID + " versions "
+                        + MIN_SUPPORTED_SCHEMA_VERSION + ".." + EXPECTED_SCHEMA_VERSION
+                        + "; schemaRejects=" + n);
             }
             return;
         }
@@ -185,8 +197,8 @@ public class SbeDemuxer {
         return createOrderCount;
     }
 
-    /** Scrapeable (match_ingress_schema_rejects_total): frames dropped for a schemaId/version
-     *  mismatch before any body decode (G-2). */
+    /** Scrapeable (match_ingress_schema_rejects_total): frames dropped for a schemaId mismatch or
+     *  a version outside the supported range, before any body decode (G-2). */
     public long schemaRejectCount() {
         return schemaRejectCount;
     }

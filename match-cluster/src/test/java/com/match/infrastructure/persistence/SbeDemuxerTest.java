@@ -289,6 +289,109 @@ public class SbeDemuxerTest {
         assertFalse(dme.isAskEmpty());
     }
 
+    // ==================== Schema-Version Gate (G-2 range) ====================
+    //
+    // The gate accepts versions in [MIN_SUPPORTED_SCHEMA_VERSION, SCHEMA_VERSION] and drops
+    // everything else BEFORE any body decode. Today the floor equals the ceiling (both 9), so
+    // the range degenerates to the old exact match — the below-floor and above-ceiling tests
+    // prove exactly that. All assertions reference the constants, never literal versions, so a
+    // future ceiling bump (e.g. an additive v10) keeps them meaningful: the floor test then
+    // proves an older-but-supported producer still flows during a rolling upgrade.
+
+    /** Re-stamps only the version field of an already-encoded frame's header. */
+    private void overwriteHeaderVersion(final int version) {
+        headerEncoder.wrap(buffer, 0).version(version);
+    }
+
+    /** Re-stamps only the schemaId field of an already-encoded frame's header. */
+    private void overwriteHeaderSchemaId(final int schemaId) {
+        headerEncoder.wrap(buffer, 0).schemaId(schemaId);
+    }
+
+    @Test
+    public void gateRangeIsWellFormed() {
+        assertTrue("Version floor must never exceed this build's schema version",
+                SbeDemuxer.MIN_SUPPORTED_SCHEMA_VERSION <= MessageHeaderDecoder.SCHEMA_VERSION);
+    }
+
+    @Test
+    public void currentVersionAccepted() {
+        // encodeCreateOrder stamps this build's version (the ceiling) — no overwrite needed.
+        long price = FixedPoint.fromDouble(60000.0);
+        long qty = FixedPoint.fromDouble(1.0);
+        int len = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, price, qty);
+
+        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+
+        assertEquals("Current-version frame must not count as a schema reject",
+                0L, demuxer.schemaRejectCount());
+        assertFalse("Current-version frame must reach the engine",
+                engine.getEngine(1).isBidEmpty());
+    }
+
+    @Test
+    public void minSupportedVersionAccepted() {
+        // Today MIN == ceiling, so this duplicates currentVersionAccepted; after a ceiling
+        // bump it becomes the rolling-upgrade guarantee (a floor-version producer keeps flowing).
+        long price = FixedPoint.fromDouble(60000.0);
+        long qty = FixedPoint.fromDouble(1.0);
+        int len = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, price, qty);
+        overwriteHeaderVersion(SbeDemuxer.MIN_SUPPORTED_SCHEMA_VERSION);
+
+        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+
+        assertEquals("Floor-version frame must not count as a schema reject",
+                0L, demuxer.schemaRejectCount());
+        assertFalse("Floor-version frame must reach the engine",
+                engine.getEngine(1).isBidEmpty());
+    }
+
+    @Test
+    public void belowFloorVersionDropped() {
+        long price = FixedPoint.fromDouble(60000.0);
+        long qty = FixedPoint.fromDouble(1.0);
+        int len = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, price, qty);
+        overwriteHeaderVersion(SbeDemuxer.MIN_SUPPORTED_SCHEMA_VERSION - 1);
+
+        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+
+        assertEquals("Below-floor frame must count as a schema reject",
+                1L, demuxer.schemaRejectCount());
+        assertTrue("Below-floor frame must never reach the engine",
+                engine.getEngine(1).isBidEmpty());
+    }
+
+    @Test
+    public void futureVersionDropped() {
+        // One past this build's ceiling: a frame carrying fields this build cannot decode.
+        long price = FixedPoint.fromDouble(60000.0);
+        long qty = FixedPoint.fromDouble(1.0);
+        int len = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, price, qty);
+        overwriteHeaderVersion(MessageHeaderDecoder.SCHEMA_VERSION + 1);
+
+        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+
+        assertEquals("Above-ceiling frame must count as a schema reject",
+                1L, demuxer.schemaRejectCount());
+        assertTrue("Above-ceiling frame must never reach the engine",
+                engine.getEngine(1).isBidEmpty());
+    }
+
+    @Test
+    public void wrongSchemaIdDroppedEvenWithSupportedVersion() {
+        long price = FixedPoint.fromDouble(60000.0);
+        long qty = FixedPoint.fromDouble(1.0);
+        int len = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, price, qty);
+        overwriteHeaderSchemaId(MessageHeaderDecoder.SCHEMA_ID + 1);
+
+        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+
+        assertEquals("Foreign-schema frame must count as a schema reject",
+                1L, demuxer.schemaRejectCount());
+        assertTrue("Foreign-schema frame must never reach the engine",
+                engine.getEngine(1).isBidEmpty());
+    }
+
     @Test
     public void marketBuyWithBudgetConsumesAsk() {
         MatchingEngine dme = engine.getEngine(1);
