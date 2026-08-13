@@ -2,7 +2,7 @@
 <sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
                    package="com.match.infrastructure.generated"
                    id="1"
-                   version="9"
+                   version="10"
                    semanticVersion="5.2"
                    description="Match Order Schema - Optimized for Ultra-Low Latency"
 >
@@ -39,6 +39,12 @@
             <validValue name="UPDATE_LEVEL">1</validValue>
             <validValue name="DELETE_LEVEL">2</validValue>
         </enum>
+        <!-- v10: order-book engine implementation selector, carried on EngineConfig so every
+             replica creates the SAME implementation from the logged config (A-3 generalized). -->
+        <enum name="EngineImpl" encodingType="uint8">
+            <validValue name="ARRAY">0</validValue>
+            <validValue name="DIRECT">1</validValue>
+        </enum>
         <!-- Group size encoding for variable-length groups -->
         <composite name="groupSizeEncoding" description="Repeating group dimensions">
             <type name="blockLength" primitiveType="uint16"/>
@@ -51,6 +57,10 @@
              nullValue=255 so a pre-v6 stream decodes as 255 = "unknown / upstream too old to say";
              callers (OMS) map 255 to null. Codes never reach 255, so null is unambiguous. -->
         <type name="RejectReasonCode" primitiveType="uint8" presence="optional" nullValue="255"/>
+        <!-- v10: fixed-length ASCII market symbol for EngineConfig.markets. char[16], null-padded.
+             This is the schema's FIRST string type — no prior fixed-length ascii convention
+             existed on this wire, so char[16] is the convention being established here. -->
+        <type name="Symbol" primitiveType="char" length="16" characterEncoding="ASCII"/>
     </types>
 
     <!-- Optimized: All numeric fields, no string parsing -->
@@ -87,6 +97,35 @@
          (id 5) and OrderBookUpdate (id 6) removed — the cluster only ever emitted the
          batch forms (TradeExecutionBatch/OrderStatusBatch, book snapshot/delta). Their
          ids stay reserved; no other message was renumbered. -->
+
+    <!-- v10 (finding A-3 generalized): engine-creation config as a LOGGED ingress command,
+         so every replica creates its engines from values replicated via the cluster log —
+         never from a node-local env/file. ADDITIVE: this bump ships the template only; the
+         demuxer has no handler yet, so dispatch falls into the deterministic
+         unknown-template drop+count path. The state-machine handler is the next PR.
+         id 8 = next free template id (1-3 and 7 in use, 4-6 reserved since v8, 21-27 egress). -->
+    <sbe:message name="EngineConfig" id="8" description="Engine-creation config replicated via the cluster log">
+        <!-- Monotonic config generation, so replicas can order engine-creation configs from the log. -->
+        <field name="configVersion" id="1" type="uint32"/>
+        <!-- Order-book implementation to create — an engine-creation value, replicated via the cluster log. -->
+        <field name="impl" id="2" type="EngineImpl"/>
+        <!-- Per-book order capacity — an engine-creation value, replicated via the cluster log. -->
+        <field name="bookCapacity" id="3" type="uint32"/>
+        <!-- Per-order match limit — an engine-creation value, replicated via the cluster log. -->
+        <field name="maxMatchesPerOrder" id="4" type="uint32"/>
+        <!-- Per-level open-order limit — an engine-creation value, replicated via the cluster log. -->
+        <field name="maxOrdersPerLevel" id="5" type="uint32"/>
+        <!-- Markets to create engines for — replicated via the log so every replica builds the same set. -->
+        <group name="markets" id="10" dimensionType="groupSizeEncoding">
+            <field name="marketId" id="1" type="int32"/>
+            <!-- char[16] ASCII, null-padded (the Symbol type above — this wire's first string). -->
+            <field name="symbol" id="2" type="Symbol"/>
+            <!-- Fixed-point int64, same convention as every existing price field. -->
+            <field name="minPrice" id="3" type="int64"/>
+            <field name="maxPrice" id="4" type="int64"/>
+            <field name="tickSize" id="5" type="int64"/>
+        </group>
+    </sbe:message>
 
     <!-- ========== CONTROL MESSAGES ========== -->
 
