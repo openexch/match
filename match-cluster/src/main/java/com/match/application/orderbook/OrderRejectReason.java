@@ -68,6 +68,15 @@ public final class OrderRejectReason {
      * a validity or crossing reject.
      */
     public static final int ORDER_NOT_FOUND = 10;
+    /**
+     * The order arrived on a config-mode cluster BEFORE any EngineConfig was logged, so no
+     * matching engine exists yet (slice C fresh-cluster guard). The command is rejected loudly
+     * and deterministically — orderId=0 + the command's omsOrderId on the REJECTED egress so the
+     * OMS releases its hold — never silently dropped (a silent drop leaves the hold stuck
+     * forever, the oms#21 failure class). Legacy (env-mode) clusters can never emit this: their
+     * engines exist from boot. A distinct code because reject codes are user-visible wire values.
+     */
+    public static final int ENGINE_NOT_CONFIGURED = 11;
 
     private OrderRejectReason() {} // Constants only
 
@@ -84,6 +93,7 @@ public final class OrderRejectReason {
             case WOULD_CROSS: return "WOULD_CROSS";
             case NO_LIQUIDITY: return "NO_LIQUIDITY";
             case ORDER_NOT_FOUND: return "ORDER_NOT_FOUND";
+            case ENGINE_NOT_CONFIGURED: return "ENGINE_NOT_CONFIGURED";
             default: return "UNKNOWN(" + reason + ")";
         }
     }

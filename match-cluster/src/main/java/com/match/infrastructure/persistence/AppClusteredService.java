@@ -41,11 +41,45 @@ import java.util.concurrent.atomic.AtomicLong;
 public class AppClusteredService implements ClusteredService {
     private static final Logger logger = Logger.getLogger(AppClusteredService.class);
 
-    private final Engine engine = new Engine();
+    // Slice C: engine-creation mode. false (default) = LEGACY — engines are built at construction
+    // from MarketConfig.ALL_MARKETS + env exactly as always (bit-for-bit today's behavior; the
+    // red line). true = CONFIG mode — the engine starts EMPTY and is created solely from the
+    // logged EngineConfig command (or a config-bearing snapshot); orders before that are loudly
+    // REJECTED by the fresh-cluster guard. This flag is a LAUNCH parameter of the same class as
+    // CLUSTER_ADDRESSES (it declares which bootstrap era the deployment is in); the
+    // engine-creation VALUES themselves only ever come from the cluster log. Resolved once,
+    // strictly: an explicitly set but unparseable value is refused at startup (never silently
+    // defaulted), matching resolveEgressDrainMax / SnapshotCadence.
+    //
+    // UNIFORMITY CONSTRAINT — it MUST be identical on every member of a cluster, exactly like
+    // CLUSTER_ADDRESSES. A mixed cluster has a fork window on any order that arrives before the
+    // first EngineConfig: a legacy member has engines from boot and MATCHES the order, while a
+    // config-mode member has none and REJECTS it — replicated state diverges on the same logged
+    // command. The flag cannot verify its peers itself (a node's env is invisible to the
+    // cluster), so it is exported as the match_engine_from_config gauge (0/1): the operator
+    // layer / admin gateway verifies uniformity across members BEFORE admitting genesis traffic,
+    // the same layer-1 safeguard input as match_supported_behavior_versions. Deployment rule:
+    // the dogfood path NEVER uses config mode — existing clusters stay legacy and adopt their
+    // config mid-life via the logged EngineConfig; config mode is for FRESH clusters only.
+    private final boolean engineFromConfigMode = resolveEngineFromConfigMode(
+            System.getenv("MATCH_ENGINE_FROM_CONFIG"), System.getProperty("match.engine.from.config"));
+
+    private final Engine engine = engineFromConfigMode ? Engine.deferredUntilConfig() : new Engine();
     private final ClientSessions clientSessions = new ClientSessions();
     private final SessionMessageContextImpl context = new SessionMessageContextImpl(clientSessions);
     private final TimerManager timerManager = new TimerManager(context);
     private final SbeDemuxer sbeDemuxer = new SbeDemuxer(engine);
+
+    // Slice C: the EngineConfig decision table (fresh-create / adopt+cross-check / duplicate /
+    // reject). failFast is the adopt-mismatch exit — same principle as the A-9 egress-init exit
+    // below: a node that provably diverges from the cluster's declared truth must not serve; the
+    // other nodes keep quorum. Package-private mutable seam so tests can swap the hook for a
+    // recorder (the bare A-9 System.exit had no seam; this one starts with one) — the state
+    // machine dereferences it per call, so a swap after construction takes effect.
+    Runnable failFast = () -> System.exit(1);
+    private final com.match.application.engine.EngineConfigStateMachine engineConfigStateMachine =
+            new com.match.application.engine.EngineConfigStateMachine(
+                    engine, () -> failFast.run(), this::onEnginesCreatedFromConfig);
 
     private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
 
@@ -431,6 +465,30 @@ public class AppClusteredService implements ClusteredService {
         return EGRESS_DRAIN_MAX;
     }
 
+    // Slice C config: env MATCH_ENGINE_FROM_CONFIG wins over -Dmatch.engine.from.config; default
+    // false (legacy — bit-for-bit today's engine creation). Package-private and pure so the
+    // parse, the default, and the refusal are unit testable. Only the literal strings
+    // "true"/"false" are accepted: an explicitly set but ambiguous value is refused at startup
+    // rather than silently defaulted (the strict-config house style; same posture as
+    // resolveEgressDrainMax and the SnapshotCadence tunables).
+    static boolean resolveEngineFromConfigMode(final String envValue, final String propValue) {
+        final String raw = envValue != null ? envValue : propValue;
+        if (raw == null) {
+            return false;
+        }
+        final String source = envValue != null ? "MATCH_ENGINE_FROM_CONFIG" : "match.engine.from.config";
+        final String v = raw.trim().toLowerCase();
+        if ("true".equals(v)) {
+            return true;
+        }
+        if ("false".equals(v)) {
+            return false;
+        }
+        throw new IllegalArgumentException(source + "=" + raw
+                + " must be exactly \"true\" or \"false\"; refusing to start with an ambiguous"
+                + " engine-creation mode");
+    }
+
     // package-private: metric source (match_egress_drain_capped_total) and C-3 test assertion.
     long drainCappedTotal() {
         return drainCapped.get();
@@ -455,6 +513,12 @@ public class AppClusteredService implements ClusteredService {
 
         // P1.2 (match#31): OMS-requested open-order membership snapshot
         sbeDemuxer.setOpenOrdersSnapshotRequestHandler(this::emitOpenOrdersSnapshot);
+
+        // Slice C: EngineConfig commands route to the decision table; a CreateOrder hitting the
+        // fresh-cluster guard (config mode, no engines yet) emits the deterministic REJECTED
+        // egress so the OMS hold releases.
+        sbeDemuxer.setEngineConfigHandler(engineConfigStateMachine::onEngineConfig);
+        sbeDemuxer.setPreConfigOrderRejectHandler(this::emitPreConfigOrderReject);
 
         startMetricsServer();
         startDurability(cluster);
@@ -544,6 +608,24 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_ingress_apply_errors_total",
                             "Ingress frames dropped because the engine/apply path threw an unexpected exception — a bug, ~always zero (A-4)",
                             sbeDemuxer::applyErrorCount)
+                    // Slice C: behaviour-versioning surface. The gauge is the constant behavior
+                    // version set this build supports (just 1 for now); the counters are the
+                    // EngineConfig decision table + the fresh-cluster order guard.
+                    .gauge("match_supported_behavior_versions",
+                            "Behavior versions this build supports (constant 1 — version set {1}; slice C)",
+                            () -> 1L)
+                    .gauge("match_engine_from_config",
+                            "Engine-creation mode of THIS node (1 = config mode, 0 = legacy). A launch parameter like CLUSTER_ADDRESSES: it must be uniform across members — a mixed cluster forks replicated state on any pre-config order. The operator layer verifies uniformity here before admitting genesis traffic (slice C)",
+                            () -> engineFromConfigMode ? 1L : 0L)
+                    .counter("match_engine_config_duplicates_total",
+                            "EngineConfig commands identical to the recorded config — idempotent no-op ACKs (slice C)",
+                            engineConfigStateMachine::duplicateCount)
+                    .counter("match_engine_config_rejects_total",
+                            "EngineConfig commands rejected: differ from the recorded config (runtime reconfig is a later slice) or structurally invalid (slice C)",
+                            engineConfigStateMachine::rejectCount)
+                    .counter("match_preconfig_order_rejects_total",
+                            "Order commands rejected by the fresh-cluster guard — arrived before any EngineConfig, no engine existed; always 0 in legacy mode (slice C)",
+                            sbeDemuxer::preConfigOrderRejectCount)
                     .counter("match_orders_terminal_total", "Terminal order statuses published", eventPublisher::terminalStatusCount)
                     .counter("match_egress_disruptor_exceptions_total",
                             "OMS-lane Disruptor handler exceptions swallowed (event lost pre-statusSeq); should be ~zero (C-6)",
@@ -805,6 +887,21 @@ public class AppClusteredService implements ClusteredService {
      * Gateway then relays to WebSocket clients.
      */
     private void initializeEventPublishing() {
+        // Slice C: in config mode the market set comes from the replicated config, not from
+        // MarketConfig.ALL_MARKETS. With no config recorded yet (fresh cluster) there is nothing
+        // to publish for — publishers come up in onEnginesCreatedFromConfig the moment the logged
+        // EngineConfig is accepted. Legacy mode falls through to the exact historical body below.
+        if (engineFromConfigMode) {
+            final com.match.application.engine.EngineConfigState config = engine.getEngineConfig();
+            if (config == null) {
+                System.out.println("SERVICE: config mode — no EngineConfig recorded yet; egress"
+                        + " publishers deferred until the config arrives (orders until then get a"
+                        + " loud REJECTED egress, never a silent drop)");
+                return;
+            }
+            initializeEventPublishingFromConfig(config);
+            return;
+        }
         try {
             // Create per-market publisher for all configured markets
             for (MarketConfig config : MarketConfig.ALL_MARKETS) {
@@ -851,6 +948,107 @@ public class AppClusteredService implements ClusteredService {
             e.printStackTrace();
             System.exit(1);
         }
+    }
+
+    /**
+     * Slice C: bring up per-market egress publishers for a CONFIG-created engine set — the exact
+     * shape of the legacy loop above, with the market list (id + symbol) taken from the
+     * replicated config instead of MarketConfig.ALL_MARKETS. Two callers, mutually exclusive by
+     * the state machine: onStart after restoring a config-bearing snapshot, and
+     * {@link #onEnginesCreatedFromConfig} when a fresh cluster accepts its logged EngineConfig.
+     * Failure is the same A-9 fail-fast: an egress-less node loses orders silently, so it exits
+     * before serving; the other nodes keep quorum.
+     */
+    private void initializeEventPublishingFromConfig(
+            final com.match.application.engine.EngineConfigState config) {
+        try {
+            for (com.match.application.engine.EngineConfigState.MarketDef market : config.markets) {
+                MarketPublisher publisher = new MarketPublisher(
+                    market.marketId,
+                    market.symbol,
+                    subscriptionManager
+                );
+                publisher.setMatchingEngine(engine.getEngine(market.marketId));
+                publisher.setBroadcaster(aeronBroadcaster);
+                eventPublisher.initMarket(market.marketId, publisher);
+                logger.info("Initialized publisher for {} (from EngineConfig)", market.symbol);
+            }
+
+            engine.setEventPublisher(eventPublisher);
+            eventPublisher.start();
+
+            logger.info("Event publishing initialized for {} markets from replicated EngineConfig",
+                config.markets.length);
+        } catch (Exception e) {
+            // A-9 principle, config path: see the legacy catch above for the full reasoning.
+            final String reason = e.getClass().getName() + ": " + e.getMessage();
+            final String critical = "CRITICAL: event publishing failed to initialize from"
+                    + " EngineConfig (" + reason + "); an egress-less node loses orders silently"
+                    + " (OMS/AE never see them). Exiting so this node never serves blind; the"
+                    + " other nodes keep quorum.";
+            logger.error(critical);
+            System.err.println(critical);
+            e.printStackTrace();
+            failFast.run();
+        }
+    }
+
+    /**
+     * Slice C: state-machine callback — a FRESH cluster just accepted its logged EngineConfig and
+     * created its engines from it. Runs on the service thread (live or replay). Publishers must
+     * come up now: nothing else will start them in config mode.
+     */
+    private void onEnginesCreatedFromConfig(final com.match.application.engine.EngineConfigState config) {
+        initializeEventPublishingFromConfig(config);
+    }
+
+    // ---- Slice C: fresh-cluster guard REJECTED egress ----
+
+    private final MessageHeaderEncoder preConfigRejectHeaderEncoder = new MessageHeaderEncoder();
+    private final com.match.infrastructure.generated.OrderStatusBatchEncoder preConfigRejectEncoder =
+            new com.match.infrastructure.generated.OrderStatusBatchEncoder();
+    private final org.agrona.ExpandableArrayBuffer preConfigRejectBuffer =
+            new org.agrona.ExpandableArrayBuffer(256);
+
+    /**
+     * Slice C fresh-cluster guard: emit the loud deterministic REJECTED OrderStatus for an order
+     * command that arrived BEFORE any EngineConfig (config-mode cluster, no engines yet).
+     * orderId=0 (no engine ever assigned one) + the command's omsOrderId, so the OMS correlates
+     * by omsOrderId and releases its hold — the silent-drop alternative leaves the hold stuck
+     * forever (the oms#21 failure class).
+     *
+     * <p>Encoded with the CLUSTER timestamp (message-level and per-entry), so the bytes are
+     * identical on every replica; statusSeq=0 because no per-market publisher (the statusSeq
+     * domain) exists yet — real sequences start at 1 once the config lands. Emitted through
+     * {@code broadcastReliable} on every node exactly like publisher status egress: the leader
+     * drains it, followers keep it as warm standby. Deliberately journal-exempt: there is no
+     * engine, no trade, and no resting order — the OMS-side release is the recovery path.</p>
+     */
+    private void emitPreConfigOrderReject(final int marketId, final long userId,
+                                          final long omsOrderId, final boolean isBuy,
+                                          final long timestamp) {
+        preConfigRejectEncoder.wrapAndApplyHeader(preConfigRejectBuffer, 0, preConfigRejectHeaderEncoder);
+        preConfigRejectEncoder
+                .marketId(marketId)
+                .timestamp(timestamp);
+        final com.match.infrastructure.generated.OrderStatusBatchEncoder.OrdersEncoder group =
+                preConfigRejectEncoder.ordersCount(1);
+        group.next()
+                .orderId(0L)
+                .userId(userId)
+                .status(com.match.infrastructure.generated.OrderStatus.REJECTED)
+                .price(0L)
+                .remainingQty(0L)
+                .filledQty(0L)
+                .side(isBuy ? com.match.infrastructure.generated.OrderSide.BID
+                            : com.match.infrastructure.generated.OrderSide.ASK)
+                .omsOrderId(omsOrderId)
+                .statusSeq(0L)
+                .rejectReason((short) com.match.application.orderbook.OrderRejectReason.ENGINE_NOT_CONFIGURED)
+                .egressSeq(engine.getCurrentLogPosition())
+                .clusterTimestamp(timestamp);
+        final int length = MessageHeaderEncoder.ENCODED_LENGTH + preConfigRejectEncoder.encodedLength();
+        aeronBroadcaster.broadcastReliable(preConfigRejectBuffer, 0, length);
     }
 
     private void loadSnapshot(final Image snapshotImage) {
@@ -912,6 +1110,19 @@ public class AppClusteredService implements ClusteredService {
             timerManager.setCorrelationId(decoded.timerCorrelationId);
             System.out.println("[SNAPSHOT] Restored TimerCorrelationId (counter only): "
                     + decoded.timerCorrelationId);
+        }
+
+        // Slice C: a config-bearing snapshot restored the recorded EngineConfig (and, on a
+        // config-mode node, rebuilt the engines from it — identically to the original creation).
+        // On a LEGACY-mode node the engines were env/compiled-built at construction, so run the
+        // same node-local cross-check as the adopt path: a node restarted with env or a build
+        // that diverges from the cluster's declared truth must exit here (fail-fast), never
+        // serve — HEALTHY is not the same as running the right config.
+        if (decoded.engineConfigPresent) {
+            System.out.println("[SNAPSHOT] Restored engineConfig: " + engine.getEngineConfig());
+            if (!engineFromConfigMode) {
+                engineConfigStateMachine.crossCheckOrExit(engine.getEngineConfig(), "snapshot-restore");
+            }
         }
 
         if (decoded.rejectedOrders > 0) {

@@ -29,7 +29,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     // Prod cap on matches generated per command: bounds per-command work on the single consensus
     // thread. A hardcoded deterministic constant, NEVER an env var — a divergent cap between replicas
     // would fork the state machine. Tests inject a small cap via the package-private constructor.
-    static final int MAX_MATCHES_PER_ORDER = 10_000;
+    public static final int MAX_MATCHES_PER_ORDER = 10_000; // public since slice C: the adopt cross-check compares it as the node-effective cap
     private static final int MATCH_FIELDS = 5; // makerOrderId, makerUserId, price, quantity, makerFilled
 
     private final ArrayOrderBook askBook;
@@ -57,11 +57,14 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     }
 
     /**
-     * Test seam: construct with an explicit per-order match cap so the cap-termination path
-     * (match#93) can be exercised with a handful of orders instead of 10k+. Production always
-     * uses the public constructor (prod cap).
+     * Construct with an explicit per-order match cap. Two callers: tests exercising the
+     * cap-termination path (match#93) with a handful of orders instead of 10k+, and — since
+     * slice C — config-mode engines passing the LOG-REPLICATED cap from EngineConfig (replicated
+     * via the cluster log, so identical on every replica; the determinism argument that forbids
+     * env-derived caps does not apply to logged ones). Legacy (env-mode) engines always go
+     * through the 4-arg constructor above, which pins the compiled-in prod cap.
      */
-    ArrayMatchingEngine(long basePrice, long maxPrice, long tickSize, int capacity, int maxMatchesPerOrder) {
+    public ArrayMatchingEngine(long basePrice, long maxPrice, long tickSize, int capacity, int maxMatchesPerOrder) {
         this.askBook = new ArrayOrderBook(true, capacity);   // ascending: lowest ask is best
         this.bidBook = new ArrayOrderBook(false, capacity);  // descending: highest bid is best
         this.priceRules = new PriceRules(basePrice, maxPrice, tickSize);

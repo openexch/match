@@ -15,7 +15,7 @@ public class DirectMatchingEngine implements MatchingEngine {
     // Prod cap on matches generated per command: bounds per-command work on the single consensus
     // thread. A hardcoded deterministic constant, NEVER an env var — a divergent cap between replicas
     // would fork the state machine. Tests inject a small cap via the package-private constructor.
-    static final int MAX_MATCHES_PER_ORDER = 10_000;
+    public static final int MAX_MATCHES_PER_ORDER = 10_000; // public since slice C: the adopt cross-check compares it as the node-effective cap
     private static final int MATCH_FIELDS = 5; // makerOrderId, makerUserId, price, quantity, makerFilled
 
     // Effective per-order match cap (defaults to MAX_MATCHES_PER_ORDER; test-injectable).
@@ -62,6 +62,23 @@ public class DirectMatchingEngine implements MatchingEngine {
         this.bidBook = new DirectIndexOrderBook(basePrice, maxPrice, tickSize, false); // descending
         this.maxMatchesPerOrder = maxMatchesPerOrder;
         this.matchResults = new long[maxMatchesPerOrder * MATCH_FIELDS]; // 4 fields per match
+    }
+
+    /**
+     * Slice C (EngineConfig): construct with BOTH caps explicit. Only config-mode engines use
+     * this, passing the LOG-REPLICATED {@code maxMatchesPerOrder} / {@code maxOrdersPerLevel}
+     * from EngineConfig — replicated via the cluster log, so identical on every replica (the
+     * determinism argument that forbids env-derived caps does not apply to logged ones). Every
+     * legacy caller goes through the public 3-arg constructor, which pins the compiled-in
+     * {@link #MAX_MATCHES_PER_ORDER} and {@link DirectIndexOrderBook#DEFAULT_MAX_ORDERS_PER_LEVEL}
+     * — bit-for-bit today's engine.
+     */
+    public DirectMatchingEngine(long basePrice, long maxPrice, long tickSize,
+                                int maxMatchesPerOrder, int maxOrdersPerLevel) {
+        this.askBook = new DirectIndexOrderBook(basePrice, maxPrice, tickSize, true, maxOrdersPerLevel);
+        this.bidBook = new DirectIndexOrderBook(basePrice, maxPrice, tickSize, false, maxOrdersPerLevel);
+        this.maxMatchesPerOrder = maxMatchesPerOrder;
+        this.matchResults = new long[maxMatchesPerOrder * MATCH_FIELDS];
     }
 
     /**

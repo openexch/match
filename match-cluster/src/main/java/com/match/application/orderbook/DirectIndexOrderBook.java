@@ -24,12 +24,19 @@ public class DirectIndexOrderBook {
     private final int maxPriceLevels;  // Number of price slots
 
     // Order storage - circular buffers per price level
-    // Each level can hold up to MAX_ORDERS_PER_LEVEL orders
-    private static final int MAX_ORDERS_PER_LEVEL = 64;  // Reduced for memory efficiency
+    // Each level can hold up to maxOrdersPerLevel orders.
+    //
+    // Slice C (EngineConfig): the historical compiled-in cap. This remains the ONLY value legacy
+    // (env-mode) engines ever use — the 4-arg constructor pins it — so legacy behavior and memory
+    // layout are bit-for-bit unchanged. Config-mode engines pass the LOG-REPLICATED cap from
+    // EngineConfig instead (deterministic across replicas: it arrives as a cluster message, never
+    // from a node's env). Also the "effective value" the adopt-path cross-check compares against.
+    public static final int DEFAULT_MAX_ORDERS_PER_LEVEL = 64;  // Reduced for memory efficiency
+    private final int maxOrdersPerLevel;
     private static final int ORDER_FIELDS = 4; // orderId, userId, remainingQty, next
 
     // Packed order data: [orderId, userId, remainingQty, nextOrderIdx]
-    // Layout: orders[priceIdx * MAX_ORDERS_PER_LEVEL * ORDER_FIELDS + orderSlot * ORDER_FIELDS + field]
+    // Layout: orders[priceIdx * maxOrdersPerLevel * ORDER_FIELDS + orderSlot * ORDER_FIELDS + field]
     private final long[] orders;
 
     // Level metadata: [headIdx, tailIdx, orderCount, totalQty]
@@ -66,25 +73,37 @@ public class DirectIndexOrderBook {
      * @param ascending     true for ask side, false for bid side
      */
     public DirectIndexOrderBook(long basePrice, long maxPrice, long tickSize, boolean ascending) {
+        this(basePrice, maxPrice, tickSize, ascending, DEFAULT_MAX_ORDERS_PER_LEVEL);
+    }
+
+    /**
+     * Slice C (EngineConfig): construct with an explicit per-level order cap. Only config-mode
+     * engines use this, passing the LOG-REPLICATED {@code maxOrdersPerLevel} from EngineConfig;
+     * every legacy caller goes through the 4-arg constructor above, which pins the historical
+     * {@link #DEFAULT_MAX_ORDERS_PER_LEVEL} — identical memory layout and behavior.
+     */
+    public DirectIndexOrderBook(long basePrice, long maxPrice, long tickSize, boolean ascending,
+                                int maxOrdersPerLevel) {
+        this.maxOrdersPerLevel = maxOrdersPerLevel;
         this.basePrice = basePrice;
         this.tickSize = tickSize;
         this.ascending = ascending;
         this.maxPriceLevels = (int) ((maxPrice - basePrice) / tickSize) + 1;
 
         // Allocate all memory upfront
-        this.orders = new long[maxPriceLevels * MAX_ORDERS_PER_LEVEL * ORDER_FIELDS];
+        this.orders = new long[maxPriceLevels * maxOrdersPerLevel * ORDER_FIELDS];
         this.levels = new long[maxPriceLevels * LEVEL_FIELDS];
         this.orderLocations = new Long2LongHashMap(EMPTY_LOCATION);
-        this.freeSlots = new int[maxPriceLevels * MAX_ORDERS_PER_LEVEL];
+        this.freeSlots = new int[maxPriceLevels * maxOrdersPerLevel];
         this.freeSlotCounts = new int[maxPriceLevels];
 
         // Initialize free slot stacks
         for (int priceIdx = 0; priceIdx < maxPriceLevels; priceIdx++) {
-            int baseSlotIdx = priceIdx * MAX_ORDERS_PER_LEVEL;
-            for (int slot = 0; slot < MAX_ORDERS_PER_LEVEL; slot++) {
+            int baseSlotIdx = priceIdx * maxOrdersPerLevel;
+            for (int slot = 0; slot < maxOrdersPerLevel; slot++) {
                 freeSlots[baseSlotIdx + slot] = slot;
             }
-            freeSlotCounts[priceIdx] = MAX_ORDERS_PER_LEVEL;
+            freeSlotCounts[priceIdx] = maxOrdersPerLevel;
         }
 
         // Pre-touch all memory to ensure arrays are fully paged in
@@ -166,11 +185,11 @@ public class DirectIndexOrderBook {
             if (freeSlotCounts[priceIdx] == 0) return OrderRejectReason.LEVEL_FULL;
         }
 
-        int slotStackBase = priceIdx * MAX_ORDERS_PER_LEVEL;
+        int slotStackBase = priceIdx * maxOrdersPerLevel;
         int slot = freeSlots[slotStackBase + --freeSlotCounts[priceIdx]];
 
         // Store order data
-        int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + slot) * ORDER_FIELDS;
+        int orderBase = (priceIdx * maxOrdersPerLevel + slot) * ORDER_FIELDS;
         orders[orderBase] = orderId;
         orders[orderBase + 1] = userId;
         orders[orderBase + 2] = quantity;
@@ -189,7 +208,7 @@ public class DirectIndexOrderBook {
         } else {
             // Append to tail
             int tailSlot = (int) levels[levelBase + 1];
-            int tailOrderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + tailSlot) * ORDER_FIELDS;
+            int tailOrderBase = (priceIdx * maxOrdersPerLevel + tailSlot) * ORDER_FIELDS;
 
             // Link previous tail to new order — even if tail is a tombstone (qty=0).
             // Tombstones keep their chain position; walks skip over them.
@@ -231,7 +250,7 @@ public class DirectIndexOrderBook {
         int slot = unpackSlot(location);
 
         // Verify this is the right order (handle hash collisions)
-        int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + slot) * ORDER_FIELDS;
+        int orderBase = (priceIdx * maxOrdersPerLevel + slot) * ORDER_FIELDS;
         if (orders[orderBase] != orderId) return false;
 
         // Get order quantity for level total update
@@ -279,7 +298,7 @@ public class DirectIndexOrderBook {
         int priceIdx = unpackPriceIdx(location);
         int slot = unpackSlot(location);
 
-        int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + slot) * ORDER_FIELDS;
+        int orderBase = (priceIdx * maxOrdersPerLevel + slot) * ORDER_FIELDS;
         if (orders[orderBase] != orderId) return;
 
         long oldQty = orders[orderBase + 2];
@@ -363,23 +382,23 @@ public class DirectIndexOrderBook {
         if (levels[levelBase + 2] == 0) return -1;
 
         int headSlot = (int) levels[levelBase];
-        int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + headSlot) * ORDER_FIELDS;
+        int orderBase = (priceIdx * maxOrdersPerLevel + headSlot) * ORDER_FIELDS;
 
         // Advance head past tombstones (cancelled orders with qty=0), freeing their slots.
         // This amortizes cleanup and restores O(1) for subsequent accesses.
-        int guard = MAX_ORDERS_PER_LEVEL;
+        int guard = maxOrdersPerLevel;
         while (orders[orderBase + 2] == 0 && --guard > 0) {
             // Free this tombstone slot
-            int slotStackBase = priceIdx * MAX_ORDERS_PER_LEVEL;
+            int slotStackBase = priceIdx * maxOrdersPerLevel;
             freeSlots[slotStackBase + freeSlotCounts[priceIdx]++] = headSlot;
 
             int nextSlot = (int) orders[orderBase + 3];
-            if (nextSlot < 0 || nextSlot >= MAX_ORDERS_PER_LEVEL) return -1;
+            if (nextSlot < 0 || nextSlot >= maxOrdersPerLevel) return -1;
 
             // Advance head pointer permanently
             headSlot = nextSlot;
             levels[levelBase] = headSlot;
-            orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + headSlot) * ORDER_FIELDS;
+            orderBase = (priceIdx * maxOrdersPerLevel + headSlot) * ORDER_FIELDS;
         }
 
         return guard > 0 ? orders[orderBase] : -1;
@@ -394,20 +413,20 @@ public class DirectIndexOrderBook {
         if (levels[levelBase + 2] == 0) return 0;
 
         int headSlot = (int) levels[levelBase];
-        int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + headSlot) * ORDER_FIELDS;
+        int orderBase = (priceIdx * maxOrdersPerLevel + headSlot) * ORDER_FIELDS;
 
         // Advance head past tombstones, freeing their slots
-        int guard = MAX_ORDERS_PER_LEVEL;
+        int guard = maxOrdersPerLevel;
         while (orders[orderBase + 2] == 0 && --guard > 0) {
-            int slotStackBase = priceIdx * MAX_ORDERS_PER_LEVEL;
+            int slotStackBase = priceIdx * maxOrdersPerLevel;
             freeSlots[slotStackBase + freeSlotCounts[priceIdx]++] = headSlot;
 
             int nextSlot = (int) orders[orderBase + 3];
-            if (nextSlot < 0 || nextSlot >= MAX_ORDERS_PER_LEVEL) return 0;
+            if (nextSlot < 0 || nextSlot >= maxOrdersPerLevel) return 0;
 
             headSlot = nextSlot;
             levels[levelBase] = headSlot;
-            orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + headSlot) * ORDER_FIELDS;
+            orderBase = (priceIdx * maxOrdersPerLevel + headSlot) * ORDER_FIELDS;
         }
 
         return guard > 0 ? orders[orderBase + 2] : 0;
@@ -423,20 +442,20 @@ public class DirectIndexOrderBook {
         if (levels[levelBase + 2] == 0) return 0;
 
         int headSlot = (int) levels[levelBase];
-        int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + headSlot) * ORDER_FIELDS;
+        int orderBase = (priceIdx * maxOrdersPerLevel + headSlot) * ORDER_FIELDS;
 
         // Advance head past tombstones, freeing their slots
-        int guard = MAX_ORDERS_PER_LEVEL;
+        int guard = maxOrdersPerLevel;
         while (orders[orderBase + 2] == 0 && --guard > 0) {
-            int slotStackBase = priceIdx * MAX_ORDERS_PER_LEVEL;
+            int slotStackBase = priceIdx * maxOrdersPerLevel;
             freeSlots[slotStackBase + freeSlotCounts[priceIdx]++] = headSlot;
 
             int nextSlot = (int) orders[orderBase + 3];
-            if (nextSlot < 0 || nextSlot >= MAX_ORDERS_PER_LEVEL) return 0;
+            if (nextSlot < 0 || nextSlot >= maxOrdersPerLevel) return 0;
 
             headSlot = nextSlot;
             levels[levelBase] = headSlot;
-            orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + headSlot) * ORDER_FIELDS;
+            orderBase = (priceIdx * maxOrdersPerLevel + headSlot) * ORDER_FIELDS;
         }
 
         return guard > 0 ? orders[orderBase + 1] : 0;
@@ -530,10 +549,10 @@ public class DirectIndexOrderBook {
     private void freeAllSlotsAtLevel(int priceIdx) {
         int levelBase = priceIdx * LEVEL_FIELDS;
         int currentSlot = (int) levels[levelBase]; // head
-        int slotStackBase = priceIdx * MAX_ORDERS_PER_LEVEL;
-        int guard = MAX_ORDERS_PER_LEVEL;
-        while (currentSlot >= 0 && currentSlot < MAX_ORDERS_PER_LEVEL && --guard > 0) {
-            int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + currentSlot) * ORDER_FIELDS;
+        int slotStackBase = priceIdx * maxOrdersPerLevel;
+        int guard = maxOrdersPerLevel;
+        while (currentSlot >= 0 && currentSlot < maxOrdersPerLevel && --guard > 0) {
+            int orderBase = (priceIdx * maxOrdersPerLevel + currentSlot) * ORDER_FIELDS;
             int nextSlot = (int) orders[orderBase + 3];
             freeSlots[slotStackBase + freeSlotCounts[priceIdx]++] = currentSlot;
             currentSlot = nextSlot;
@@ -543,7 +562,7 @@ public class DirectIndexOrderBook {
     /**
      * Reclaim tombstoned slots at a level in place, preserving live-order FIFO order (match#94).
      *
-     * <p>Walks the level's chain exactly once (≤ MAX_ORDERS_PER_LEVEL nodes): every tombstone
+     * <p>Walks the level's chain exactly once (≤ maxOrdersPerLevel nodes): every tombstone
      * (qty == 0) is unlinked and its slot pushed back onto the free stack, while live orders are
      * re-stitched into a compact chain in their original order. Head and tail are rebuilt to point
      * at the first/last surviving live slot. Slots are NOT moved, so {@code orderLocations} entries
@@ -560,16 +579,16 @@ public class DirectIndexOrderBook {
      */
     private void compactLevel(int priceIdx) {
         int levelBase = priceIdx * LEVEL_FIELDS;
-        int slotStackBase = priceIdx * MAX_ORDERS_PER_LEVEL;
+        int slotStackBase = priceIdx * maxOrdersPerLevel;
 
         int currentSlot = (int) levels[levelBase]; // head
         int newHead = -1;
         int newTail = -1;
 
-        // +1 guard: a fully-occupied level has exactly MAX_ORDERS_PER_LEVEL nodes to visit.
-        int guard = MAX_ORDERS_PER_LEVEL + 1;
-        while (currentSlot >= 0 && currentSlot < MAX_ORDERS_PER_LEVEL && --guard > 0) {
-            int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + currentSlot) * ORDER_FIELDS;
+        // +1 guard: a fully-occupied level has exactly maxOrdersPerLevel nodes to visit.
+        int guard = maxOrdersPerLevel + 1;
+        while (currentSlot >= 0 && currentSlot < maxOrdersPerLevel && --guard > 0) {
+            int orderBase = (priceIdx * maxOrdersPerLevel + currentSlot) * ORDER_FIELDS;
             int nextSlot = (int) orders[orderBase + 3];
 
             if (orders[orderBase + 2] == 0) {
@@ -580,7 +599,7 @@ public class DirectIndexOrderBook {
                 if (newHead < 0) {
                     newHead = currentSlot;
                 } else {
-                    int newTailBase = (priceIdx * MAX_ORDERS_PER_LEVEL + newTail) * ORDER_FIELDS;
+                    int newTailBase = (priceIdx * maxOrdersPerLevel + newTail) * ORDER_FIELDS;
                     orders[newTailBase + 3] = currentSlot;
                 }
                 newTail = currentSlot;
@@ -591,7 +610,7 @@ public class DirectIndexOrderBook {
 
         // Terminate the compacted chain.
         if (newTail >= 0) {
-            int newTailBase = (priceIdx * MAX_ORDERS_PER_LEVEL + newTail) * ORDER_FIELDS;
+            int newTailBase = (priceIdx * maxOrdersPerLevel + newTail) * ORDER_FIELDS;
             orders[newTailBase + 3] = -1;
         }
 
@@ -667,9 +686,9 @@ public class DirectIndexOrderBook {
 
             // Walk the linked list at this level (with cycle guard)
             int currentSlot = headSlot;
-            int guard = MAX_ORDERS_PER_LEVEL;
-            while (currentSlot >= 0 && currentSlot < MAX_ORDERS_PER_LEVEL && --guard > 0) {
-                int orderBase = (priceIdx * MAX_ORDERS_PER_LEVEL + currentSlot) * ORDER_FIELDS;
+            int guard = maxOrdersPerLevel;
+            while (currentSlot >= 0 && currentSlot < maxOrdersPerLevel && --guard > 0) {
+                int orderBase = (priceIdx * maxOrdersPerLevel + currentSlot) * ORDER_FIELDS;
                 long qty = orders[orderBase + 2];
                 if (qty > 0) { // Active order
                     result[resultIdx++] = orders[orderBase];     // orderId
@@ -701,11 +720,11 @@ public class DirectIndexOrderBook {
 
         // Reset free slot stacks
         for (int priceIdx = 0; priceIdx < maxPriceLevels; priceIdx++) {
-            int baseSlotIdx = priceIdx * MAX_ORDERS_PER_LEVEL;
-            for (int slot = 0; slot < MAX_ORDERS_PER_LEVEL; slot++) {
+            int baseSlotIdx = priceIdx * maxOrdersPerLevel;
+            for (int slot = 0; slot < maxOrdersPerLevel; slot++) {
                 freeSlots[baseSlotIdx + slot] = slot;
             }
-            freeSlotCounts[priceIdx] = MAX_ORDERS_PER_LEVEL;
+            freeSlotCounts[priceIdx] = maxOrdersPerLevel;
         }
 
         // Clear order locations
