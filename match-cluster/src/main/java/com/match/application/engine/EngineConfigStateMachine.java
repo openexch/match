@@ -38,8 +38,9 @@ import com.match.infrastructure.Logger;
  *
  * <p>Counters are plain longs written on the service thread and read by the /metrics scraper —
  * the same discipline as {@code SbeDemuxer}'s ingress counters. The fail-fast hook is injected
- * (production: {@code () -> System.exit(1)}) so the exit path is unit-testable; the bare A-9
- * {@code System.exit} had no seam, this one starts with one.</p>
+ * (production: a hookless {@code Runtime.halt(1)} — {@code System.exit} from the service thread
+ * deadlocks in shutdown hooks awaiting that very thread, see #223) so the exit path is
+ * unit-testable; the bare A-9 {@code System.exit} had no seam, this one starts with one.</p>
  */
 public final class EngineConfigStateMachine {
     private static final Logger logger = Logger.getLogger(EngineConfigStateMachine.class);
