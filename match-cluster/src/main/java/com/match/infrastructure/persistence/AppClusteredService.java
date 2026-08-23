@@ -71,12 +71,41 @@ public class AppClusteredService implements ClusteredService {
     private final SbeDemuxer sbeDemuxer = new SbeDemuxer(engine);
 
     // Slice C: the EngineConfig decision table (fresh-create / adopt+cross-check / duplicate /
-    // reject). failFast is the adopt-mismatch exit — same principle as the A-9 egress-init exit
-    // below: a node that provably diverges from the cluster's declared truth must not serve; the
-    // other nodes keep quorum. Package-private mutable seam so tests can swap the hook for a
-    // recorder (the bare A-9 System.exit had no seam; this one starts with one) — the state
-    // machine dereferences it per call, so a swap after construction takes effect.
-    Runnable failFast = () -> System.exit(1);
+    // reject). failFast is the fail-fast exit — same principle as the A-9 egress-init exits: a
+    // node that provably diverges from the cluster's declared truth (or cannot bring up egress)
+    // must not serve; the other nodes keep quorum.
+    //
+    // The default is Runtime.halt(1), NOT System.exit(1). Every caller of this seam runs on the
+    // cluster SERVICE thread (the state machine's adopt-mismatch path and the egress-init catch
+    // blocks below). System.exit runs the JVM's shutdown hooks, and this process's hooks (the
+    // Aeron/ShutdownSignalBarrier teardown chain) wait for the clustered service agent to stop
+    // — i.e. for the very thread that is sitting inside exit(). Observed live 2026-08-23 (first
+    // adopt, demo box, match @ cd85640, #223): all three nodes hit the adopt cross-check
+    // mismatch, called System.exit(1) from the service thread, and ZOMBIFIED — process alive,
+    // reporting HEALTHY, processing nothing, TERM-immune (kill -9 required). halt() terminates
+    // the JVM without running shutdown hooks, so it cannot deadlock on them; skipping graceful
+    // teardown is correct on this path because fail-fast means this node's state must not reach
+    // peers anyway — recovery is restart+replay. Same mechanism as AeronCluster's hot-loop
+    // fail-fast (IDENTICAL_ERROR threshold, halt(2)). Because hooks are skipped, callers must
+    // log their evidence BEFORE invoking the seam, and NO caller may assume hooks ran.
+    //
+    // Package-private mutable seam so tests can swap the hook for a recorder (the bare A-9
+    // System.exit had no seam; this one starts with one) — the state machine dereferences it
+    // per call, so a swap after construction takes effect. The default body lives in
+    // failFastHalt() so the forked-JVM test (FailFastHaltProcessTest) exercises the exact
+    // production path.
+    Runnable failFast = AppClusteredService::failFastHalt;
+
+    /**
+     * Production default of the {@link #failFast} seam: hookless hard stop. Must stay
+     * {@link Runtime#halt(int)}, never {@link System#exit(int)} — see the seam comment: exit()
+     * from the service thread deadlocks in shutdown hooks that await the service thread (live
+     * incident 2026-08-23, #223). Static and package-private so the forked-JVM test can invoke
+     * the exact production code path.
+     */
+    static void failFastHalt() {
+        Runtime.getRuntime().halt(1);
+    }
     private final com.match.application.engine.EngineConfigStateMachine engineConfigStateMachine =
             new com.match.application.engine.EngineConfigStateMachine(
                     engine, () -> failFast.run(), this::onEnginesCreatedFromConfig);
@@ -946,7 +975,10 @@ public class AppClusteredService implements ClusteredService {
             logger.error(critical);
             System.err.println(critical); // visible even if the logger is suppressed
             e.printStackTrace();
-            System.exit(1);
+            // Through the failFast seam (hookless halt), NOT System.exit: this catch runs on the
+            // service thread inside onStart, where exit() deadlocks in shutdown hooks awaiting
+            // this very thread — the #223 zombie. Evidence is already on stderr above.
+            failFast.run();
         }
     }
 
