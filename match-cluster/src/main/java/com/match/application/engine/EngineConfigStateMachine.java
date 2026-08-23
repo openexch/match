@@ -186,6 +186,60 @@ public final class EngineConfigStateMachine {
                 markets);
     }
 
+    // ---- #224: effective engine-creation gauges (match_engine_effective_*) ----
+    //
+    // The node's EFFECTIVE engine-creation config as published on /metrics: the recorded
+    // replicated config when one exists (the declared truth this node either was created from or
+    // passed/died by the adopt cross-check), else the SAME node-local derivation the adopt
+    // cross-check compares against (nodeEffectiveConfig: env-derived impl/capacity + compiled
+    // caps + compiled market table) — so the operator's declared-vs-effective precheck sees
+    // exactly what crossCheckOrExit would compare. Null only in config mode before the first
+    // EngineConfig (no engines, no effective values yet): the numeric gauges publish the -1
+    // sentinel and the hash publishes 0 until then. Read on the /metrics scraper thread with the
+    // same publish/acquire piggyback as the counters; allocates per scrape — fine off the order
+    // path.
+    private EngineConfigState effectiveConfig() {
+        final EngineConfigState recorded = engine.getEngineConfig();
+        if (recorded != null) {
+            return recorded;
+        }
+        if (!engine.hasEngines()) {
+            return null;
+        }
+        // configVersion 0: a node has no local config generation and the gauges/hash exclude it.
+        return nodeEffectiveConfig(0L);
+    }
+
+    /** Scrapeable (match_engine_effective_book_capacity): effective per-book capacity; -1 pre-config. */
+    public long effectiveBookCapacity() {
+        final EngineConfigState c = effectiveConfig();
+        return c == null ? -1L : c.bookCapacity;
+    }
+
+    /** Scrapeable (match_engine_effective_max_matches_per_order): effective per-order match cap; -1 pre-config. */
+    public long effectiveMaxMatchesPerOrder() {
+        final EngineConfigState c = effectiveConfig();
+        return c == null ? -1L : c.maxMatchesPerOrder;
+    }
+
+    /** Scrapeable (match_engine_effective_max_orders_per_level): effective per-level cap (0 for array); -1 pre-config. */
+    public long effectiveMaxOrdersPerLevel() {
+        final EngineConfigState c = effectiveConfig();
+        return c == null ? -1L : c.maxOrdersPerLevel;
+    }
+
+    /** Scrapeable (match_engine_effective_impl): EngineImpl wire value, 0=array 1=direct; -1 pre-config. */
+    public long effectiveImplWire() {
+        final EngineConfigState c = effectiveConfig();
+        return c == null ? -1L : c.implWireValue();
+    }
+
+    /** Scrapeable (match_engine_effective_config_hash, rendered unsigned): canonical hash; 0 pre-config. */
+    public long effectiveConfigHash() {
+        final EngineConfigState c = effectiveConfig();
+        return c == null ? 0L : c.canonicalHash();
+    }
+
     /** Configs accepted (fresh creations + adoptions). */
     public long acceptedCount() {
         return acceptedCount;

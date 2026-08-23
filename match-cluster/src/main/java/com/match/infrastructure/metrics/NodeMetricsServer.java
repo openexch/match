@@ -24,6 +24,7 @@ public final class NodeMetricsServer {
     private final NodeMetrics metrics;
     private final Map<String, LongSupplier> counters = new LinkedHashMap<>();
     private final Map<String, LongSupplier> gauges = new LinkedHashMap<>();
+    private final Map<String, LongSupplier> unsignedGauges = new LinkedHashMap<>();
     private HttpServer server;
 
     public NodeMetricsServer(NodeMetrics metrics) {
@@ -38,6 +39,17 @@ public final class NodeMetricsServer {
 
     public NodeMetricsServer gauge(String name, String help, LongSupplier value) {
         gauges.put(name + " " + help, value);
+        return this;
+    }
+
+    /**
+     * Gauge whose long is a raw UNSIGNED 64-bit value (e.g. a truncated digest, #224) — rendered
+     * with {@link Long#toUnsignedString(long)} so the text never shows a sign and Go parses it
+     * with {@code strconv.ParseUint}. Identity semantics, not magnitude: above 2^53 the value is
+     * lossy in a float64 TSDB, so consumers must compare the scraped text.
+     */
+    public NodeMetricsServer gaugeUnsigned(String name, String help, LongSupplier value) {
+        unsignedGauges.put(name + " " + help, value);
         return this;
     }
 
@@ -76,6 +88,9 @@ public final class NodeMetricsServer {
         for (Map.Entry<String, LongSupplier> e : gauges.entrySet()) {
             appendSeries(sb, e.getKey(), "gauge", e.getValue().getAsLong());
         }
+        for (Map.Entry<String, LongSupplier> e : unsignedGauges.entrySet()) {
+            appendSeriesText(sb, e.getKey(), "gauge", Long.toUnsignedString(e.getValue().getAsLong()));
+        }
 
         sb.append("# HELP match_cluster_role Cluster role ordinal (0 follower, 1 candidate, 2 leader)\n");
         sb.append("# TYPE match_cluster_role gauge\n");
@@ -108,6 +123,10 @@ public final class NodeMetricsServer {
     }
 
     private static void appendSeries(StringBuilder sb, String nameAndHelp, String type, long value) {
+        appendSeriesText(sb, nameAndHelp, type, Long.toString(value));
+    }
+
+    private static void appendSeriesText(StringBuilder sb, String nameAndHelp, String type, String value) {
         int space = nameAndHelp.indexOf(' ');
         String name = nameAndHelp.substring(0, space);
         String help = nameAndHelp.substring(space + 1);

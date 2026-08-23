@@ -646,6 +646,28 @@ public class AppClusteredService implements ClusteredService {
                     .gauge("match_engine_from_config",
                             "Engine-creation mode of THIS node (1 = config mode, 0 = legacy). A launch parameter like CLUSTER_ADDRESSES: it must be uniform across members — a mixed cluster forks replicated state on any pre-config order. The operator layer verifies uniformity here before admitting genesis traffic (slice C)",
                             () -> engineFromConfigMode ? 1L : 0L)
+                    // #224: the EFFECTIVE engine-creation values — the recorded replicated config
+                    // when one exists, else the exact node-local derivation the adopt cross-check
+                    // compares against. Input for the operator layer's declared-vs-effective
+                    // precheck: cloud-console refuses to OFFER an adopt whose declared config does
+                    // not match the uniform effective values, so a wrong declared config can never
+                    // again fail-fast all members at once (2026-08-23). -1 = no effective values
+                    // yet (config mode before the first EngineConfig).
+                    .gauge("match_engine_effective_book_capacity",
+                            "Effective per-book order capacity of THIS node's engines (0 for impl=direct; -1 pre-config). Declared-vs-effective precheck input (#224)",
+                            engineConfigStateMachine::effectiveBookCapacity)
+                    .gauge("match_engine_effective_max_matches_per_order",
+                            "Effective per-order match cap of THIS node's engines (-1 pre-config). Declared-vs-effective precheck input (#224)",
+                            engineConfigStateMachine::effectiveMaxMatchesPerOrder)
+                    .gauge("match_engine_effective_max_orders_per_level",
+                            "Effective per-level order cap of THIS node's engines (0 for impl=array; -1 pre-config). Declared-vs-effective precheck input (#224)",
+                            engineConfigStateMachine::effectiveMaxOrdersPerLevel)
+                    .gauge("match_engine_effective_impl",
+                            "Effective engine implementation of THIS node as the EngineImpl wire value (0 = array, 1 = direct; -1 pre-config). Declared-vs-effective precheck input (#224)",
+                            engineConfigStateMachine::effectiveImplWire)
+                    .gaugeUnsigned("match_engine_effective_config_hash",
+                            "Canonical hash of THIS node's effective engine-creation config: SHA-256 of the canonical string (see EngineConfigState.canonicalString), first 8 bytes as unsigned 64-bit big-endian; 0 pre-config. Compare as text — identity, not magnitude (#224)",
+                            engineConfigStateMachine::effectiveConfigHash)
                     .counter("match_engine_config_duplicates_total",
                             "EngineConfig commands identical to the recorded config — idempotent no-op ACKs (slice C)",
                             engineConfigStateMachine::duplicateCount)
