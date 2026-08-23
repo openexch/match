@@ -33,7 +33,21 @@ import java.util.Arrays;
  *   [omsMapCount : int]           // v9 (A-1); orderId -> omsOrderId correlation map
  *   repeat omsMapCount:           // written in ASCENDING orderId order for cross-replica determinism
  *     [orderId : long][omsOrderId : long]
+ *   [engineConfigPresent : byte = 1]   // slice C; the WHOLE block below is written ONLY when a
+ *     [configVersion : long]           // config is recorded. With no config NOTHING is appended —
+ *     [impl : byte]                    // a config-less snapshot stays bit-for-bit identical to
+ *     [bookCapacity : int]             // today's (the slice C red line). Deserialize is trailing-
+ *     [maxMatchesPerOrder : int]       // tolerant: clean EOF where this block would start = no
+ *     [maxOrdersPerLevel : int]        // config (legacy snapshot), NOT an error.
+ *     [numConfigMarkets : int]         // impl byte: 0=array, 1=direct (EngineImpl wire values).
+ *     repeat numConfigMarkets:         // markets in ASCENDING marketId order (the normalized form).
+ *       [marketId : int][symbol : 16 bytes ASCII, NUL-padded]
+ *       [minPrice : long][maxPrice : long][tickSize : long]
  * </pre>
+ *
+ * <p><b>Slice C note for future tails:</b> because the engineConfig block is written only when
+ * present, any FUTURE trailing block must begin with a marker distinguishable from this block's
+ * present byte (1) or make the config block unconditional first.</p>
  *
  * <p>All scalars use the buffer's native byte order (Agrona default), identical to the
  * historical inline encode/decode.</p>
@@ -62,15 +76,20 @@ public final class SnapshotCodec {
         public final int rejectedOrders;
         /** Bytes consumed from the payload (for diagnostics). */
         public final int bytesConsumed;
+        /** Slice C: true when the snapshot carried an engineConfig block (already restored into
+         *  the engine — {@code engine.getEngineConfig()}). False for legacy/config-less snapshots. */
+        public final boolean engineConfigPresent;
 
         Decoded(long orderIdGenerator, long tradeIdGenerator, long timerCorrelationId,
-                boolean timerCorrelationIdPresent, int rejectedOrders, int bytesConsumed) {
+                boolean timerCorrelationIdPresent, int rejectedOrders, int bytesConsumed,
+                boolean engineConfigPresent) {
             this.orderIdGenerator = orderIdGenerator;
             this.tradeIdGenerator = tradeIdGenerator;
             this.timerCorrelationId = timerCorrelationId;
             this.timerCorrelationIdPresent = timerCorrelationIdPresent;
             this.rejectedOrders = rejectedOrders;
             this.bytesConsumed = bytesConsumed;
+            this.engineConfigPresent = engineConfigPresent;
         }
     }
 
@@ -160,8 +179,54 @@ public final class SnapshotCodec {
             pos += 8;
         }
 
+        // Slice C: the engineConfig block — appended ONLY when a config is recorded. With no
+        // config, NOTHING is written here, so a config-less snapshot is bit-for-bit identical to
+        // the pre-slice-C format (the red line: no EngineConfig in the log = identical behavior).
+        // Markets are already normalized (marketId-ascending) in EngineConfigState, so these
+        // bytes are deterministic across replicas and across serialize passes.
+        final com.match.application.engine.EngineConfigState config = engine.getEngineConfig();
+        if (config != null) {
+            dst.putByte(pos, (byte) 1);
+            pos += 1;
+            dst.putLong(pos, config.configVersion);
+            pos += 8;
+            dst.putByte(pos, (byte) (com.match.application.engine.EngineConfigState.IMPL_DIRECT
+                    .equals(config.impl) ? 1 : 0)); // EngineImpl wire values: 0=array, 1=direct
+            pos += 1;
+            dst.putInt(pos, (int) config.bookCapacity);
+            pos += 4;
+            dst.putInt(pos, (int) config.maxMatchesPerOrder);
+            pos += 4;
+            dst.putInt(pos, (int) config.maxOrdersPerLevel);
+            pos += 4;
+            dst.putInt(pos, config.markets.length);
+            pos += 4;
+            for (final com.match.application.engine.EngineConfigState.MarketDef m : config.markets) {
+                dst.putInt(pos, m.marketId);
+                pos += 4;
+                pos = putPaddedSymbol(dst, pos, m.symbol);
+                dst.putLong(pos, m.minPrice);
+                pos += 8;
+                dst.putLong(pos, m.maxPrice);
+                pos += 8;
+                dst.putLong(pos, m.tickSize);
+                pos += 8;
+            }
+        }
+
         return pos;
     }
+
+    /** Slice C: fixed 16-byte ASCII symbol, NUL-padded (mirrors the wire's char[16] Symbol type). */
+    private static int putPaddedSymbol(MutableDirectBuffer dst, int pos, String symbol) {
+        for (int i = 0; i < SYMBOL_LENGTH; i++) {
+            dst.putByte(pos + i, i < symbol.length() ? (byte) symbol.charAt(i) : (byte) 0);
+        }
+        return pos + SYMBOL_LENGTH;
+    }
+
+    private static final int SYMBOL_LENGTH =
+            com.match.application.engine.EngineConfigState.MAX_SYMBOL_LENGTH;
 
     /**
      * Decode a complete (reassembled) snapshot payload into {@code engine}, restoring its order
@@ -187,13 +252,22 @@ public final class SnapshotCodec {
         final int numMarkets = src.getInt(pos);
         pos += 4;
 
+        // Slice C: on a config-mode node the engine map is EMPTY here — its engines can only be
+        // built from the engineConfig block, which sits AFTER the market books in the byte
+        // layout. Park each market's book arrays and restore them once the config has rebuilt
+        // the engines. On a legacy node (engines exist) parking never happens and an unknown
+        // market keeps today's exact skip behavior.
+        final boolean enginesWereEmpty = !engine.hasEngines();
+        final java.util.ArrayList<long[][]> parkedBooks = new java.util.ArrayList<>(); // {bid, ask}
+        final java.util.ArrayList<Integer> parkedMarketIds = new java.util.ArrayList<>();
+
         int rejected = 0;
         for (int m = 0; m < numMarkets; m++) {
             final int marketId = src.getInt(pos);
             pos += 4;
 
             final MatchingEngine matchingEngine = engine.getEngine(marketId);
-            if (matchingEngine == null) {
+            if (matchingEngine == null && !enginesWereEmpty) {
                 // Unknown market in this build — skip its bytes to keep parsing aligned.
                 final int numBidOrders = src.getInt(pos);
                 pos += 4;
@@ -220,6 +294,13 @@ public final class SnapshotCodec {
                 pos += 8;
             }
 
+            if (matchingEngine == null) {
+                // Config-mode fresh restore: engines don't exist yet — park until the config
+                // block (below) has rebuilt them.
+                parkedMarketIds.add(marketId);
+                parkedBooks.add(new long[][]{bidOrders, askOrders});
+                continue;
+            }
             rejected += matchingEngine.restoreFromSnapshot(bidOrders, askOrders);
         }
 
@@ -250,7 +331,110 @@ public final class SnapshotCodec {
             }
         }
 
+        // Slice C: the trailing engineConfig block. TRAILING-TOLERANT: clean EOF here means the
+        // snapshot predates slice C or was taken with no config recorded — NOT an error. A
+        // present byte of 0 is likewise "explicitly no config". Only present byte 1 carries the
+        // block; a truncated block then fails loudly (buffer bounds), which is correct for a
+        // corrupt snapshot.
+        boolean engineConfigPresent = false;
+        if (pos + 1 <= end && src.getByte(pos) == 1) {
+            pos += 1;
+            final long configVersion = src.getLong(pos);
+            pos += 8;
+            final byte implByte = src.getByte(pos);
+            pos += 1;
+            final long bookCapacity = src.getInt(pos);
+            pos += 4;
+            final long maxMatchesPerOrder = src.getInt(pos);
+            pos += 4;
+            final long maxOrdersPerLevel = src.getInt(pos);
+            pos += 4;
+            final int numConfigMarkets = src.getInt(pos);
+            pos += 4;
+            final com.match.application.engine.EngineConfigState.MarketDef[] defs =
+                    new com.match.application.engine.EngineConfigState.MarketDef[numConfigMarkets];
+            for (int i = 0; i < numConfigMarkets; i++) {
+                final int marketId = src.getInt(pos);
+                pos += 4;
+                final String symbol = getPaddedSymbol(src, pos);
+                pos += SYMBOL_LENGTH;
+                final long minPrice = src.getLong(pos);
+                pos += 8;
+                final long maxPrice = src.getLong(pos);
+                pos += 8;
+                final long tickSize = src.getLong(pos);
+                pos += 8;
+                defs[i] = new com.match.application.engine.EngineConfigState.MarketDef(
+                        marketId, symbol, minPrice, maxPrice, tickSize);
+            }
+            final com.match.application.engine.EngineConfigState config =
+                    com.match.application.engine.EngineConfigState.of(configVersion,
+                            implByte == 1 ? com.match.application.engine.EngineConfigState.IMPL_DIRECT
+                                          : com.match.application.engine.EngineConfigState.IMPL_ARRAY,
+                            bookCapacity, maxMatchesPerOrder, maxOrdersPerLevel, defs);
+            engineConfigPresent = true;
+
+            if (enginesWereEmpty) {
+                // Config-mode fresh-from-snapshot: rebuild the engines from the recorded config —
+                // identically to the original creation (same normalized market order) — then
+                // restore the parked books. A recorded config was validated at accept time, so an
+                // invalid one here means snapshot corruption: fail the boot loudly rather than
+                // build a half-wrong engine.
+                final String invalid = config.invalidReason();
+                if (invalid != null) {
+                    throw new IllegalStateException(
+                            "[SNAPSHOT] engineConfig block is invalid (corrupt snapshot?): " + invalid);
+                }
+                engine.createEnginesFromConfig(config);
+                for (int i = 0; i < parkedMarketIds.size(); i++) {
+                    final int marketId = parkedMarketIds.get(i);
+                    final MatchingEngine me = engine.getEngine(marketId);
+                    final long[][] books = parkedBooks.get(i);
+                    if (me == null) {
+                        // A market with books in the snapshot but absent from the recorded config
+                        // — state loss; count every order loudly, never drop silently.
+                        final int lost = books[0].length / 4 + books[1].length / 4;
+                        rejected += lost;
+                        System.err.println("[SNAPSHOT] ERROR: market " + marketId + " has " + lost
+                                + " order(s) in the snapshot but is NOT in the recorded engineConfig"
+                                + " — orders dropped (state loss)");
+                        continue;
+                    }
+                    rejected += me.restoreFromSnapshot(books[0], books[1]);
+                }
+            } else {
+                // Legacy-mode (env-built) engines restoring a config-bearing snapshot: record the
+                // declared truth without recreating anything (the adopt shape). Whether THIS node
+                // matches it is the caller's cross-check (AppClusteredService fail-fast).
+                engine.setEngineConfig(config);
+            }
+        } else if (enginesWereEmpty && !parkedMarketIds.isEmpty()) {
+            // Config-mode node restoring a snapshot that has market books but NO config block:
+            // nothing to build engines from — this is state loss and must be loud, never silent.
+            int lost = 0;
+            for (final long[][] books : parkedBooks) {
+                lost += books[0].length / 4 + books[1].length / 4;
+            }
+            rejected += lost;
+            System.err.println("[SNAPSHOT] ERROR: snapshot carries " + lost + " order(s) across "
+                    + parkedMarketIds.size() + " market(s) but no engineConfig block, and this"
+                    + " config-mode node has no engines to restore into — orders dropped (state"
+                    + " loss). Was this node switched to MATCH_ENGINE_FROM_CONFIG with a legacy"
+                    + " snapshot?");
+        }
+
         return new Decoded(orderIdGen, tradeIdGen, timerCorrelationId, timerPresent,
-                rejected, pos - offset);
+                rejected, pos - offset, engineConfigPresent);
+    }
+
+    /** Slice C: read the fixed 16-byte NUL-padded ASCII symbol written by {@link #putPaddedSymbol}. */
+    private static String getPaddedSymbol(DirectBuffer src, int pos) {
+        final byte[] raw = new byte[SYMBOL_LENGTH];
+        src.getBytes(pos, raw);
+        int len = 0;
+        while (len < SYMBOL_LENGTH && raw[len] != 0) {
+            len++;
+        }
+        return new String(raw, 0, len, java.nio.charset.StandardCharsets.US_ASCII);
     }
 }

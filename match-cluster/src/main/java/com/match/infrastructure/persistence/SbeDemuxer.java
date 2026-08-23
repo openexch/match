@@ -92,6 +92,41 @@ public class SbeDemuxer {
         this.openOrdersSnapshotRequestHandler = handler;
     }
 
+    // ---- Slice C: EngineConfig ingress + fresh-cluster order guard ----
+
+    /** Slice C: receives logged EngineConfig commands, decoded and normalized (markets sorted). */
+    public interface EngineConfigHandler {
+        void onEngineConfig(com.match.application.engine.EngineConfigState config);
+    }
+
+    /**
+     * Slice C fresh-cluster guard: a CreateOrder arrived BEFORE any EngineConfig (config-mode
+     * cluster, no engines yet). The service emits the loud deterministic REJECTED egress —
+     * orderId=0 + the command's omsOrderId so the OMS hold releases.
+     */
+    public interface PreConfigOrderRejectHandler {
+        void onPreConfigOrderReject(int marketId, long userId, long omsOrderId, boolean isBuy,
+                                    long timestamp);
+    }
+
+    private final com.match.infrastructure.generated.EngineConfigDecoder engineConfigDecoder =
+            new com.match.infrastructure.generated.EngineConfigDecoder();
+    private EngineConfigHandler engineConfigHandler;
+    private PreConfigOrderRejectHandler preConfigOrderRejectHandler;
+
+    // Slice C: order commands dropped by the fresh-cluster guard (no engines yet — config-mode
+    // cluster before its EngineConfig). Deterministic: every replica sees the same empty engine
+    // set at the same log position. Legacy mode can never bump this (engines exist from boot).
+    private long preConfigOrderRejectCount;
+
+    public void setEngineConfigHandler(EngineConfigHandler handler) {
+        this.engineConfigHandler = handler;
+    }
+
+    public void setPreConfigOrderRejectHandler(PreConfigOrderRejectHandler handler) {
+        this.preConfigOrderRejectHandler = handler;
+    }
+
     public SbeDemuxer(Engine engine) {
         this.engine = engine;
     }
@@ -140,14 +175,29 @@ public class SbeDemuxer {
         try {
             switch (headerDecoder.templateId()) {
                 case CreateOrderDecoder.TEMPLATE_ID:
+                    // Slice C fresh-cluster guard: no engines yet (config-mode cluster before its
+                    // EngineConfig) -> loud deterministic REJECT, never a silent drop / NPE.
+                    // Legacy mode never takes this branch — its engines exist from boot.
+                    if (!engine.hasEngines()) {
+                        handlePreConfigCreateOrder(buffer, offset, timestamp);
+                        break;
+                    }
                     handleCreateOrder(buffer, offset, timestamp);
                     break;
 
                 case CancelOrderDecoder.TEMPLATE_ID:
+                    if (!engine.hasEngines()) {
+                        handlePreConfigCancelOrUpdate("CancelOrder");
+                        break;
+                    }
                     handleCancelOrder(buffer, offset, timestamp);
                     break;
 
                 case UpdateOrderDecoder.TEMPLATE_ID:
+                    if (!engine.hasEngines()) {
+                        handlePreConfigCancelOrUpdate("UpdateOrder");
+                        break;
+                    }
                     handleUpdateOrder(buffer, offset, timestamp);
                     break;
 
@@ -159,6 +209,14 @@ public class SbeDemuxer {
                         openOrdersSnapshotRequestHandler.onOpenOrdersSnapshotRequest(
                                 requestOpenOrdersDecoder.requestId());
                     }
+                    break;
+
+                case com.match.infrastructure.generated.EngineConfigDecoder.TEMPLATE_ID:
+                    // Slice C: the engine-creation config as a logged command. Cold path —
+                    // allocation is fine. Decode failures (poison enum byte, truncation) fall
+                    // into the SAME non-throwing catch blocks below as every other template
+                    // (the #202 pattern): counted, loud-logged, dropped — never rethrown.
+                    handleEngineConfig(buffer, offset);
                     break;
 
                 default:
@@ -224,6 +282,97 @@ public class SbeDemuxer {
      */
     public void recordDispatchEscape() {
         applyErrorCount++;
+    }
+
+    /** Scrapeable (match_preconfig_order_rejects_total): order commands dropped by the slice C
+     *  fresh-cluster guard — arrived before any EngineConfig, so no engine existed to serve them.
+     *  Always 0 in legacy mode. */
+    public long preConfigOrderRejectCount() {
+        return preConfigOrderRejectCount;
+    }
+
+    /**
+     * Slice C fresh-cluster guard, CreateOrder leg: decode just enough of the command to emit the
+     * deterministic REJECTED egress (orderId=0 + the command's omsOrderId so the OMS hold
+     * releases), count it, log loudly (rate-limited like every ingress drop). The engine is never
+     * touched — there is no engine.
+     */
+    private void handlePreConfigCreateOrder(DirectBuffer buffer, int offset, long timestamp) {
+        createOrderDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
+        final int marketId = createOrderDecoder.marketId();
+        final long userId = createOrderDecoder.userId();
+        final long omsOrderId = createOrderDecoder.omsOrderId();
+        final boolean isBuy =
+                createOrderDecoder.orderSide() == com.match.infrastructure.generated.OrderSide.BID;
+
+        final long n = ++preConfigOrderRejectCount;
+        if (shouldLogReject(n)) {
+            System.err.println("INGRESS REJECT (pre-config): CreateOrder before any EngineConfig —"
+                    + " no engine exists yet on this config-mode cluster. REJECTED egress emitted"
+                    + " (orderId=0, omsOrderId=" + omsOrderId + ", marketId=" + marketId
+                    + ", userId=" + userId + "); preConfigOrderRejects=" + n);
+        }
+        if (preConfigOrderRejectHandler != null) {
+            preConfigOrderRejectHandler.onPreConfigOrderReject(marketId, userId, omsOrderId, isBuy,
+                    timestamp);
+        }
+    }
+
+    /**
+     * Slice C fresh-cluster guard, Cancel/Update leg: with no engines there is nothing to cancel
+     * or amend and — unlike CreateOrder — the wire carries no omsOrderId, so there is no hold to
+     * release and no meaningful status to address. Count + loud log; deterministic drop.
+     */
+    private void handlePreConfigCancelOrUpdate(String what) {
+        final long n = ++preConfigOrderRejectCount;
+        if (shouldLogReject(n)) {
+            System.err.println("INGRESS REJECT (pre-config): " + what + " before any EngineConfig —"
+                    + " no engine exists yet, nothing to cancel/amend (the wire carries no omsOrderId"
+                    + " for this template, so no status egress is addressable); preConfigOrderRejects=" + n);
+        }
+    }
+
+    /**
+     * Slice C: decode a logged EngineConfig command into a normalized {@link
+     * com.match.application.engine.EngineConfigState} (markets sorted by marketId) and hand it to
+     * the state machine. Wire-level poison (an out-of-range EngineImpl byte, truncation) throws
+     * out of the generated accessors and is caught by dispatch's existing A-4/#202 catch blocks;
+     * SEMANTIC validity (capacity ranges, duplicate markets, price bands) is the state machine's
+     * deterministic reject, so it is counted apart from decode drops.
+     */
+    private void handleEngineConfig(DirectBuffer buffer, int offset) {
+        engineConfigDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
+        final long configVersion = engineConfigDecoder.configVersion();
+        final String impl = toEngineImplName(engineConfigDecoder.impl());
+        final long bookCapacity = engineConfigDecoder.bookCapacity();
+        final long maxMatchesPerOrder = engineConfigDecoder.maxMatchesPerOrder();
+        final long maxOrdersPerLevel = engineConfigDecoder.maxOrdersPerLevel();
+
+        final java.util.ArrayList<com.match.application.engine.EngineConfigState.MarketDef> defs =
+                new java.util.ArrayList<>();
+        for (final com.match.infrastructure.generated.EngineConfigDecoder.MarketsDecoder m
+                : engineConfigDecoder.markets()) {
+            defs.add(new com.match.application.engine.EngineConfigState.MarketDef(
+                    m.marketId(), m.symbol(), m.minPrice(), m.maxPrice(), m.tickSize()));
+        }
+
+        if (engineConfigHandler != null) {
+            engineConfigHandler.onEngineConfig(com.match.application.engine.EngineConfigState.of(
+                    configVersion, impl, bookCapacity, maxMatchesPerOrder, maxOrdersPerLevel,
+                    defs.toArray(new com.match.application.engine.EngineConfigState.MarketDef[0])));
+        }
+    }
+
+    /** SBE EngineImpl -> the engine's impl vocabulary; null for NULL_VAL (validation rejects it). */
+    private static String toEngineImplName(com.match.infrastructure.generated.EngineImpl impl) {
+        switch (impl) {
+            case ARRAY:
+                return com.match.application.engine.EngineConfigState.IMPL_ARRAY;
+            case DIRECT:
+                return com.match.application.engine.EngineConfigState.IMPL_DIRECT;
+            default:
+                return null;
+        }
     }
 
     private void handleCreateOrder(DirectBuffer buffer, int offset, long timestamp) {

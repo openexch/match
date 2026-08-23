@@ -44,6 +44,11 @@ public class Engine {
         this.currentLogPosition = position;
     }
 
+    /** Log position of the command being processed (egressSeq source; slice C reject emission). */
+    public long getCurrentLogPosition() {
+        return currentLogPosition;
+    }
+
     // Event sink (optional - set via setEventPublisher). Interface, not the concrete
     // MatchEventPublisher, so matching output can be captured synchronously in tests.
     private MatchEventSink eventPublisher;
@@ -74,6 +79,21 @@ public class Engine {
     public static final int CMD_CANCEL = 1;
     public static final int CMD_UPDATE = 2;
 
+    // ---- Slice C (EngineConfig): engine-creation config replicated via the cluster log ----
+
+    // The recorded EngineConfig — REPLICATED STATE (arrives only as a logged cluster command or
+    // from a snapshot that recorded it; never from this node's env). null = legacy mode / not yet
+    // configured. Once non-null it is the cluster's declared engine-creation truth and is written
+    // into every snapshot (SnapshotCodec trailing block).
+    private EngineConfigState engineConfig;
+
+    // Node-EFFECTIVE creation values, kept for the adopt-path cross-check: what THIS node actually
+    // built its engines from. Legacy mode: env-resolved impl + env-resolved capacity (array only).
+    // Config mode: copied from the accepted config (cross-check then holds by construction).
+    // null/0 on a deferred engine until a config is accepted.
+    private String implName;
+    private int effectiveBookCapacity;
+
     public Engine() {
         this(resolveEngineImpl());
     }
@@ -96,7 +116,93 @@ public class Engine {
                 config.symbol, config.getPriceLevels());
         }
 
+        // Slice C: remember the node-effective creation values for the adopt-path cross-check.
+        // Reading resolveBookCapacity() again returns exactly what createMatchingEngine used
+        // (pure re-read of the same env/prop); for "direct" the capacity knob is unused -> 0.
+        this.implName = impl;
+        this.effectiveBookCapacity = "array".equals(impl) ? resolveBookCapacity() : 0;
+
         logger.info("Engine started with {} markets.", MarketConfig.ALL_MARKETS.length);
+    }
+
+    // Deferred (config-mode) construction: builds NO engines. Distinct private signature; the
+    // boolean is just a disambiguator from Engine(String).
+    private Engine(boolean deferred) {
+        this.engines = new Int2ObjectHashMap<>();
+        logger.info("Engine deferred: config mode — no engines until an EngineConfig is logged"
+                + " (orders before that are loudly REJECTED, never silently dropped)");
+    }
+
+    /**
+     * Slice C: a config-mode engine — created EMPTY, with engine creation deferred until an
+     * {@code EngineConfig} command arrives from the cluster log (or a config-bearing snapshot is
+     * restored). Production legacy mode and every existing test keep using {@link #Engine()} —
+     * that path is bit-for-bit unchanged.
+     */
+    public static Engine deferredUntilConfig() {
+        return new Engine(true);
+    }
+
+    /** True once matching engines exist (legacy: always from boot; config mode: after accept). */
+    public boolean hasEngines() {
+        return !engines.isEmpty();
+    }
+
+    /** The recorded replicated engine config, or null in legacy mode / before the first config. */
+    public EngineConfigState getEngineConfig() {
+        return engineConfig;
+    }
+
+    /**
+     * Record the replicated config WITHOUT touching engines — the adopt path (engines already
+     * exist, env/compiled-built) and snapshot restore into a legacy-mode engine. The config
+     * becomes the declared truth; whether this node MATCHES it is the caller's cross-check.
+     */
+    public void setEngineConfig(EngineConfigState config) {
+        this.engineConfig = config;
+    }
+
+    /**
+     * Slice C fresh path: create every matching engine FROM the (already validated) replicated
+     * config — impl, capacity, match caps, markets — and record it. Never touches
+     * {@code MarketConfig.ALL_MARKETS} and never reads env. Markets are inserted in the config's
+     * normalized (marketId-ascending) order, so the engines-map iteration order — which the
+     * snapshot byte layout depends on — is identical on every replica and on every
+     * fresh-from-snapshot rebuild.
+     *
+     * @throws IllegalStateException if engines already exist (the adopt path must never recreate)
+     */
+    public void createEnginesFromConfig(EngineConfigState config) {
+        if (!engines.isEmpty()) {
+            throw new IllegalStateException(
+                    "createEnginesFromConfig on an engine that already has " + engines.size()
+                    + " engines — the adopt path records, it never recreates");
+        }
+        final boolean array = EngineConfigState.IMPL_ARRAY.equals(config.impl);
+        for (EngineConfigState.MarketDef m : config.markets) {
+            final MatchingEngine engine = array
+                    ? new ArrayMatchingEngine(m.minPrice, m.maxPrice, m.tickSize,
+                            (int) config.bookCapacity, (int) config.maxMatchesPerOrder)
+                    : new DirectMatchingEngine(m.minPrice, m.maxPrice, m.tickSize,
+                            (int) config.maxMatchesPerOrder, (int) config.maxOrdersPerLevel);
+            engines.put(m.marketId, engine);
+            logger.info("Initialized {} engine from EngineConfig (marketId={})", m.symbol, m.marketId);
+        }
+        this.engineConfig = config;
+        this.implName = config.impl;
+        this.effectiveBookCapacity = (int) config.bookCapacity;
+        logger.info("Engine created {} markets from replicated EngineConfig (configVersion={}, impl={})",
+                config.markets.length, config.configVersion, config.impl);
+    }
+
+    /** Node-effective implementation name ("array"|"direct") — adopt-path cross-check input. */
+    public String getImplName() {
+        return implName;
+    }
+
+    /** Node-effective book capacity (0 when the impl has no capacity knob) — cross-check input. */
+    public int getEffectiveBookCapacity() {
+        return effectiveBookCapacity;
     }
 
     /**
