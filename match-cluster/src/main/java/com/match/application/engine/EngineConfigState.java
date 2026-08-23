@@ -208,4 +208,104 @@ public final class EngineConfigState {
                 + " maxOrdersPerLevel=" + maxOrdersPerLevel
                 + " markets=" + Arrays.toString(markets) + "}";
     }
+
+    // ---- #224: canonical hash — the declared-vs-effective precheck fingerprint ----
+
+    /**
+     * The impl as the SBE {@code EngineImpl} wire value: 0 = array, 1 = direct, -1 = unknown/null
+     * (unreachable for a validated config). Exported as {@code match_engine_effective_impl}.
+     */
+    public int implWireValue() {
+        if (IMPL_ARRAY.equals(impl)) {
+            return 0;
+        }
+        if (IMPL_DIRECT.equals(impl)) {
+            return 1;
+        }
+        return -1;
+    }
+
+    /**
+     * The CANONICAL STRING this config's {@link #canonicalHash()} is computed over. This format
+     * is a cross-language contract: cloud-console (Go) computes the DECLARED side of the
+     * declared-vs-effective precheck (#224) from the exact same format, so any change here is a
+     * breaking protocol change — bump the {@code engine-config-v1} prefix if the format ever has
+     * to evolve, and keep {@code EngineConfigCanonicalHashTest.canonicalStringFormatIsPinned}
+     * in sync (it pins this format literally).
+     *
+     * <p><b>EXACT FORMAT</b> (authoritative; field order fixed):</p>
+     * <pre>
+     * engine-config-v1|impl=&lt;impl&gt;|bookCapacity=&lt;n&gt;|maxMatchesPerOrder=&lt;n&gt;|maxOrdersPerLevel=&lt;n&gt;|markets=&lt;count&gt;|&lt;marketId&gt;,&lt;symbol&gt;,&lt;minPrice&gt;,&lt;maxPrice&gt;,&lt;tickSize&gt;[|&lt;marketId&gt;,...]
+     * </pre>
+     * <ul>
+     *   <li>{@code configVersion} is EXCLUDED — the precheck compares VALUES, exactly like the
+     *       adopt cross-check ({@link #equalsIgnoringVersion}); a node's effective values have no
+     *       local config generation.</li>
+     *   <li>{@code impl} is the literal string {@code array} or {@code direct}.</li>
+     *   <li>Every number is base-10 ASCII, no sign prefix, no leading zeros (Java
+     *       {@code Long.toString} / Go {@code strconv.FormatInt}); the uint32-ranged fields and
+     *       the fixed-point-8dp prices are printed as their integer values.</li>
+     *   <li>Markets in ascending {@code marketId} order (this class normalizes in {@link #of}),
+     *       one {@code |}-segment per market, fields comma-separated in the order
+     *       marketId, symbol, minPrice, maxPrice, tickSize. No trailing separator.</li>
+     * </ul>
+     *
+     * <p><b>Hash</b>: UTF-8 bytes of this string → SHA-256 → first 8 bytes as an UNSIGNED 64-bit
+     * big-endian integer. Go reference (copy-paste; markets pre-sorted ascending by marketId):</p>
+     * <pre>
+     * s := fmt.Sprintf("engine-config-v1|impl=%s|bookCapacity=%d|maxMatchesPerOrder=%d|maxOrdersPerLevel=%d|markets=%d",
+     *         impl, bookCapacity, maxMatchesPerOrder, maxOrdersPerLevel, len(markets))
+     * for _, m := range markets {
+     *         s += fmt.Sprintf("|%d,%s,%d,%d,%d", m.MarketID, m.Symbol, m.MinPrice, m.MaxPrice, m.TickSize)
+     * }
+     * sum := sha256.Sum256([]byte(s))
+     * hash := binary.BigEndian.Uint64(sum[:8])
+     * </pre>
+     *
+     * <p><b>Test vector</b> (also pinned in EngineConfigCanonicalHashTest):</p>
+     * <pre>
+     * engine-config-v1|impl=array|bookCapacity=4096|maxMatchesPerOrder=100|maxOrdersPerLevel=0|markets=2|7,AAA-USD,500000000,1500000000,500000|42,ZZZ-USD,1000000000,2000000000,1000000
+     * → hash 251824785580910312
+     * </pre>
+     */
+    public String canonicalString() {
+        final StringBuilder sb = new StringBuilder(128)
+                .append("engine-config-v1")
+                .append("|impl=").append(impl)
+                .append("|bookCapacity=").append(bookCapacity)
+                .append("|maxMatchesPerOrder=").append(maxMatchesPerOrder)
+                .append("|maxOrdersPerLevel=").append(maxOrdersPerLevel)
+                .append("|markets=").append(markets.length);
+        for (MarketDef m : markets) {
+            sb.append('|').append(m.marketId)
+              .append(',').append(m.symbol)
+              .append(',').append(m.minPrice)
+              .append(',').append(m.maxPrice)
+              .append(',').append(m.tickSize);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * SHA-256 of {@link #canonicalString()} (UTF-8), first 8 bytes as an unsigned 64-bit
+     * big-endian integer, carried in a Java {@code long} (same bits). Exported as the
+     * {@code match_engine_effective_config_hash} gauge — rendered UNSIGNED on /metrics so the Go
+     * side parses it with {@code strconv.ParseUint}. Identity only, not magnitude: values above
+     * 2^53 are lossy in a float64 TSDB, so comparisons must use the scraped text (cloud-console
+     * scrapes /metrics directly). Allocates; scrape/decision path only, never the order path.
+     */
+    public long canonicalHash() {
+        final byte[] digest;
+        try {
+            digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(canonicalString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is JDK-mandated and missing", e);
+        }
+        long h = 0;
+        for (int i = 0; i < 8; i++) {
+            h = (h << 8) | (digest[i] & 0xFFL);
+        }
+        return h;
+    }
 }

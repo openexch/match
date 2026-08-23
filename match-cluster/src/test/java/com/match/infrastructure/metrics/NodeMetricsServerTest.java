@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.match.infrastructure.metrics;
 
+import com.match.application.engine.Engine;
+import com.match.application.engine.EngineConfigState;
+import com.match.application.engine.EngineConfigStateMachine;
 import com.match.application.publisher.MarketEventHandler;
 import com.match.application.publisher.MatchEventPublisher;
 import com.match.application.publisher.PublishEvent;
@@ -88,6 +91,81 @@ public class NodeMetricsServerTest {
         assertTrue(out.contains("# TYPE match_publisher_dropped_trade_total counter"));
         assertTrue(out.contains("match_publisher_dropped_status_total 7"));
         assertTrue(out.contains("# TYPE match_publisher_dropped_status_total counter"));
+    }
+
+    /**
+     * #224: the effective engine-creation gauges must render next to match_engine_from_config —
+     * wired from the state machine exactly as AppClusteredService.startMetricsServer does. The
+     * hash gauge renders UNSIGNED so cloud-console's Go side can strconv.ParseUint it.
+     */
+    @Test
+    public void effectiveEngineConfigGaugesRender() {
+        // Fresh accept: engines created FROM the config, which becomes the recorded truth —
+        // the gauges must then publish exactly its values (test-vector config, hash pinned in
+        // EngineConfigCanonicalHashTest).
+        EngineConfigStateMachine sm = new EngineConfigStateMachine(Engine.deferredUntilConfig(),
+                () -> fail("failFast must not fire here"), null);
+        sm.onEngineConfig(EngineConfigState.of(7, EngineConfigState.IMPL_ARRAY, 4096, 100, 0,
+                new EngineConfigState.MarketDef[]{
+                        new EngineConfigState.MarketDef(42, "ZZZ-USD", 1_000_000_000L, 2_000_000_000L, 1_000_000L),
+                        new EngineConfigState.MarketDef(7, "AAA-USD", 500_000_000L, 1_500_000_000L, 500_000L),
+                }));
+
+        NodeMetrics metrics = new NodeMetrics();
+        metrics.publish();
+        String out = new NodeMetricsServer(metrics)
+                .gauge("match_engine_effective_book_capacity", "Effective per-book capacity",
+                        sm::effectiveBookCapacity)
+                .gauge("match_engine_effective_max_matches_per_order", "Effective per-order match cap",
+                        sm::effectiveMaxMatchesPerOrder)
+                .gauge("match_engine_effective_max_orders_per_level", "Effective per-level cap",
+                        sm::effectiveMaxOrdersPerLevel)
+                .gauge("match_engine_effective_impl", "EngineImpl wire value",
+                        sm::effectiveImplWire)
+                .gaugeUnsigned("match_engine_effective_config_hash", "Canonical config hash",
+                        sm::effectiveConfigHash)
+                .render();
+
+        assertTrue(out.contains("match_engine_effective_book_capacity 4096"));
+        assertTrue(out.contains("match_engine_effective_max_matches_per_order 100"));
+        assertTrue(out.contains("match_engine_effective_max_orders_per_level 0"));
+        assertTrue(out.contains("match_engine_effective_impl 0"));
+        assertTrue(out.contains("match_engine_effective_config_hash 251824785580910312"));
+        assertTrue(out.contains("# TYPE match_engine_effective_config_hash gauge"));
+    }
+
+    /** #224: before any config in config mode there are no effective values — sentinels render. */
+    @Test
+    public void effectiveEngineConfigGaugesRenderSentinelsPreConfig() {
+        EngineConfigStateMachine sm = new EngineConfigStateMachine(Engine.deferredUntilConfig(),
+                () -> fail("failFast must not fire here"), null);
+
+        NodeMetrics metrics = new NodeMetrics();
+        metrics.publish();
+        String out = new NodeMetricsServer(metrics)
+                .gauge("match_engine_effective_book_capacity", "Effective per-book capacity",
+                        sm::effectiveBookCapacity)
+                .gauge("match_engine_effective_impl", "EngineImpl wire value",
+                        sm::effectiveImplWire)
+                .gaugeUnsigned("match_engine_effective_config_hash", "Canonical config hash",
+                        sm::effectiveConfigHash)
+                .render();
+
+        assertTrue(out.contains("match_engine_effective_book_capacity -1"));
+        assertTrue(out.contains("match_engine_effective_impl -1"));
+        assertTrue(out.contains("match_engine_effective_config_hash 0"));
+    }
+
+    /** #224: unsigned gauges must render high-bit longs as their unsigned decimal text. */
+    @Test
+    public void unsignedGaugeRendersHighBitValuesUnsigned() {
+        NodeMetrics metrics = new NodeMetrics();
+        metrics.publish();
+        String out = new NodeMetricsServer(metrics)
+                .gaugeUnsigned("match_test_unsigned", "Raw unsigned 64-bit value", () -> -1L)
+                .render();
+        assertTrue("expected 2^64-1, never a minus sign",
+                out.contains("match_test_unsigned 18446744073709551615"));
     }
 
     /** Minimal MarketEventHandler that reports fixed reliable-egress drop counts. */
