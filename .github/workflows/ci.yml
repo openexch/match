@@ -18,6 +18,28 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  edge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: edge/market-relay
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: edge/market-relay/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Workers runtime tests
+        run: npm test
+
   build:
     runs-on: ubuntu-latest
     permissions:
@@ -113,7 +135,7 @@ jobs:
   # A job here rather than its own workflow so `needs` is a real gate: two
   # workflows cannot depend on each other.
   publish:
-    needs: [build, security]
+    needs: [build, security, edge]
     # Opt-in per repo. Publishing needs an S3 bucket and an OIDC role that do not
     # exist in a fresh clone or a fork, and a workflow that hard-fails on absent
     # infrastructure turns main red for a reason unrelated to the code. Turn it on
