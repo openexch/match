@@ -34,7 +34,7 @@
         <maven.compiler.target>21</maven.compiler.target>
         <cluster-kit.version>0.1.7</cluster-kit.version>
         <aeron.version>1.52.2</aeron.version>
-        <agrona.version>2.5.0</agrona.version>
+        <agrona.version>2.6.0</agrona.version>
         <sbe.version>1.39.0</sbe.version>
         <disruptor.version>4.0.0</disruptor.version>
         <netty.version>4.2.17.Final</netty.version>
