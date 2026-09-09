@@ -16,30 +16,18 @@ Exchange running?".
 
 The top-level `openexchange/` is **not** a git repo; each child is.
 
-## `main` is protected — everything lands via a PR
+## Merge requirements
 
-All four `main` branches are protected by rulesets; **you cannot push to `main` directly (or FF-push)**.
-Push a feature branch, open a PR, and merge the PR. Gates differ per repo
-(`gh api repos/openexch/<repo>/rules/branches/main`):
+Use a feature branch and a pull request for contributions. Check the current
+repository rules before merging (`gh api repos/openexch/<repo>/rules/branches/main`).
+As of 2026-09-10, commit signing is optional on `match`, `admin`, `oms`, and `tools`.
+Signed and unsigned contributions are welcome; a signing-agent outage does not
+require rewriting the contribution's history.
 
-| Repo | PR | Linear history | Signed commits | Copilot review |
-|---|---|---|---|---|
-| match | ✅ | ✅ | ✅ | — |
-| admin-gateway | ✅ | ✅ | ✅ | ✅ |
-| oms | ✅ | — | ✅ | ✅ |
-| trading-ui | ✅ | — | — | — |
-
-**Merging into a signature-required base (match, oms, admin-gateway) — squash only.** GitHub
-**refuses rebase merges** into a signature-required base outright ("Rebase merges cannot be
-automatically signed"), and **blocks merging any PR whose HEAD commits are unsigned**. (The
-v0.2.0-alpha era sign-locally + rebase-merge path no longer works; validated 2026-07-03 on
-match#38/#40/#41 and admin-gateway#14.) Working procedure:
-
-- **Sign your commits** (1Password SSH agent) — an unsigned PR head blocks the merge entirely.
-- **One PR per logical commit**, and **squash-merge** each (`gh pr merge --squash`) — GitHub signs
-  the squash commit. Granular linear history = several small PRs, not one multi-commit PR.
-- Gotcha: if the signing agent dies mid-session, commits made before the outage stay valid — PR the
-  original signed commits rather than rebasing (a rebase re-commits, unsigned).
+Keep each PR focused on one logical change and squash-merge it. Review, tests,
+and applicable performance checks remain part of acceptance. Removing the
+commit-signature requirement does not change the other repository rules or CI
+and publication workflows. Release tagging conventions below are unchanged.
 
 ## Release conventions
 
@@ -57,8 +45,7 @@ git fetch origin
 # 1. Land the work on main via a PR (direct push is rejected by the ruleset).
 git push -u origin <feature-branch>
 gh pr create -R openexch/<repo> --base main --head <feature-branch> --title "..." --body "..."
-# Merge: squash-merge (GitHub signs the squash commit). Keep PRs to one logical commit each for
-# granular history. On oms / admin-gateway the Copilot review must pass first.
+# Merge after the review and required checks pass. Keep PRs to one logical change each.
 gh pr merge <n> -R openexch/<repo> --squash
 
 # 2. Tag the TRUE main tip AFTER the merge (verify HEAD == origin/main; ff local if behind).
