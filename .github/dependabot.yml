@@ -17,3 +17,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # The latest @cloudflare/vitest-pool-workers (0.22.0) requires Vitest ^4.1.0.
+    # Re-enable major bumps when the Workers integration supports the new major.
+    ignore:
+      - dependency-name: vitest
+        update-types: ["version-update:semver-major"]
