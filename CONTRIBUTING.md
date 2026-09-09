@@ -44,9 +44,8 @@ it must pass before merge.
 
 - **One logical change per PR.** History is linear and granular: each PR is
   squash-merged into exactly one commit on `main`.
-- **Sign your commits.** `main` requires signed commits; unsigned PR heads
-  cannot be merged. Rebase merges are not available on this repo (GitHub
-  cannot sign them), so PRs are squash-merged.
+- **Commit signing is optional.** Signed and unsigned contributions are
+  welcome. Review and testing expectations are unchanged.
 - Commit/PR title style: `type: imperative summary` with types
   `feat|fix|docs|test|ci|chore|perf`, e.g.
   `fix: fail-fast on the archive-replay error hot-loop`.
