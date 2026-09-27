@@ -544,6 +544,7 @@ public class AppClusteredService implements ClusteredService {
 
     private void applyOnStart(final Cluster cluster, final Image snapshotImage) {
         this.cluster = cluster;
+        if (consensusReadiness != null) { consensusReadiness.start(cluster.aeron()); }
         context.setIdleStrategy(cluster.idleStrategy());
         timerManager.setCluster(cluster);
 
@@ -1649,6 +1650,7 @@ public class AppClusteredService implements ClusteredService {
 
     private void applyOnTerminate(final Cluster cluster) {
         readiness.stopping();
+        if (consensusReadiness != null) { consensusReadiness.close(); }
         if (logPruner != null) {
             logPruner.stop();
         }

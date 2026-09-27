@@ -31,7 +31,9 @@ public class FollowerReadinessTest {
         final NodeReadiness readiness = readinessOf(service);
         readiness.started();
         try (ConsensusFixture fixture = new ConsensusFixture()) {
-            service.readinessConsensus(fixture.context);
+            inject(service, "consensusReadiness", new com.openexchange.cluster.ConsensusReadiness(
+                    fixture.context, readiness, time -> new com.openexchange.cluster.ConsensusReadiness.LeaderCheckpoint(
+                        fixture.context.leadershipTermIdCounter().get(), 999, fixture.context.commitPositionCounter().get(), time)));
             long now = System.nanoTime();
             service.doBackgroundWork(now);
             assertFalse("role alone must not hide lag", readiness.ready());
@@ -96,7 +98,9 @@ public class FollowerReadinessTest {
         final NodeReadiness readiness = readinessOf(service); readiness.started();
         try (ConsensusFixture fixture = new ConsensusFixture()) {
             fixture.context.clusterNodeRoleCounter().set(Cluster.Role.FOLLOWER.code());
-            service.readinessConsensus(fixture.context);
+            inject(service, "consensusReadiness", new com.openexchange.cluster.ConsensusReadiness(
+                    fixture.context, readiness, time -> new com.openexchange.cluster.ConsensusReadiness.LeaderCheckpoint(
+                        fixture.context.leadershipTermIdCounter().get(), 999, fixture.context.commitPositionCounter().get(), time)));
             final int[] reentries = {0};
             cluster.onIdle = () -> {
                 reentries[0]++;
