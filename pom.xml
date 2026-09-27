@@ -6,7 +6,7 @@
 
     <groupId>com.match</groupId>
     <artifactId>match-engine</artifactId>
-    <version>1.0-runtime.20260928.r02b.gfea4356</version>
+    <version>1.0-runtime.20260928.r02c.gaf60c67</version>
     <packaging>pom</packaging>
 
     <name>Match Engine Parent</name>
@@ -32,7 +32,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
-        <cluster-kit.version>0.1.8-runtime.20260928.r02a.g57f9a9b</cluster-kit.version>
+        <cluster-kit.version>0.1.8-runtime.20260928.r02b.g826d8d5</cluster-kit.version>
         <aeron.version>1.53.1</aeron.version>
         <agrona.version>2.6.0</agrona.version>
         <sbe.version>1.40.1</sbe.version>
