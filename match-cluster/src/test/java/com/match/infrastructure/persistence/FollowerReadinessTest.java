@@ -87,6 +87,29 @@ public class FollowerReadinessTest {
         }
     }
 
+    @Test
+    public void idleInsideUnfinishedCallbackCannotPublishAppliedPosition() throws Exception {
+        final AppClusteredService service = new AppClusteredService();
+        final StubCluster cluster = new StubCluster(Cluster.Role.FOLLOWER);
+        cluster.applied = 100; // Aeron sets logPosition before invoking the callback.
+        inject(service, "cluster", cluster);
+        final NodeReadiness readiness = readinessOf(service); readiness.started();
+        try (ConsensusFixture fixture = new ConsensusFixture()) {
+            fixture.context.clusterNodeRoleCounter().set(Cluster.Role.FOLLOWER.code());
+            service.readinessConsensus(fixture.context);
+            final int[] reentries = {0};
+            cluster.onIdle = () -> {
+                reentries[0]++;
+                service.doBackgroundWork(System.nanoTime());
+                assertFalse("unfinished callback was advertised as applied: " + readiness.describe(), readiness.ready());
+            };
+            service.onTimerEvent(1_000_000_000_000L, 0);
+            assertTrue("actual idle reentry is required", reentries[0] > 0);
+            service.doBackgroundWork(System.nanoTime() + 20_000_000);
+            assertTrue("completed callback may establish evidence: " + readiness.describe(), readiness.ready());
+        }
+    }
+
     // ==================== helpers ====================
 
     private static NodeReadiness readinessOf(final AppClusteredService service) throws Exception {
@@ -110,6 +133,8 @@ public class FollowerReadinessTest {
     private static final class StubCluster implements Cluster {
         private final Role role;
         private long applied;
+        private Runnable onIdle;
+        private int schedules;
 
         StubCluster(final Role role) {
             this.role = role;
@@ -140,7 +165,7 @@ public class FollowerReadinessTest {
         }
 
         public Collection<ClientSession> clientSessions() {
-            throw new UnsupportedOperationException();
+            return java.util.List.of();
         }
 
         public void forEachClientSession(final Consumer<? super ClientSession> action) {
@@ -152,15 +177,15 @@ public class FollowerReadinessTest {
         }
 
         public long time() {
-            throw new UnsupportedOperationException();
+            return 0;
         }
 
         public TimeUnit timeUnit() {
-            throw new UnsupportedOperationException();
+            return TimeUnit.MILLISECONDS;
         }
 
         public boolean scheduleTimer(final long correlationId, final long deadline) {
-            throw new UnsupportedOperationException();
+            return ++schedules > 1;
         }
 
         public boolean cancelTimer(final long correlationId) {
@@ -180,7 +205,12 @@ public class FollowerReadinessTest {
         }
 
         public IdleStrategy idleStrategy() {
-            throw new UnsupportedOperationException();
+            return new IdleStrategy() {
+                public void idle() { onIdle.run(); }
+                public void idle(int workCount) { if (workCount <= 0) idle(); }
+                public void reset() { }
+                public String alias() { return "reentrant-test"; }
+            };
         }
     }
 }
