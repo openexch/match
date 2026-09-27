@@ -170,6 +170,10 @@ public class AppClusteredService implements ClusteredService {
             new com.openexchange.cluster.NodeReadiness();
     private com.openexchange.cluster.NodeEndpoint nodeEndpoint;
     private com.openexchange.cluster.ConsensusReadiness consensusReadiness;
+    // Aeron can reenter doBackgroundWork via idle() before the callback returns.
+    // Its logPosition is already the new event's position at that point.
+    private int applicationCallbackDepth;
+    private boolean applicationCallbackFailed;
 
     /** Wired before launch; the context owns the same-process consensus evidence. */
     public void readinessConsensus(final io.aeron.cluster.ConsensusModule.Context context) {
@@ -527,6 +531,18 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onStart(final Cluster cluster, final Image snapshotImage) {
+        applicationCallbackDepth++;
+        try {
+            applyOnStart(cluster, snapshotImage);
+        } catch (RuntimeException | Error failure) {
+            applicationCallbackFailed = true;
+            throw failure;
+        } finally {
+            applicationCallbackDepth--;
+        }
+    }
+
+    private void applyOnStart(final Cluster cluster, final Image snapshotImage) {
         this.cluster = cluster;
         context.setIdleStrategy(cluster.idleStrategy());
         timerManager.setCluster(cluster);
@@ -1192,6 +1208,18 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onSessionOpen(final ClientSession session, final long timestamp) {
+        applicationCallbackDepth++;
+        try {
+            applyOnSessionOpen(session, timestamp);
+        } catch (RuntimeException | Error failure) {
+            applicationCallbackFailed = true;
+            throw failure;
+        } finally {
+            applicationCallbackDepth--;
+        }
+    }
+
+    private void applyOnSessionOpen(final ClientSession session, final long timestamp) {
         context.setClusterTime(timestamp);
         clientSessions.addSession(session);
         System.out.println("New client session connected: " + session.id()
@@ -1214,6 +1242,18 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onSessionClose(final ClientSession session, final long timestamp, final CloseReason closeReason) {
+        applicationCallbackDepth++;
+        try {
+            applyOnSessionClose(session, timestamp, closeReason);
+        } catch (RuntimeException | Error failure) {
+            applicationCallbackFailed = true;
+            throw failure;
+        } finally {
+            applicationCallbackDepth--;
+        }
+    }
+
+    private void applyOnSessionClose(final ClientSession session, final long timestamp, final CloseReason closeReason) {
         context.setClusterTime(timestamp);
         clientSessions.removeSession(session);
         // match#140: drop this session from per-session egress observability so a normally-closed
@@ -1225,6 +1265,24 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onSessionMessage(
+        final ClientSession session,
+        final long timestamp,
+        final DirectBuffer buffer,
+        final int offset,
+        final int length,
+        final Header header) {
+        applicationCallbackDepth++;
+        try {
+            applyOnSessionMessage(session, timestamp, buffer, offset, length, header);
+        } catch (RuntimeException | Error failure) {
+            applicationCallbackFailed = true;
+            throw failure;
+        } finally {
+            applicationCallbackDepth--;
+        }
+    }
+
+    private void applyOnSessionMessage(
         final ClientSession session,
         final long timestamp,
         final DirectBuffer buffer,
@@ -1336,6 +1394,18 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onTimerEvent(final long correlationId, final long timestamp) {
+        applicationCallbackDepth++;
+        try {
+            applyOnTimerEvent(correlationId, timestamp);
+        } catch (RuntimeException | Error failure) {
+            applicationCallbackFailed = true;
+            throw failure;
+        } finally {
+            applicationCallbackDepth--;
+        }
+    }
+
+    private void applyOnTimerEvent(final long correlationId, final long timestamp) {
         context.setClusterTime(timestamp);
         // match#25 fix: the egress flush timer is recognized by its FIXED reserved id, NOT via the
         // TimerManager runnable map (which isn't restored on recovery — the desync source). This makes
@@ -1350,6 +1420,18 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onTakeSnapshot(final ExclusivePublication snapshotPublication) {
+        applicationCallbackDepth++;
+        try {
+            applyOnTakeSnapshot(snapshotPublication);
+        } catch (RuntimeException | Error failure) {
+            applicationCallbackFailed = true;
+            throw failure;
+        } finally {
+            applicationCallbackDepth--;
+        }
+    }
+
+    private void applyOnTakeSnapshot(final ExclusivePublication snapshotPublication) {
         System.out.println("[SNAPSHOT] onTakeSnapshot called");
 
         // Serialize engine state via the shared codec. SnapshotCodec is the single source of
@@ -1483,6 +1565,18 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onRoleChange(final Role newRole) {
+        applicationCallbackDepth++;
+        try {
+            applyOnRoleChange(newRole);
+        } catch (RuntimeException | Error failure) {
+            applicationCallbackFailed = true;
+            throw failure;
+        } finally {
+            applicationCallbackDepth--;
+        }
+    }
+
+    private void applyOnRoleChange(final Role newRole) {
         // match#25 diag: snapshot egress state at EVERY role transition (flushTimerScheduled read
         // pre-reset). Lets us see, per switchover, whether sessions/queues/timer-state degrade.
         System.out.println("SERVICE onRoleChange: " + newRole
@@ -1518,6 +1612,11 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public int doBackgroundWork(final long nowNs) {
+        if (applicationCallbackDepth != 0 || applicationCallbackFailed) {
+            readiness.tick();
+            if (applicationCallbackFailed) { readiness.unavailable("application-callback-failed"); }
+            return 0; // Never publish a partially applied event as completed.
+        }
         // Called every duty cycle on every member, busy or idle. This is the
         // only signal that separates "quiet market" from "agent thread wedged",
         // and the wedged case is the one that used to report itself healthy for
@@ -1537,6 +1636,18 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onTerminate(final Cluster cluster) {
+        applicationCallbackDepth++;
+        try {
+            applyOnTerminate(cluster);
+        } catch (RuntimeException | Error failure) {
+            applicationCallbackFailed = true;
+            throw failure;
+        } finally {
+            applicationCallbackDepth--;
+        }
+    }
+
+    private void applyOnTerminate(final Cluster cluster) {
         readiness.stopping();
         if (logPruner != null) {
             logPruner.stop();

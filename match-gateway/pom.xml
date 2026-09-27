@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.match</groupId>
         <artifactId>match-engine</artifactId>
-        <version>1.0-runtime.20260928.r02a.g239697d</version>
+        <version>1.0-runtime.20260928.r02b.gfea4356</version>
     </parent>
 
     <artifactId>match-gateway</artifactId>
