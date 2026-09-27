@@ -259,6 +259,10 @@ public final class ClusterConfig
                 // Prevents session exhaustion during load tests + gateway reconnections
                 .maxConcurrentSessions(50);
 
+        if (clusteredService instanceof AppClusteredService engineService) {
+            engineService.readinessConsensus(consensusModuleContext);
+        }
+
         final List<ClusteredServiceContainer.Context> serviceContexts = new ArrayList<>();
 
         // ==================== ULTRA-LOW LATENCY SERVICE CONTAINER CONFIG ====================
