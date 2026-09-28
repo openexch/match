@@ -105,6 +105,14 @@ public class MatchEventPublisher implements MatchEventSink {
      * Arm the settlement journal. Called once at node bootstrap (before the cluster starts
      * processing) when SETTLEMENT_JOURNAL_ENABLED; never called on the hot path.
      */
+    @Override public void requireDurableCommandJournal() {
+        if (settlementJournal == null) throw new IllegalStateException("Durable commands require settlement journal");
+    }
+    @Override public void publishCommandOutcome(long position, com.match.domain.commands.DurableCommandOutcome outcome) {
+        requireDurableCommandJournal();
+        settlementJournal.appendCommandOutcome(position, outcome);
+    }
+
     public void setSettlementJournal(final com.match.infrastructure.journal.SettlementJournal journal) {
         this.settlementJournal = journal;
     }

@@ -44,7 +44,7 @@ public final class SettlementJournal {
     private final OneToOneRingBuffer ringBuffer;
 
     // Scratch encode buffer: max message = header(8) + JournalTrade block (101) < 128.
-    private final UnsafeBuffer scratch = new UnsafeBuffer(ByteBuffer.allocateDirect(128));
+    private final UnsafeBuffer scratch = new UnsafeBuffer(ByteBuffer.allocateDirect(256));
     private final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
     private final JournalTradeEncoder tradeEncoder = new JournalTradeEncoder();
     private final JournalTerminalEncoder terminalEncoder = new JournalTerminalEncoder();
@@ -63,6 +63,21 @@ public final class SettlementJournal {
     /** The ring the {@link JournalWriterAgent} drains. */
     public OneToOneRingBuffer ringBuffer() {
         return ringBuffer;
+    }
+
+    private final com.match.infrastructure.generated.JournalCommandOutcomeEncoder commandEncoder =
+        new com.match.infrastructure.generated.JournalCommandOutcomeEncoder();
+    private final com.match.infrastructure.generated.MessageHeaderEncoder commandHeader =
+        new com.match.infrastructure.generated.MessageHeaderEncoder();
+    public void appendCommandOutcome(long position, com.match.domain.commands.DurableCommandOutcome o) {
+        var c=o.intent();
+        commandEncoder.wrapAndApplyHeader(scratch,0,commandHeader).egressSeq(position)
+            .commandIdHigh(c.idHigh()).commandIdLow(c.idLow()).userId(c.userId()).omsOrderId(c.omsOrderId())
+            .oldOrderId(c.oldOrderId()).price(c.price()).quantity(c.quantity()).budget(c.budget()).marketId(c.marketId())
+            .commandKind((short)c.kind()).orderType((short)c.type()).orderSide((short)c.side())
+            .appliedPosition(o.appliedPosition()).timestamp(o.timestamp()).orderId(o.orderId())
+            .status(o.status()).reason(o.reason()).oldCancelled((short)(o.oldCancelled()?1:0)).result(o.result());
+        blockingWrite(3,8+commandEncoder.encodedLength(),c.idLow());
     }
 
     public void appendTrade(
