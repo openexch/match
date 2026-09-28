@@ -531,11 +531,12 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onStart(final Cluster cluster, final Image snapshotImage) {
+        ensureApplicationHealthy();
         applicationCallbackDepth++;
         try {
             applyOnStart(cluster, snapshotImage);
         } catch (RuntimeException | Error failure) {
-            applicationCallbackFailed = true;
+            failApplicationCallback();
             throw failure;
         } finally {
             applicationCallbackDepth--;
@@ -651,10 +652,10 @@ public class AppClusteredService implements ClusteredService {
                             "Ingress frames dropped for a schemaId/version mismatch before decode (G-2)",
                             sbeDemuxer::schemaRejectCount)
                     .counter("match_ingress_decode_rejects_total",
-                            "Ingress frames dropped for a body-decode failure, e.g. an out-of-range enum byte (A-4)",
+                            "Ingress frames rejected before application for invalid frame bounds or body decoding",
                             sbeDemuxer::decodeRejectCount)
                     .counter("match_ingress_apply_errors_total",
-                            "Ingress frames dropped because the engine/apply path threw an unexpected exception — a bug, ~always zero (A-4)",
+                            "Unexpected application faults that fence this instance and trigger immediate process exit",
                             sbeDemuxer::applyErrorCount)
                     // Slice C: behaviour-versioning surface. The gauge is the constant behavior
                     // version set this build supports (just 1 for now); the counters are the
@@ -1207,13 +1208,25 @@ public class AppClusteredService implements ClusteredService {
                 + decoded.bytesConsumed + " bytes of " + length);
     }
 
+    private void ensureApplicationHealthy() {
+        if (applicationCallbackFailed) {
+            throw new IllegalStateException("Application callback already failed; restart required");
+        }
+    }
+
+    private void failApplicationCallback() {
+        applicationCallbackFailed = true;
+        readiness.unavailable("application-callback-failed");
+    }
+
     @Override
     public void onSessionOpen(final ClientSession session, final long timestamp) {
+        ensureApplicationHealthy();
         applicationCallbackDepth++;
         try {
             applyOnSessionOpen(session, timestamp);
         } catch (RuntimeException | Error failure) {
-            applicationCallbackFailed = true;
+            failApplicationCallback();
             throw failure;
         } finally {
             applicationCallbackDepth--;
@@ -1243,11 +1256,12 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onSessionClose(final ClientSession session, final long timestamp, final CloseReason closeReason) {
+        ensureApplicationHealthy();
         applicationCallbackDepth++;
         try {
             applyOnSessionClose(session, timestamp, closeReason);
         } catch (RuntimeException | Error failure) {
-            applicationCallbackFailed = true;
+            failApplicationCallback();
             throw failure;
         } finally {
             applicationCallbackDepth--;
@@ -1272,12 +1286,19 @@ public class AppClusteredService implements ClusteredService {
         final int offset,
         final int length,
         final Header header) {
+        ensureApplicationHealthy();
         applicationCallbackDepth++;
         try {
             applyOnSessionMessage(session, timestamp, buffer, offset, length, header);
         } catch (RuntimeException | Error failure) {
-            applicationCallbackFailed = true;
-            throw failure;
+            failApplicationCallback();
+            System.err.println("FATAL command application failure: logPosition="
+                    + engine.getCurrentLogPosition() + " type=" + failure.getClass().getName());
+            // An apply fault may follow a financial/book mutation. Exit immediately through
+            // the existing hookless stop seam; never wait for 200 identical errors or allow
+            // another command/snapshot to certify partially applied state.
+            failFast.run();
+            throw failure; // Test hooks may return; production halt does not.
         } finally {
             applicationCallbackDepth--;
         }
@@ -1301,19 +1322,9 @@ public class AppClusteredService implements ClusteredService {
         // sampled messages; recording is plain-long writes on this thread.
         final boolean sampled = nodeMetrics.shouldSample();
         final long t0 = sampled ? System.nanoTime() : 0;
-        try {
-            sbeDemuxer.dispatch(buffer, offset, length, timestamp);
-        } catch (Exception e) {
-            // A-4: NEVER rethrow into Aeron. SbeDemuxer already catches decode failures and
-            // drops the frame internally, so nothing should reach here. If a future edit lets
-            // an Exception escape dispatch, we still must not let it out: a throw here does not
-            // crash the single frame but, on repeat, trips match's IDENTICAL_ERROR_EXIT_THRESHOLD
-            // halt(2) and can crash-loop the node on replay (a rolling-upgrade schema-skew
-            // trigger). Count the escaped frame as an ingress drop (scrapeable) and log loudly.
-            sbeDemuxer.recordDispatchEscape();
-            System.err.println("INGRESS DROP (dispatch escape): swallowed to keep the consensus "
-                    + "thread alive — " + e.getClass().getSimpleName() + ": " + e.getMessage());
-        }
+        // Demuxer drops malformed wire input before application. Every escaping failure
+        // is unexpected and must reach onSessionMessage's readiness/exit fence.
+        sbeDemuxer.dispatch(buffer, offset, length, timestamp);
         if (sampled) {
             nodeMetrics.recordOrderLatency(System.nanoTime() - t0);
         }
@@ -1395,11 +1406,12 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onTimerEvent(final long correlationId, final long timestamp) {
+        ensureApplicationHealthy();
         applicationCallbackDepth++;
         try {
             applyOnTimerEvent(correlationId, timestamp);
         } catch (RuntimeException | Error failure) {
-            applicationCallbackFailed = true;
+            failApplicationCallback();
             throw failure;
         } finally {
             applicationCallbackDepth--;
@@ -1421,11 +1433,12 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onTakeSnapshot(final ExclusivePublication snapshotPublication) {
+        ensureApplicationHealthy();
         applicationCallbackDepth++;
         try {
             applyOnTakeSnapshot(snapshotPublication);
         } catch (RuntimeException | Error failure) {
-            applicationCallbackFailed = true;
+            failApplicationCallback();
             throw failure;
         } finally {
             applicationCallbackDepth--;
@@ -1566,11 +1579,12 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public void onRoleChange(final Role newRole) {
+        ensureApplicationHealthy();
         applicationCallbackDepth++;
         try {
             applyOnRoleChange(newRole);
         } catch (RuntimeException | Error failure) {
-            applicationCallbackFailed = true;
+            failApplicationCallback();
             throw failure;
         } finally {
             applicationCallbackDepth--;
@@ -1641,7 +1655,7 @@ public class AppClusteredService implements ClusteredService {
         try {
             applyOnTerminate(cluster);
         } catch (RuntimeException | Error failure) {
-            applicationCallbackFailed = true;
+            failApplicationCallback();
             throw failure;
         } finally {
             applicationCallbackDepth--;

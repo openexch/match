@@ -26,6 +26,8 @@ import com.match.infrastructure.generated.CreateOrderDecoder;
 import com.match.infrastructure.generated.MessageHeaderDecoder;
 import com.match.infrastructure.generated.UpdateOrderDecoder;
 import org.agrona.DirectBuffer;
+import org.agrona.concurrent.UnsafeBuffer;
+import java.nio.ByteOrder;
 
 /**
  * Ultra-low latency SBE demultiplexer.
@@ -34,6 +36,7 @@ import org.agrona.DirectBuffer;
 public class SbeDemuxer {
     private final Engine engine;
     private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
+    private final UnsafeBuffer frame = new UnsafeBuffer();
 
     // SBE decoders (reused)
     private final CancelOrderDecoder cancelOrderDecoder = new CancelOrderDecoder();
@@ -56,7 +59,11 @@ public class SbeDemuxer {
     // identically on every replica, so consensus is unaffected.
     private long schemaRejectCount;  // G-2: header schemaId/version outside this build's supported range
     private long decodeRejectCount;  // A-4: a body decode threw (e.g. out-of-range enum byte) — poison input, expected
-    private long applyErrorCount;    // A-4: an UNEXPECTED exception from the engine/apply path — a bug, not poison input
+    private long applyErrorCount;
+    // Service-thread only. Once a command may have partially applied, this instance cannot
+    // establish another applied prefix. Decode-only poison never enters this state.
+    private boolean applying;
+    private boolean applyFailed;
 
     // The wire identity every ingress frame must carry. All order-schema messages share the
     // schema id, so a single header gate covers every template. The version gate is a RANGE
@@ -136,11 +143,17 @@ public class SbeDemuxer {
      * ZERO allocations, direct primitive access.
      */
     public void dispatch(final DirectBuffer buffer, final int offset, final int length, final long timestamp) {
-        if (length < MessageHeaderDecoder.ENCODED_LENGTH) {
+        if (applyFailed) {
+            throw new IllegalStateException("Ingress application already failed; restart required");
+        }
+        if (offset < 0 || length < MessageHeaderDecoder.ENCODED_LENGTH
+                || offset > buffer.capacity() || length > buffer.capacity() - offset) {
+            rejectFrameBounds();
             return;
         }
 
-        headerDecoder.wrap(buffer, offset);
+        frame.wrap(buffer, offset, length);
+        headerDecoder.wrap(frame, 0);
 
         // G-2: schema/version gate. A frame whose header is outside the supported range is
         // dropped BEFORE any body decode — no generated accessor runs, so a stale or skewed
@@ -164,14 +177,47 @@ public class SbeDemuxer {
             return;
         }
 
+        // Check the declared frame, not the backing receive buffer (which can contain old
+        // commands beyond length). Explicit checks remain effective with Agrona bounds checks
+        // disabled. The known fixed prefixes are identical throughout supported versions 9..10.
+        final int block = headerDecoder.blockLength();
+        final int minimum = switch (headerDecoder.templateId()) {
+            case CreateOrderDecoder.TEMPLATE_ID -> CreateOrderDecoder.BLOCK_LENGTH;
+            case CancelOrderDecoder.TEMPLATE_ID -> CancelOrderDecoder.BLOCK_LENGTH;
+            case UpdateOrderDecoder.TEMPLATE_ID -> UpdateOrderDecoder.BLOCK_LENGTH;
+            case com.match.infrastructure.generated.RequestOpenOrdersSnapshotDecoder.TEMPLATE_ID ->
+                    com.match.infrastructure.generated.RequestOpenOrdersSnapshotDecoder.BLOCK_LENGTH;
+            case com.match.infrastructure.generated.EngineConfigDecoder.TEMPLATE_ID ->
+                    com.match.infrastructure.generated.EngineConfigDecoder.BLOCK_LENGTH;
+            default -> 0;
+        };
+        if (block < minimum || block > length - MessageHeaderDecoder.ENCODED_LENGTH) {
+            rejectFrameBounds();
+            return;
+        }
+        if (headerDecoder.templateId() == com.match.infrastructure.generated.EngineConfigDecoder.TEMPLATE_ID) {
+            final int groupOffset = MessageHeaderDecoder.ENCODED_LENGTH + block;
+            if (length - groupOffset < 4) {
+                rejectFrameBounds();
+                return;
+            }
+            final int groupBlock = Short.toUnsignedInt(frame.getShort(groupOffset, ByteOrder.LITTLE_ENDIAN));
+            final int count = Short.toUnsignedInt(frame.getShort(groupOffset + 2, ByteOrder.LITTLE_ENDIAN));
+            if (groupBlock < com.match.infrastructure.generated.EngineConfigDecoder.MarketsDecoder.sbeBlockLength()
+                    || (long) groupBlock * count > length - groupOffset - 4) {
+                rejectFrameBounds();
+                return;
+            }
+        }
+
         // A-4: non-throwing body decode. The generated enum accessors OrderSide.get()/
         // OrderType.get() throw IllegalArgumentException on an out-of-range byte; that
         // exception used to escape to Aeron and, on repeat, trip match's
         // IDENTICAL_ERROR_EXIT_THRESHOLD halt(2), crash-looping the node on replay. Now ANY
         // decode failure is counted, loud-logged, and the frame is dropped deterministically.
-        // Never rethrown: nothing reaches Aeron. No egress here — a REJECTED reply to OMS is a
-        // separate follow-up; this step only drops+counts+logs. Zero-alloc on the happy path
-        // (try/catch is free when nothing throws; the catch body is cold).
+        // Decode failures before application are dropped. Unexpected apply failures escape to
+        // the service's immediate failure/exit fence; they must not be counted as poison input.
+        // No allocations are introduced on the normal dispatch path.
         try {
             switch (headerDecoder.templateId()) {
                 case CreateOrderDecoder.TEMPLATE_ID:
@@ -179,10 +225,10 @@ public class SbeDemuxer {
                     // EngineConfig) -> loud deterministic REJECT, never a silent drop / NPE.
                     // Legacy mode never takes this branch — its engines exist from boot.
                     if (!engine.hasEngines()) {
-                        handlePreConfigCreateOrder(buffer, offset, timestamp);
+                        handlePreConfigCreateOrder(frame, 0, timestamp);
                         break;
                     }
-                    handleCreateOrder(buffer, offset, timestamp);
+                    handleCreateOrder(frame, 0, timestamp);
                     break;
 
                 case CancelOrderDecoder.TEMPLATE_ID:
@@ -190,7 +236,7 @@ public class SbeDemuxer {
                         handlePreConfigCancelOrUpdate("CancelOrder");
                         break;
                     }
-                    handleCancelOrder(buffer, offset, timestamp);
+                    handleCancelOrder(frame, 0, timestamp);
                     break;
 
                 case UpdateOrderDecoder.TEMPLATE_ID:
@@ -198,16 +244,17 @@ public class SbeDemuxer {
                         handlePreConfigCancelOrUpdate("UpdateOrder");
                         break;
                     }
-                    handleUpdateOrder(buffer, offset, timestamp);
+                    handleUpdateOrder(frame, 0, timestamp);
                     break;
 
                 case com.match.infrastructure.generated.RequestOpenOrdersSnapshotDecoder.TEMPLATE_ID:
                     // P1.2 (match#31): logged command; deterministic across replicas
                     // (no state mutation — only the leader emits the egress reply).
-                    requestOpenOrdersDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
+                    requestOpenOrdersDecoder.wrapAndApplyHeader(frame, 0, headerDecoder);
                     if (openOrdersSnapshotRequestHandler != null) {
-                        openOrdersSnapshotRequestHandler.onOpenOrdersSnapshotRequest(
-                                requestOpenOrdersDecoder.requestId());
+                        final long requestId = requestOpenOrdersDecoder.requestId();
+                        applying = true;
+                        openOrdersSnapshotRequestHandler.onOpenOrdersSnapshotRequest(requestId);
                     }
                     break;
 
@@ -216,43 +263,47 @@ public class SbeDemuxer {
                     // allocation is fine. Decode failures (poison enum byte, truncation) fall
                     // into the SAME non-throwing catch blocks below as every other template
                     // (the #202 pattern): counted, loud-logged, dropped — never rethrown.
-                    handleEngineConfig(buffer, offset);
+                    handleEngineConfig(frame, 0);
                     break;
 
                 default:
                     // Unknown message - ignore in hot path
                     break;
             }
-        } catch (final IllegalArgumentException | IndexOutOfBoundsException e) {
-            // Expected DECODE failure: a poison/truncated frame. IllegalArgumentException is what
-            // the generated enum accessors throw on an out-of-range byte; IndexOutOfBounds is a
-            // short/garbled frame read past its bounds. Rate-limited — a poison storm must not
-            // flood the log.
-            final long n = ++decodeRejectCount;
-            if (shouldLogReject(n)) {
-                System.err.println("INGRESS DROP (decode): dropping templateId="
-                        + headerDecoder.templateId() + " — " + e.getClass().getSimpleName()
-                        + ": " + e.getMessage() + "; decodeRejects=" + n);
+        } catch (final RuntimeException | Error failure) {
+            if (!applying && (failure instanceof IllegalArgumentException
+                    || failure instanceof IndexOutOfBoundsException)) {
+                // Malformed input was rejected BEFORE any application callback. Dropping it is
+                // deterministic and safe; replay must not enter a poison-message crash loop.
+                final long n = ++decodeRejectCount;
+                if (shouldLogReject(n)) {
+                    System.err.println("INGRESS DROP (decode): templateId=" + headerDecoder.templateId()
+                            + " type=" + failure.getClass().getSimpleName() + "; decodeRejects=" + n);
+                }
+            } else {
+                // Even IllegalArgumentException/IndexOutOfBoundsException can come from a
+                // publisher or mutated engine. Never relabel those as malformed wire input.
+                applyFailed = true;
+                final long n = ++applyErrorCount;
+                System.err.println("INGRESS APPLY FAILED: templateId=" + headerDecoder.templateId()
+                        + " type=" + failure.getClass().getName() + "; applyErrors=" + n
+                        + "; restart required before any further application");
+                throw failure;
             }
-            // Deterministic drop: no rethrow, no egress. The consensus thread survives.
-        } catch (final Exception e) {
-            // UNEXPECTED: the engine/apply path threw, not the SBE decode. This is a bug (or a
-            // corrupt-state symptom), not poison input, so it is counted APART from decode drops —
-            // a real engine fault must never hide in poison-frame noise — and logged EVERY time
-            // (never rate-limited; this should be ~always zero). Still not rethrown (A-4: a rethrow
-            // feeds match's 200-identical-error halt and crash-loops the node on replay). The
-            // deterministic drop keeps replicas consistent; the loud, distinct signal is how an
-            // operator learns the engine faulted. A controlled halt-vs-continue policy for engine
-            // faults is the separate C-6 work (Faz 2).
-            final long n = ++applyErrorCount;
-            System.err.println("INGRESS APPLY ERROR (engine threw, frame dropped): templateId="
-                    + headerDecoder.templateId() + " — " + e.getClass().getName()
-                    + ": " + e.getMessage() + "; applyErrors=" + n);
+        } finally {
+            applying = false;
         }
     }
 
     public long createOrderCount() {
         return createOrderCount;
+    }
+
+    private void rejectFrameBounds() {
+        final long n = ++decodeRejectCount;
+        if (shouldLogReject(n)) {
+            System.err.println("INGRESS DROP (frame bounds); decodeRejects=" + n);
+        }
     }
 
     /** Scrapeable (match_ingress_schema_rejects_total): frames dropped for a schemaId mismatch or
@@ -267,21 +318,9 @@ public class SbeDemuxer {
         return decodeRejectCount;
     }
 
-    /** Scrapeable (match_ingress_apply_errors_total): frames dropped because the engine/apply path
-     *  threw an UNEXPECTED exception (a bug, not poison input). Should be ~always zero; any increment
-     *  warrants investigation. Also bumped by {@link #recordDispatchEscape()}. */
+    /** Scrapeable apply faults. A nonzero count fences dispatch until process restart. */
     public long applyErrorCount() {
         return applyErrorCount;
-    }
-
-    /**
-     * Defensive hook for {@code AppClusteredService.onSessionMessage}: called only if an Exception
-     * somehow escapes {@link #dispatch} (it should not — dispatch drops decode failures internally).
-     * An escape is by definition unexpected, so it counts as an apply-error (not a decode drop) to
-     * stay scrapeable and distinct. Agent-thread only.
-     */
-    public void recordDispatchEscape() {
-        applyErrorCount++;
     }
 
     /** Scrapeable (match_preconfig_order_rejects_total): order commands dropped by the slice C
@@ -313,6 +352,7 @@ public class SbeDemuxer {
                     + ", userId=" + userId + "); preConfigOrderRejects=" + n);
         }
         if (preConfigOrderRejectHandler != null) {
+            applying = true;
             preConfigOrderRejectHandler.onPreConfigOrderReject(marketId, userId, omsOrderId, isBuy,
                     timestamp);
         }
@@ -357,9 +397,11 @@ public class SbeDemuxer {
         }
 
         if (engineConfigHandler != null) {
-            engineConfigHandler.onEngineConfig(com.match.application.engine.EngineConfigState.of(
+            final var config = com.match.application.engine.EngineConfigState.of(
                     configVersion, impl, bookCapacity, maxMatchesPerOrder, maxOrdersPerLevel,
-                    defs.toArray(new com.match.application.engine.EngineConfigState.MarketDef[0])));
+                    defs.toArray(new com.match.application.engine.EngineConfigState.MarketDef[0]));
+            applying = true;
+            engineConfigHandler.onEngineConfig(config);
         }
     }
 
@@ -401,6 +443,7 @@ public class SbeDemuxer {
         createCommand.setOmsOrderId(createOrderDecoder.omsOrderId());
 
         int marketId = createOrderDecoder.marketId();
+        applying = true;
         engine.acceptOrder(marketId, Engine.CMD_CREATE, createCommand, timestamp);
     }
 
@@ -413,6 +456,7 @@ public class SbeDemuxer {
         cancelCommand.setOrderId(cancelOrderDecoder.orderId());
 
         int marketId = cancelOrderDecoder.marketId();
+        applying = true;
         engine.acceptOrder(marketId, Engine.CMD_CANCEL, cancelCommand, timestamp);
     }
 
@@ -429,6 +473,7 @@ public class SbeDemuxer {
         updateCommand.setOrderType(toDomainOrderType(updateOrderDecoder.orderType()));
 
         int marketId = updateOrderDecoder.marketId();
+        applying = true;
         engine.acceptOrder(marketId, Engine.CMD_UPDATE, updateCommand, timestamp);
     }
 
