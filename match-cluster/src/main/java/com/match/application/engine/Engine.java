@@ -675,8 +675,8 @@ public class Engine {
         if (validity != OrderRejectReason.NONE) {
             if (logger.isWarn()) logger.warn("Update rejected: market={} orderId={} userId={} newPrice={} reason={}",
                 marketId, oldOrderId, userId, newPrice, OrderRejectReason.describe(validity));
-            publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.REJECTED,
-                0, 0, newPrice, isBuy, omsOrderId, validity);
+            publishAmendRejection(marketId, timestamp, oldOrderId, userId,
+                newPrice, isBuy, omsOrderId, validity);
             return;
         }
 
@@ -690,8 +690,8 @@ public class Engine {
         if (cmd.getOrderType() == OrderType.LIMIT_MAKER && wouldCrossOpposite(engine, isBuy, newPrice)) {
             if (logger.isWarn()) logger.warn("LIMIT_MAKER amend rejected (would cross): market={} orderId={} userId={} newPrice={}",
                 marketId, oldOrderId, userId, newPrice);
-            publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.REJECTED,
-                0, 0, newPrice, isBuy, omsOrderId, OrderRejectReason.WOULD_CROSS);
+            publishAmendRejection(marketId, timestamp, oldOrderId, userId,
+                newPrice, isBuy, omsOrderId, OrderRejectReason.WOULD_CROSS);
             return;
         }
 
@@ -699,8 +699,8 @@ public class Engine {
         boolean cancelled = engine.cancelOrder(oldOrderId, isBuy);
         if (!cancelled) {
             // Order not found on expected side — reject the update
-            publishOrderStatus(marketId, timestamp, oldOrderId, userId, OrderStatusType.REJECTED,
-                0, 0, newPrice, isBuy, omsOrderId, OrderRejectReason.ORDER_NOT_FOUND);
+            publishAmendRejection(marketId, timestamp, oldOrderId, userId,
+                newPrice, isBuy, omsOrderId, OrderRejectReason.ORDER_NOT_FOUND);
             return;
         }
 
@@ -796,6 +796,25 @@ public class Engine {
             marketId, timestamp, orderId, userId,
             orderStatus, remainingQty, filledQty, orderPrice, isBuy, omsOrderId, rejectReason,
             currentLogPosition
+        );
+    }
+
+    /**
+     * A rejected update is a command outcome, not proof that the referenced order closed.
+     * Validation/post-only rejection leaves the old order live. ORDER_NOT_FOUND can also mean
+     * the command named the wrong side; even when the order is gone, this command did not close
+     * it. Preserve the OMS rejection wire response but never manufacture a settlement terminal.
+     * Failures after a successful cancel use publishOrderStatus for the new leg instead.
+     */
+    private void publishAmendRejection(int marketId, long timestamp, long orderId, long userId,
+            long price, boolean isBuy, long omsOrderId, int rejectReason) {
+        if (eventPublisher == null) {
+            return;
+        }
+        eventPublisher.publishOrderStatusUpdate(
+            marketId, timestamp, orderId, userId,
+            OrderStatusType.REJECTED, 0, 0, price, isBuy, omsOrderId, rejectReason,
+            currentLogPosition, true
         );
     }
 
