@@ -396,9 +396,10 @@ public class MatchEventPublisher implements MatchEventSink {
     }
 
     /**
-     * @param suppressJournalTerminal true ONLY for the old-leg CANCELLED of an accepted
-     *        cancel-replace: it shares the live replacement's omsOrderId (the AE money key), so
-     *        journaling it would feed a TerminalRelease that strips the still-open order's hold.
+     * @param suppressJournalTerminal true for a pre-cancel amend rejection or the old-leg
+     *        CANCELLED of an accepted cancel-replace. Neither closes the OMS order (the AE money
+     *        key), so journaling it would prematurely release the order's hold. Rejection of the
+     *        replacement after cancellation is a real terminal and must not be suppressed.
      *        The wire status itself is unchanged — the OMS's replace leg-routing depends on it.
      */
     public boolean publishOrderStatusUpdate(

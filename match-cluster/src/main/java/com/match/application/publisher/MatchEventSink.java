@@ -59,11 +59,12 @@ public interface MatchEventSink {
             long egressSeq);
 
     /**
-     * Variant with journal-terminal suppression. {@code suppressJournalTerminal} is set ONLY for
-     * the old-leg CANCELLED of an accepted cancel-replace: it shares the live replacement's
-     * omsOrderId (the AE money key), so a journaled terminal would feed the AE a TerminalRelease
-     * that strips the still-open order's hold. Sinks without a settlement journal can ignore the
-     * flag — this default delegates to the 12-arg form.
+     * Variant with journal-terminal suppression for an amend rejected before cancellation, or
+     * the old-leg CANCELLED of an accepted cancel-replace. Neither proves that the OMS order
+     * (the AE money key) is terminal; journaling these wire responses would prematurely release
+     * its hold. A replacement rejected after cancellation still journals its terminal normally.
+     * Sinks without a settlement journal can ignore the flag — this default delegates to the
+     * 12-arg form. Command outcomes require a separate durable recovery contract.
      */
     default boolean publishOrderStatusUpdate(
             int marketId,
