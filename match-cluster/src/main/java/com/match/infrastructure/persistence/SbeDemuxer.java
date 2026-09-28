@@ -182,6 +182,8 @@ public class SbeDemuxer {
         // disabled. The known fixed prefixes are identical throughout supported versions 9..10.
         final int block = headerDecoder.blockLength();
         final int minimum = switch (headerDecoder.templateId()) {
+            case com.match.infrastructure.generated.DurableOrderCommandDecoder.TEMPLATE_ID ->
+                    com.match.infrastructure.generated.DurableOrderCommandDecoder.BLOCK_LENGTH;
             case CreateOrderDecoder.TEMPLATE_ID -> CreateOrderDecoder.BLOCK_LENGTH;
             case CancelOrderDecoder.TEMPLATE_ID -> CancelOrderDecoder.BLOCK_LENGTH;
             case UpdateOrderDecoder.TEMPLATE_ID -> UpdateOrderDecoder.BLOCK_LENGTH;
@@ -220,6 +222,16 @@ public class SbeDemuxer {
         // No allocations are introduced on the normal dispatch path.
         try {
             switch (headerDecoder.templateId()) {
+                case com.match.infrastructure.generated.DurableOrderCommandDecoder.TEMPLATE_ID:
+                    if (version < 11) { rejectFrameBounds(); break; }
+                    var d = new com.match.infrastructure.generated.DurableOrderCommandDecoder()
+                        .wrapAndApplyHeader(frame,0,headerDecoder);
+                    var intent = new com.match.domain.commands.DurableOrderIntent(d.commandIdHigh(),d.commandIdLow(),
+                        d.userId(),d.omsOrderId(),d.oldOrderId(),d.price(),d.quantity(),d.budget(),d.marketId(),
+                        d.commandKind(),d.orderType(),d.orderSide());
+                    applying = true;
+                    engine.acceptDurable(intent,timestamp);
+                    break;
                 case CreateOrderDecoder.TEMPLATE_ID:
                     // Slice C fresh-cluster guard: no engines yet (config-mode cluster before its
                     // EngineConfig) -> loud deterministic REJECT, never a silent drop / NPE.

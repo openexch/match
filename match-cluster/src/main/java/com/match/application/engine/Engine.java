@@ -60,6 +60,75 @@ public class Engine {
     // P1.1 (match#30): orders rejected at admission because price*quantity does not
     // fit 64-bit fixed-point. Plain long: written and read on the service thread only;
     // surfaced on the EGRESS-DIAG line as overflowRej.
+    private final DurableCommandLedger commandLedger = new DurableCommandLedger();
+    private com.match.domain.commands.DurableOrderIntent applyingIntent;
+    private long outcomeOrder, expectedNewOrder;
+    private int outcomeStatus, outcomeReason;
+    private boolean outcomeOldCancelled;
+    public DurableCommandLedger commandLedger() { return commandLedger; }
+
+    public com.match.domain.commands.DurableCommandOutcome acceptDurable(
+            com.match.domain.commands.DurableOrderIntent c, long timestamp) {
+        eventPublisher.requireDurableCommandJournal(); // before ANY book mutation, including first command
+        var prior = commandLedger.get(c);
+        if (prior != null) {
+            var result = prior.intent().equals(c) ? prior : commandRejection(c, timestamp, 2);
+            eventPublisher.publishCommandOutcome(currentLogPosition, result);
+            return result;
+        }
+        if (commandLedger.size() >= DurableCommandLedger.MAX_ENTRIES) {
+            var result = commandRejection(c, timestamp, 3);
+            eventPublisher.publishCommandOutcome(currentLogPosition, result);
+            return result;
+        }
+        int reject = 0;
+        if (engines.get(c.marketId()) == null) reject = 6;
+        else if (c.kind() != CMD_CREATE) {
+            var owner = commandLedger.owner(c.oldOrderId());
+            if (owner == null || orderIdToOmsOrderId.get(c.oldOrderId()) == -1) reject = 4;
+            else if (owner.userId()!=c.userId() || owner.omsOrderId()!=c.omsOrderId()
+                    || owner.marketId()!=c.marketId() || (c.kind()==CMD_UPDATE && owner.side()!=c.side())) reject = 5;
+        }
+        com.match.domain.commands.DurableCommandOutcome result;
+        if (reject != 0) result = commandRejection(c, timestamp, reject);
+        else {
+            applyingIntent=c; expectedNewOrder=orderIdGenerator.get();
+            outcomeOrder=0; outcomeStatus=-1; outcomeReason=0; outcomeOldCancelled=false;
+            try {
+                var side = c.side()==0 ? OrderSide.BID : OrderSide.ASK;
+                var type = c.type()==0 ? OrderType.LIMIT : c.type()==1 ? OrderType.MARKET : OrderType.LIMIT_MAKER;
+                if (c.kind()==CMD_CREATE) {
+                    var cmd = new CreateOrderCommand(); cmd.setUserId(c.userId()); cmd.setOmsOrderId(c.omsOrderId());
+                    cmd.setPrice(c.price()); cmd.setQuantity(c.quantity()); cmd.setTotalPrice(c.budget());
+                    cmd.setOrderSide(side); cmd.setOrderType(type); acceptOrder(c.marketId(),CMD_CREATE,cmd,timestamp);
+                } else if (c.kind()==CMD_CANCEL) {
+                    var cmd = new CancelOrderCommand(); cmd.setUserId(c.userId()); cmd.setOrderId(c.oldOrderId());
+                    acceptOrder(c.marketId(),CMD_CANCEL,cmd,timestamp);
+                } else {
+                    var cmd = new UpdateOrderCommand(); cmd.setUserId(c.userId()); cmd.setOrderId(c.oldOrderId());
+                    cmd.setPrice(c.price()); cmd.setQuantity(c.quantity()); cmd.setOrderSide(side); cmd.setOrderType(type);
+                    acceptOrder(c.marketId(),CMD_UPDATE,cmd,timestamp);
+                }
+                if (outcomeStatus<0) throw new IllegalStateException("Command applied without an outcome");
+                result = new com.match.domain.commands.DurableCommandOutcome(c,currentLogPosition,timestamp,
+                    outcomeOrder,outcomeStatus,outcomeReason,outcomeOldCancelled,outcomeStatus==4?1:0);
+            } finally { applyingIntent=null; }
+        }
+        // Publisher failure is an application failure: service halts, replay restores the whole command.
+        eventPublisher.publishCommandOutcome(currentLogPosition,result);
+        commandLedger.record(result);
+        return result;
+    }
+    private com.match.domain.commands.DurableCommandOutcome commandRejection(
+            com.match.domain.commands.DurableOrderIntent c,long timestamp,int result) {
+        return new com.match.domain.commands.DurableCommandOutcome(c,currentLogPosition,timestamp,0,-1,0,false,result);
+    }
+    private void captureCommandStatus(long order,int status,int reason) {
+        if (applyingIntent!=null && (order==expectedNewOrder || order==applyingIntent.oldOrderId())) {
+            outcomeOrder=order; outcomeStatus=status; outcomeReason=reason;
+        }
+    }
+
     private long overflowRejectCount;
 
     // match#91: orders rejected at admission for a non-positive quantity (LIMIT / LIMIT_MAKER /
@@ -789,6 +858,7 @@ public class Engine {
     private void publishOrderStatus(int marketId, long timestamp, long orderId, long userId,
             int orderStatus, long remainingQty, long filledQty, long orderPrice, boolean isBuy, long omsOrderId,
             int rejectReason) {
+        captureCommandStatus(orderId, orderStatus, rejectReason);
         if (eventPublisher == null) {
             return;
         }
@@ -808,6 +878,7 @@ public class Engine {
      */
     private void publishAmendRejection(int marketId, long timestamp, long orderId, long userId,
             long price, boolean isBuy, long omsOrderId, int rejectReason) {
+        captureCommandStatus(orderId, OrderStatusType.REJECTED, rejectReason);
         if (eventPublisher == null) {
             return;
         }
@@ -826,6 +897,7 @@ public class Engine {
      */
     private void publishReplaceCancelStatus(int marketId, long timestamp, long orderId, long userId,
             boolean isBuy, long omsOrderId) {
+        if (applyingIntent != null && orderId == applyingIntent.oldOrderId()) outcomeOldCancelled = true;
         if (eventPublisher == null) {
             return;
         }

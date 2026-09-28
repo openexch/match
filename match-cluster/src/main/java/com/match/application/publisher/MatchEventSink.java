@@ -12,6 +12,13 @@ package com.match.application.publisher;
  * calls in its hot path — no lifecycle or snapshot concerns belong here.</p>
  */
 public interface MatchEventSink {
+    default void requireDurableCommandJournal() {
+        throw new IllegalStateException("Durable command journal unavailable");
+    }
+    default void publishCommandOutcome(long journalPosition, com.match.domain.commands.DurableCommandOutcome outcome) {
+        throw new IllegalStateException("Durable command journal unavailable");
+    }
+
 
     /**
      * Publish a single trade execution. Called once per match, in match order.

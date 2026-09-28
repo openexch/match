@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.match</groupId>
         <artifactId>match-engine</artifactId>
-        <version>1.0-runtime.20260928.r02f.g7a147ca</version>
+        <version>1.0-runtime.20260928.r02g.g23090c6</version>
     </parent>
 
     <artifactId>match-cluster</artifactId>

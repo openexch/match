@@ -2,7 +2,7 @@
 <sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
                    package="com.match.infrastructure.generated"
                    id="1"
-                   version="10"
+                   version="11"
                    semanticVersion="5.2"
                    description="Match Order Schema - Optimized for Ultra-Low Latency"
 >
@@ -62,6 +62,45 @@
              existed on this wire, so char[16] is the convention being established here. -->
         <type name="Symbol" primitiveType="char" length="16" characterEncoding="ASCII"/>
     </types>
+
+
+    <sbe:message name="DurableOrderCommand" id="9" sinceVersion="11">
+        <field name="commandIdHigh" id="1" type="int64"/>
+        <field name="commandIdLow" id="2" type="int64"/>
+        <field name="userId" id="3" type="int64"/>
+        <field name="omsOrderId" id="4" type="int64"/>
+        <field name="oldOrderId" id="5" type="int64"/>
+        <field name="price" id="6" type="int64"/>
+        <field name="quantity" id="7" type="int64"/>
+        <field name="budget" id="8" type="int64"/>
+        <field name="marketId" id="9" type="int32"/>
+        <field name="commandKind" id="10" type="uint8"/>
+        <field name="orderType" id="11" type="uint8"/>
+        <field name="orderSide" id="12" type="uint8"/>
+    </sbe:message>
+
+    <sbe:message name="JournalCommandOutcome" id="28" sinceVersion="11">
+        <field name="egressSeq" id="1" type="int64"/>
+        <field name="commandIdHigh" id="2" type="int64"/>
+        <field name="commandIdLow" id="3" type="int64"/>
+        <field name="userId" id="4" type="int64"/>
+        <field name="omsOrderId" id="5" type="int64"/>
+        <field name="oldOrderId" id="6" type="int64"/>
+        <field name="price" id="7" type="int64"/>
+        <field name="quantity" id="8" type="int64"/>
+        <field name="budget" id="9" type="int64"/>
+        <field name="marketId" id="10" type="int32"/>
+        <field name="commandKind" id="11" type="uint8"/>
+        <field name="orderType" id="12" type="uint8"/>
+        <field name="orderSide" id="13" type="uint8"/>
+        <field name="appliedPosition" id="14" type="int64"/>
+        <field name="timestamp" id="15" type="int64"/>
+        <field name="orderId" id="16" type="int64"/>
+        <field name="status" id="17" type="int32"/>
+        <field name="reason" id="18" type="int32"/>
+        <field name="oldCancelled" id="19" type="uint8"/>
+        <field name="result" id="20" type="int32"/>
+    </sbe:message>
 
     <!-- Optimized: All numeric fields, no string parsing -->
     <!-- v8: totalPrice removed (was field id 4). price and totalPrice were never

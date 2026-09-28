@@ -3,21 +3,17 @@ package com.match.infrastructure.generated;
 
 import org.agrona.DirectBuffer;
 
-
-/**
- * Create order event
- */
 @SuppressWarnings("all")
-public final class CreateOrderDecoder
+public final class DurableOrderCommandDecoder
 {
-    public static final int BLOCK_LENGTH = 38;
-    public static final int TEMPLATE_ID = 1;
+    public static final int BLOCK_LENGTH = 71;
+    public static final int TEMPLATE_ID = 9;
     public static final int SCHEMA_ID = 1;
     public static final int SCHEMA_VERSION = 11;
     public static final String SEMANTIC_VERSION = "5.2";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
-    private final CreateOrderDecoder parentMessage = this;
+    private final DurableOrderCommandDecoder parentMessage = this;
     private DirectBuffer buffer;
     private int offset;
     private int limit;
@@ -59,7 +55,7 @@ public final class CreateOrderDecoder
         return offset;
     }
 
-    public CreateOrderDecoder wrap(
+    public DurableOrderCommandDecoder wrap(
         final DirectBuffer buffer,
         final int offset,
         final int actingBlockLength,
@@ -77,7 +73,7 @@ public final class CreateOrderDecoder
         return this;
     }
 
-    public CreateOrderDecoder wrapAndApplyHeader(
+    public DurableOrderCommandDecoder wrapAndApplyHeader(
         final DirectBuffer buffer,
         final int offset,
         final MessageHeaderDecoder headerDecoder)
@@ -97,7 +93,7 @@ public final class CreateOrderDecoder
             headerDecoder.version());
     }
 
-    public CreateOrderDecoder sbeRewind()
+    public DurableOrderCommandDecoder sbeRewind()
     {
         return wrap(buffer, offset, actingBlockLength, actingVersion);
     }
@@ -132,9 +128,111 @@ public final class CreateOrderDecoder
         this.limit = limit;
     }
 
-    public static int userIdId()
+    public static int commandIdHighId()
     {
         return 1;
+    }
+
+    public static int commandIdHighSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int commandIdHighEncodingOffset()
+    {
+        return 0;
+    }
+
+    public static int commandIdHighEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String commandIdHighMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long commandIdHighNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long commandIdHighMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long commandIdHighMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public long commandIdHigh()
+    {
+        return buffer.getLong(offset + 0, BYTE_ORDER);
+    }
+
+
+    public static int commandIdLowId()
+    {
+        return 2;
+    }
+
+    public static int commandIdLowSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int commandIdLowEncodingOffset()
+    {
+        return 8;
+    }
+
+    public static int commandIdLowEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String commandIdLowMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long commandIdLowNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long commandIdLowMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long commandIdLowMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public long commandIdLow()
+    {
+        return buffer.getLong(offset + 8, BYTE_ORDER);
+    }
+
+
+    public static int userIdId()
+    {
+        return 3;
     }
 
     public static int userIdSinceVersion()
@@ -144,7 +242,7 @@ public final class CreateOrderDecoder
 
     public static int userIdEncodingOffset()
     {
-        return 0;
+        return 16;
     }
 
     public static int userIdEncodingLength()
@@ -179,248 +277,13 @@ public final class CreateOrderDecoder
 
     public long userId()
     {
-        return buffer.getLong(offset + 0, BYTE_ORDER);
-    }
-
-
-    public static int priceId()
-    {
-        return 2;
-    }
-
-    public static int priceSinceVersion()
-    {
-        return 0;
-    }
-
-    public static int priceEncodingOffset()
-    {
-        return 8;
-    }
-
-    public static int priceEncodingLength()
-    {
-        return 8;
-    }
-
-    public static String priceMetaAttribute(final MetaAttribute metaAttribute)
-    {
-        if (MetaAttribute.PRESENCE == metaAttribute)
-        {
-            return "required";
-        }
-
-        return "";
-    }
-
-    public static long priceNullValue()
-    {
-        return -9223372036854775808L;
-    }
-
-    public static long priceMinValue()
-    {
-        return -9223372036854775807L;
-    }
-
-    public static long priceMaxValue()
-    {
-        return 9223372036854775807L;
-    }
-
-    public long price()
-    {
-        return buffer.getLong(offset + 8, BYTE_ORDER);
-    }
-
-
-    public static int quantityId()
-    {
-        return 3;
-    }
-
-    public static int quantitySinceVersion()
-    {
-        return 0;
-    }
-
-    public static int quantityEncodingOffset()
-    {
-        return 16;
-    }
-
-    public static int quantityEncodingLength()
-    {
-        return 8;
-    }
-
-    public static String quantityMetaAttribute(final MetaAttribute metaAttribute)
-    {
-        if (MetaAttribute.PRESENCE == metaAttribute)
-        {
-            return "required";
-        }
-
-        return "";
-    }
-
-    public static long quantityNullValue()
-    {
-        return -9223372036854775808L;
-    }
-
-    public static long quantityMinValue()
-    {
-        return -9223372036854775807L;
-    }
-
-    public static long quantityMaxValue()
-    {
-        return 9223372036854775807L;
-    }
-
-    public long quantity()
-    {
         return buffer.getLong(offset + 16, BYTE_ORDER);
-    }
-
-
-    public static int marketIdId()
-    {
-        return 5;
-    }
-
-    public static int marketIdSinceVersion()
-    {
-        return 0;
-    }
-
-    public static int marketIdEncodingOffset()
-    {
-        return 24;
-    }
-
-    public static int marketIdEncodingLength()
-    {
-        return 4;
-    }
-
-    public static String marketIdMetaAttribute(final MetaAttribute metaAttribute)
-    {
-        if (MetaAttribute.PRESENCE == metaAttribute)
-        {
-            return "required";
-        }
-
-        return "";
-    }
-
-    public static int marketIdNullValue()
-    {
-        return -2147483648;
-    }
-
-    public static int marketIdMinValue()
-    {
-        return -2147483647;
-    }
-
-    public static int marketIdMaxValue()
-    {
-        return 2147483647;
-    }
-
-    public int marketId()
-    {
-        return buffer.getInt(offset + 24, BYTE_ORDER);
-    }
-
-
-    public static int orderTypeId()
-    {
-        return 6;
-    }
-
-    public static int orderTypeSinceVersion()
-    {
-        return 0;
-    }
-
-    public static int orderTypeEncodingOffset()
-    {
-        return 28;
-    }
-
-    public static int orderTypeEncodingLength()
-    {
-        return 1;
-    }
-
-    public static String orderTypeMetaAttribute(final MetaAttribute metaAttribute)
-    {
-        if (MetaAttribute.PRESENCE == metaAttribute)
-        {
-            return "required";
-        }
-
-        return "";
-    }
-
-    public short orderTypeRaw()
-    {
-        return ((short)(buffer.getByte(offset + 28) & 0xFF));
-    }
-
-    public OrderType orderType()
-    {
-        return OrderType.get(((short)(buffer.getByte(offset + 28) & 0xFF)));
-    }
-
-
-    public static int orderSideId()
-    {
-        return 7;
-    }
-
-    public static int orderSideSinceVersion()
-    {
-        return 0;
-    }
-
-    public static int orderSideEncodingOffset()
-    {
-        return 29;
-    }
-
-    public static int orderSideEncodingLength()
-    {
-        return 1;
-    }
-
-    public static String orderSideMetaAttribute(final MetaAttribute metaAttribute)
-    {
-        if (MetaAttribute.PRESENCE == metaAttribute)
-        {
-            return "required";
-        }
-
-        return "";
-    }
-
-    public short orderSideRaw()
-    {
-        return ((short)(buffer.getByte(offset + 29) & 0xFF));
-    }
-
-    public OrderSide orderSide()
-    {
-        return OrderSide.get(((short)(buffer.getByte(offset + 29) & 0xFF)));
     }
 
 
     public static int omsOrderIdId()
     {
-        return 8;
+        return 4;
     }
 
     public static int omsOrderIdSinceVersion()
@@ -430,7 +293,7 @@ public final class CreateOrderDecoder
 
     public static int omsOrderIdEncodingOffset()
     {
-        return 30;
+        return 24;
     }
 
     public static int omsOrderIdEncodingLength()
@@ -465,7 +328,415 @@ public final class CreateOrderDecoder
 
     public long omsOrderId()
     {
-        return buffer.getLong(offset + 30, BYTE_ORDER);
+        return buffer.getLong(offset + 24, BYTE_ORDER);
+    }
+
+
+    public static int oldOrderIdId()
+    {
+        return 5;
+    }
+
+    public static int oldOrderIdSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int oldOrderIdEncodingOffset()
+    {
+        return 32;
+    }
+
+    public static int oldOrderIdEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String oldOrderIdMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long oldOrderIdNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long oldOrderIdMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long oldOrderIdMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public long oldOrderId()
+    {
+        return buffer.getLong(offset + 32, BYTE_ORDER);
+    }
+
+
+    public static int priceId()
+    {
+        return 6;
+    }
+
+    public static int priceSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int priceEncodingOffset()
+    {
+        return 40;
+    }
+
+    public static int priceEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String priceMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long priceNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long priceMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long priceMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public long price()
+    {
+        return buffer.getLong(offset + 40, BYTE_ORDER);
+    }
+
+
+    public static int quantityId()
+    {
+        return 7;
+    }
+
+    public static int quantitySinceVersion()
+    {
+        return 0;
+    }
+
+    public static int quantityEncodingOffset()
+    {
+        return 48;
+    }
+
+    public static int quantityEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String quantityMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long quantityNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long quantityMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long quantityMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public long quantity()
+    {
+        return buffer.getLong(offset + 48, BYTE_ORDER);
+    }
+
+
+    public static int budgetId()
+    {
+        return 8;
+    }
+
+    public static int budgetSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int budgetEncodingOffset()
+    {
+        return 56;
+    }
+
+    public static int budgetEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String budgetMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long budgetNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long budgetMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long budgetMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public long budget()
+    {
+        return buffer.getLong(offset + 56, BYTE_ORDER);
+    }
+
+
+    public static int marketIdId()
+    {
+        return 9;
+    }
+
+    public static int marketIdSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int marketIdEncodingOffset()
+    {
+        return 64;
+    }
+
+    public static int marketIdEncodingLength()
+    {
+        return 4;
+    }
+
+    public static String marketIdMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static int marketIdNullValue()
+    {
+        return -2147483648;
+    }
+
+    public static int marketIdMinValue()
+    {
+        return -2147483647;
+    }
+
+    public static int marketIdMaxValue()
+    {
+        return 2147483647;
+    }
+
+    public int marketId()
+    {
+        return buffer.getInt(offset + 64, BYTE_ORDER);
+    }
+
+
+    public static int commandKindId()
+    {
+        return 10;
+    }
+
+    public static int commandKindSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int commandKindEncodingOffset()
+    {
+        return 68;
+    }
+
+    public static int commandKindEncodingLength()
+    {
+        return 1;
+    }
+
+    public static String commandKindMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static short commandKindNullValue()
+    {
+        return (short)255;
+    }
+
+    public static short commandKindMinValue()
+    {
+        return (short)0;
+    }
+
+    public static short commandKindMaxValue()
+    {
+        return (short)254;
+    }
+
+    public short commandKind()
+    {
+        return ((short)(buffer.getByte(offset + 68) & 0xFF));
+    }
+
+
+    public static int orderTypeId()
+    {
+        return 11;
+    }
+
+    public static int orderTypeSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int orderTypeEncodingOffset()
+    {
+        return 69;
+    }
+
+    public static int orderTypeEncodingLength()
+    {
+        return 1;
+    }
+
+    public static String orderTypeMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static short orderTypeNullValue()
+    {
+        return (short)255;
+    }
+
+    public static short orderTypeMinValue()
+    {
+        return (short)0;
+    }
+
+    public static short orderTypeMaxValue()
+    {
+        return (short)254;
+    }
+
+    public short orderType()
+    {
+        return ((short)(buffer.getByte(offset + 69) & 0xFF));
+    }
+
+
+    public static int orderSideId()
+    {
+        return 12;
+    }
+
+    public static int orderSideSinceVersion()
+    {
+        return 0;
+    }
+
+    public static int orderSideEncodingOffset()
+    {
+        return 70;
+    }
+
+    public static int orderSideEncodingLength()
+    {
+        return 1;
+    }
+
+    public static String orderSideMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static short orderSideNullValue()
+    {
+        return (short)255;
+    }
+
+    public static short orderSideMinValue()
+    {
+        return (short)0;
+    }
+
+    public static short orderSideMaxValue()
+    {
+        return (short)254;
+    }
+
+    public short orderSide()
+    {
+        return ((short)(buffer.getByte(offset + 70) & 0xFF));
     }
 
 
@@ -476,7 +747,7 @@ public final class CreateOrderDecoder
             return "";
         }
 
-        final CreateOrderDecoder decoder = new CreateOrderDecoder();
+        final DurableOrderCommandDecoder decoder = new DurableOrderCommandDecoder();
         decoder.wrap(buffer, offset, actingBlockLength, actingVersion);
 
         return decoder.appendTo(new StringBuilder()).toString();
@@ -491,7 +762,7 @@ public final class CreateOrderDecoder
 
         final int originalLimit = limit();
         limit(offset + actingBlockLength);
-        builder.append("[CreateOrder](sbeTemplateId=");
+        builder.append("[DurableOrderCommand](sbeTemplateId=");
         builder.append(TEMPLATE_ID);
         builder.append("|sbeSchemaId=");
         builder.append(SCHEMA_ID);
@@ -510,8 +781,20 @@ public final class CreateOrderDecoder
         }
         builder.append(BLOCK_LENGTH);
         builder.append("):");
+        builder.append("commandIdHigh=");
+        builder.append(this.commandIdHigh());
+        builder.append('|');
+        builder.append("commandIdLow=");
+        builder.append(this.commandIdLow());
+        builder.append('|');
         builder.append("userId=");
         builder.append(this.userId());
+        builder.append('|');
+        builder.append("omsOrderId=");
+        builder.append(this.omsOrderId());
+        builder.append('|');
+        builder.append("oldOrderId=");
+        builder.append(this.oldOrderId());
         builder.append('|');
         builder.append("price=");
         builder.append(this.price());
@@ -519,24 +802,27 @@ public final class CreateOrderDecoder
         builder.append("quantity=");
         builder.append(this.quantity());
         builder.append('|');
+        builder.append("budget=");
+        builder.append(this.budget());
+        builder.append('|');
         builder.append("marketId=");
         builder.append(this.marketId());
+        builder.append('|');
+        builder.append("commandKind=");
+        builder.append(this.commandKind());
         builder.append('|');
         builder.append("orderType=");
         builder.append(this.orderType());
         builder.append('|');
         builder.append("orderSide=");
         builder.append(this.orderSide());
-        builder.append('|');
-        builder.append("omsOrderId=");
-        builder.append(this.omsOrderId());
 
         limit(originalLimit);
 
         return builder;
     }
     
-    public CreateOrderDecoder sbeSkip()
+    public DurableOrderCommandDecoder sbeSkip()
     {
         sbeRewind();
 

@@ -54,6 +54,9 @@ import java.util.Arrays;
  */
 public final class SnapshotCodec {
 
+    // Negative magic cannot be a valid historical order-id generator. Whole-frame length + CRC
+    // prevents a truncated ledger suffix being mistaken for a valid legacy snapshot.
+    private static final long DURABLE_MAGIC = -0x434d444c45444745L;
     private SnapshotCodec() {
     }
 
@@ -214,6 +217,13 @@ public final class SnapshotCodec {
             }
         }
 
+        if (engine.commandLedger().size() > 0) {
+            pos = engine.commandLedger().write(dst, pos);
+            byte[] payload = new byte[pos]; dst.getBytes(0,payload);
+            var crc = new java.util.zip.CRC32C(); crc.update(payload,0,payload.length);
+            dst.putLong(0,DURABLE_MAGIC); dst.putInt(8,1); dst.putInt(12,pos);
+            dst.putInt(16,(int)crc.getValue()); dst.putBytes(20,payload); pos+=20;
+        }
         return pos;
     }
 
@@ -239,6 +249,18 @@ public final class SnapshotCodec {
      * @param engine engine to restore into (its books are cleared and repopulated)
      */
     public static Decoded deserialize(DirectBuffer src, int offset, int length, Engine engine) {
+        if (offset<0 || length<20 || offset>src.capacity() || length>src.capacity()-offset)
+            throw new IllegalStateException("Invalid snapshot frame");
+        final int originalOffset = offset;
+        boolean durableEnvelope = src.getLong(offset)==DURABLE_MAGIC;
+        if (durableEnvelope) {
+            if (src.getInt(offset+8)!=1 || src.getInt(offset+12)!=length-20)
+                throw new IllegalStateException("Unsupported/truncated durable snapshot");
+            byte[] payload = new byte[length-20]; src.getBytes(offset+20,payload);
+            var crc = new java.util.zip.CRC32C(); crc.update(payload,0,payload.length);
+            if ((int)crc.getValue()!=src.getInt(offset+16)) throw new IllegalStateException("Corrupt durable snapshot");
+            offset+=20; length-=20;
+        }
         int pos = offset;
         final int end = offset + length;
 
@@ -423,8 +445,14 @@ public final class SnapshotCodec {
                     + " snapshot?");
         }
 
+        if (pos < end && src.getByte(pos) == 2) pos = engine.commandLedger().read(src,pos,end);
+        else {
+            if (durableEnvelope) throw new IllegalStateException("Durable snapshot ledger missing");
+            engine.commandLedger().clear();
+        }
+        if (durableEnvelope && pos!=end) throw new IllegalStateException("Durable snapshot has trailing bytes");
         return new Decoded(orderIdGen, tradeIdGen, timerCorrelationId, timerPresent,
-                rejected, pos - offset, engineConfigPresent);
+                rejected, pos - originalOffset, engineConfigPresent);
     }
 
     /** Slice C: read the fixed 16-byte NUL-padded ASCII symbol written by {@link #putPaddedSymbol}. */
