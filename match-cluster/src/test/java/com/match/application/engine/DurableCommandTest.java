@@ -126,11 +126,12 @@ public class DurableCommandTest {
         assertEquals(4,engine.acceptDurable(intent(1,1,777,0,0),1000).result());
         assertEquals(0,journal.appendedTerminals());
     }
-    @Test public void journalRequiredBeforeFirstMutation() {
+    @Test public void journalTurnedOffLaterStillAppliesAndCountsDarkOutcome() {
         publisher.setSettlementJournal(null);
         long before=engine.getOrderIdGenerator();
-        assertThrows(IllegalStateException.class,()->engine.acceptDurable(intent(1,0,0,PRICE,0),1000));
-        assertEquals(before,engine.getOrderIdGenerator()); assertTrue(engine.getEngine(1).isBidEmpty());
+        engine.acceptDurable(intent(1,0,0,PRICE,0),1000);
+        assertEquals(before+1,engine.getOrderIdGenerator()); assertFalse(engine.getEngine(1).isBidEmpty());
+        assertEquals(1,publisher.getDarkCommandOutcomeCount()); assertTrue(entries().isEmpty());
     }
     @Test public void truncatedOrCorruptSnapshotCannotDiscardDedupe() {
         send(1,0,0,PRICE); var b=new ExpandableArrayBuffer(); int n=SnapshotCodec.serialize(engine,0,0,b);
@@ -165,4 +166,43 @@ public class DurableCommandTest {
         assertEquals(DurableCommandLedger.MAX_ENTRIES,engine.commandLedger().size());
     }
 
+
+    /** Journal presence is node env, not replicated state: it must not change what the log applies. */
+    @Test public void journalDarkNodeAppliesAndDedupesWithoutHalting() {
+        publisher.shutdown();
+        publisher = new MatchEventPublisher(); // SETTLEMENT_JOURNAL_ENABLED unset on this node
+        publisher.initMarket(1, new MarketEventHandler() {
+            public int getMarketId() { return 1; }
+            public void onEvent(PublishEvent e, long s, boolean end) {}
+        });
+        publisher.start(); engine.setEventPublisher(publisher);
+        long before=engine.getOrderIdGenerator();
+        send(1,0,0,PRICE); send(1,0,0,PRICE);
+        assertEquals(before+1, engine.getOrderIdGenerator());
+        assertEquals(PRICE, engine.getEngine(1).getBestBid());
+        assertEquals(1, engine.commandLedger().size());
+        assertEquals(2, publisher.getDarkCommandOutcomeCount());
+    }
+
+    @Test public void journalDarkAndJournaledReplicasReachTheSameState() {
+        var dark = new Engine("direct");
+        var darkPublisher = new MatchEventPublisher();
+        darkPublisher.initMarket(1, new MarketEventHandler() {
+            public int getMarketId() { return 1; }
+            public void onEvent(PublishEvent e, long s, boolean end) {}
+        });
+        darkPublisher.start(); dark.setEventPublisher(darkPublisher);
+        try {
+            var c = intent(1,0,0,PRICE,0);
+            engine.setCurrentLogPosition(128); dark.setCurrentLogPosition(128);
+            assertEquals(engine.acceptDurable(c,1000), dark.acceptDurable(c,1000));
+            engine.setCurrentLogPosition(256); dark.setCurrentLogPosition(256);
+            assertEquals(engine.acceptDurable(c,2000), dark.acceptDurable(c,2000));
+            var a = new ExpandableArrayBuffer(); int n = SnapshotCodec.serialize(engine,0,0,a);
+            var b = new ExpandableArrayBuffer(); int m = SnapshotCodec.serialize(dark,0,0,b);
+            assertEquals(n, m);
+            byte[] x = new byte[n], y = new byte[m]; a.getBytes(0,x); b.getBytes(0,y);
+            assertArrayEquals(x, y);
+        } finally { darkPublisher.shutdown(); dark.close(); }
+    }
 }

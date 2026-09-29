@@ -12,11 +12,11 @@ package com.match.application.publisher;
  * calls in its hot path — no lifecycle or snapshot concerns belong here.</p>
  */
 public interface MatchEventSink {
-    default void requireDurableCommandJournal() {
-        throw new IllegalStateException("Durable command journal unavailable");
-    }
+    /**
+     * Journal-only side output of a durable command. Whether a node journals is node
+     * configuration, never replicated state, so the command is applied either way.
+     */
     default void publishCommandOutcome(long journalPosition, com.match.domain.commands.DurableCommandOutcome outcome) {
-        throw new IllegalStateException("Durable command journal unavailable");
     }
 
 
