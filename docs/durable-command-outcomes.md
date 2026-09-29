@@ -12,9 +12,14 @@ codes: 0 applied, 1 engine rejected, 2 identity conflict, 3 ledger capacity,
 4 unknown/non-durable/closed leg, 5 owner/market/side mismatch, 6 unknown market.
 Unknown leg is not proof of cancellation and emits no financial terminal.
 
-The journal must be configured before the first durable command. Its append is
-synchronous with application. Unexpected append/apply failure uses the service's
-existing immediate halt fence; no dirty state may be snapshotted. Outcomes are
+Whether a node journals (`SETTLEMENT_JOURNAL_ENABLED`) is node configuration, not
+replicated state, so it never changes what a command does: a journal-dark node applies
+and deduplicates exactly like a journaled one and only counts the outcome it could not
+write (`match_dark_command_outcomes_total`). The OMS resolves a command only from a
+projected outcome, so a dark journal leaves the command unresolved rather than halting
+the cluster. Where the journal is on, its append is synchronous with application, and an
+append/apply failure uses the service's existing immediate halt fence; no dirty state may
+be snapshotted. Outcomes are
 independent from settlement trade/terminal schema 3/v1, which remains unchanged.
 
 Ledger snapshots carry a versioned envelope with total length and CRC32C. A

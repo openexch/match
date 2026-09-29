@@ -222,6 +222,11 @@ public class AppClusteredService implements ClusteredService {
     // if it climbs, frames are vanishing between the queue and the wire (gateway chain breaks are
     // then EXPECTED and correct — this counter says why).
     private final AtomicLong egressOfferGiveUps = new AtomicLong(0);
+    // Frames larger than a session publication's maxMessageLength (its term length / 8). Aeron
+    // throws from offer for these; the frame is lost for that session, like a give-up.
+    private final AtomicLong egressOversizeDrops = new AtomicLong(0);
+
+    long egressOversizeDropTotal() { return egressOversizeDrops.get(); }
 
     // match#140: per-session egress delivery observability. egressOfferGiveUps above only sees the
     // BACKPRESSURE give-up; a session going dark via NOT_CONNECTED/CLOSED/MAX_POSITION_EXCEEDED hit a
@@ -423,7 +428,21 @@ public class AppClusteredService implements ClusteredService {
             for (ClientSession session : sessions) {
                 int retries = 0;
                 while (retries < 3) {
-                    long result = session.offer(broadcastBuffer, 0, msg.length);
+                    final long result;
+                    try {
+                        result = session.offer(broadcastBuffer, 0, msg.length);
+                    } catch (IllegalArgumentException oversize) {
+                        // Egress is leader-local output drained inside the apply callback. Letting
+                        // this reach the apply-failure fence halted the leader, and the next leader
+                        // held the same frame. Count the loss (OMS reconciles) and move on.
+                        long n = egressOversizeDrops.incrementAndGet();
+                        if (n == 1 || n % 1000 == 0) {
+                            System.err.println("CRITICAL: egress frame exceeds the session's max message length"
+                                + " (session=" + session.id() + ", len=" + msg.length + ", totalOversize=" + n
+                                + "): " + oversize.getMessage() + " — frame lost; raise the egress term length");
+                        }
+                        break;
+                    }
                     if (result > 0) {
                         // match#140: real delivery to this session — record its last-offer time.
                         egressSessionMetrics.recordDelivered(session.id(), System.currentTimeMillis());
@@ -701,6 +720,12 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_egress_disruptor_exceptions_total",
                             "OMS-lane Disruptor handler exceptions swallowed (event lost pre-statusSeq); should be ~zero (C-6)",
                             eventPublisher::disruptorExceptionCount)
+                    .counter("match_egress_oversize_drops_total",
+                            "Egress frames larger than the session publication's max message length (term length / 8), lost for that session; should stay 0",
+                            egressOversizeDrops::get)
+                    .counter("match_dark_command_outcomes_total",
+                            "Durable command outcomes applied but not journaled because the settlement journal is off on this node; OMS cannot resolve them from this node",
+                            eventPublisher::getDarkCommandOutcomeCount)
                     .counter("match_overflow_rejects_total", "Orders rejected for fixed-point overflow", engine::getOverflowRejectCount)
                     .counter("match_invalid_qty_rejects_total", "Orders rejected for non-positive quantity", engine::getInvalidQuantityRejectCount)
                     .counter("match_trades_total", "Trades executed (trade id high-water mark)", eventPublisher::getTradeIdGenerator)

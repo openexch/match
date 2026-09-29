@@ -69,7 +69,6 @@ public class Engine {
 
     public com.match.domain.commands.DurableCommandOutcome acceptDurable(
             com.match.domain.commands.DurableOrderIntent c, long timestamp) {
-        eventPublisher.requireDurableCommandJournal(); // before ANY book mutation, including first command
         var prior = commandLedger.get(c);
         if (prior != null) {
             var result = prior.intent().equals(c) ? prior : commandRejection(c, timestamp, 2);

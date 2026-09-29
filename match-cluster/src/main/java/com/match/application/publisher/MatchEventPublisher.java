@@ -105,13 +105,23 @@ public class MatchEventPublisher implements MatchEventSink {
      * Arm the settlement journal. Called once at node bootstrap (before the cluster starts
      * processing) when SETTLEMENT_JOURNAL_ENABLED; never called on the hot path.
      */
-    @Override public void requireDurableCommandJournal() {
-        if (settlementJournal == null) throw new IllegalStateException("Durable commands require settlement journal");
-    }
+    // Durable command outcomes this node could not journal because journaling is off here.
+    // The command itself was applied like on every other replica; only this node's output is dark.
+    private final AtomicLong darkCommandOutcomeCount = new AtomicLong();
+
     @Override public void publishCommandOutcome(long position, com.match.domain.commands.DurableCommandOutcome outcome) {
-        requireDurableCommandJournal();
-        settlementJournal.appendCommandOutcome(position, outcome);
+        final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
+        if (journal == null) {
+            if (darkCommandOutcomeCount.getAndIncrement() == 0) {
+                logger.error("DURABLE COMMAND OUTCOME NOT JOURNALED: settlement journal is off on this node;"
+                        + " counted as match_dark_command_outcomes_total");
+            }
+            return;
+        }
+        journal.appendCommandOutcome(position, outcome);
     }
+
+    public long getDarkCommandOutcomeCount() { return darkCommandOutcomeCount.get(); }
 
     public void setSettlementJournal(final com.match.infrastructure.journal.SettlementJournal journal) {
         this.settlementJournal = journal;
