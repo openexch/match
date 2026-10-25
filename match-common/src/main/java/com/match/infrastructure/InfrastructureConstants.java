@@ -54,8 +54,15 @@ public final class InfrastructureConstants {
     // durability is never entangled with cluster replication/snapshotting.
     /** Aeron stream id the settlement journal is recorded/replayed on. */
     public static final int SETTLEMENT_JOURNAL_STREAM_ID = 4001;
-    /** Aeron IPC channel the settlement journal is published on (large term for durability headroom). */
-    public static final String SETTLEMENT_JOURNAL_CHANNEL = "aeron:ipc?term-length=64m";
+    /**
+     * Aeron IPC channel the settlement journal is published on. The term length comes from
+     * {@link TransportConfig#journalTermLength()}: every Archive replay of the recording maps a
+     * 3-term publication on the recording host, so the term sizes the ME node's /dev/shm cost
+     * per journal reader.
+     */
+    public static String settlementJournalChannel() {
+        return "aeron:ipc?term-length=" + TransportConfig.journalTermLength();
+    }
     /**
      * Port offset for the settlement journal's archive control channel, distinct from the
      * consensus archive's {@code ARCHIVE_CONTROL_PORT_OFFSET} (=1) so the two archives never

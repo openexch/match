@@ -138,7 +138,7 @@ public final class SettlementJournalRuntime implements AutoCloseable {
                         .controlRequestChannel(controlChannel)
                         .controlRequestStreamId(InfrastructureConstants.JOURNAL_ARCHIVE_CONTROL_STREAM_ID)
                         .controlResponseChannel("aeron:udp?endpoint=localhost:0"),
-                InfrastructureConstants.SETTLEMENT_JOURNAL_CHANNEL,
+                InfrastructureConstants.settlementJournalChannel(),
                 InfrastructureConstants.SETTLEMENT_JOURNAL_STREAM_ID,
                 checkpoints,
                 SEGMENT_FILE_LENGTH);

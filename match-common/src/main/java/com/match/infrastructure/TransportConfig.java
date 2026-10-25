@@ -220,6 +220,21 @@ public final class TransportConfig {
     }
 
     /**
+     * Term buffer length for the settlement journal publication (aeron:ipc), in Aeron URI
+     * syntax. Journal records are encoded into a 256-byte scratch buffer and offered one per
+     * call, so the term only sets how far the writer may run ahead of the recorder. The cost is
+     * on the recording ME node: the publication and every Archive replay of it (bridge, execution
+     * projector, any other reader, plus a crashed reader's replay until the archive closes it)
+     * each map 3 terms in /dev/shm, 192MB apiece at 64m. The 64m default preserves the
+     * historical value for hosts that never set it.
+     *
+     * @return settlement journal channel term length string.
+     */
+    public static String journalTermLength() {
+        return envOrProp("TRANSPORT_JOURNAL_TERM_LENGTH", "transport.journal.term.length", "64m");
+    }
+
+    /**
      * Build a UDP channel URI with the configured term-length, MTU and optional interface
      * applied consistently. Accepts a base with or without existing URI params, e.g.
      * "aeron:udp" or "aeron:udp?endpoint=host:port".
