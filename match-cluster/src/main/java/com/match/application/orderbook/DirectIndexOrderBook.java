@@ -550,7 +550,9 @@ public class DirectIndexOrderBook {
         int levelBase = priceIdx * LEVEL_FIELDS;
         int currentSlot = (int) levels[levelBase]; // head
         int slotStackBase = priceIdx * maxOrdersPerLevel;
-        int guard = maxOrdersPerLevel;
+        // +1 guard (as compactLevel): a fully-occupied level has exactly maxOrdersPerLevel nodes;
+        // the old bound visited one fewer and leaked the last slot of a full level.
+        int guard = maxOrdersPerLevel + 1;
         while (currentSlot >= 0 && currentSlot < maxOrdersPerLevel && --guard > 0) {
             int orderBase = (priceIdx * maxOrdersPerLevel + currentSlot) * ORDER_FIELDS;
             int nextSlot = (int) orders[orderBase + 3];
@@ -686,7 +688,9 @@ public class DirectIndexOrderBook {
 
             // Walk the linked list at this level (with cycle guard)
             int currentSlot = headSlot;
-            int guard = maxOrdersPerLevel;
+            // +1 guard (as compactLevel): a full level has maxOrdersPerLevel nodes; the old bound
+            // dropped the last live order of a full level from the snapshot export.
+            int guard = maxOrdersPerLevel + 1;
             while (currentSlot >= 0 && currentSlot < maxOrdersPerLevel && --guard > 0) {
                 int orderBase = (priceIdx * maxOrdersPerLevel + currentSlot) * ORDER_FIELDS;
                 long qty = orders[orderBase + 2];
