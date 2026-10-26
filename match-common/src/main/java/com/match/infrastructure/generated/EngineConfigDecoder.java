@@ -10,11 +10,11 @@ import org.agrona.DirectBuffer;
 @SuppressWarnings("all")
 public final class EngineConfigDecoder
 {
-    public static final int BLOCK_LENGTH = 17;
+    public static final int BLOCK_LENGTH = 35;
     public static final int TEMPLATE_ID = 8;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 11;
-    public static final String SEMANTIC_VERSION = "5.2";
+    public static final int SCHEMA_VERSION = 12;
+    public static final String SEMANTIC_VERSION = "5.3";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
     private final EngineConfigDecoder parentMessage = this;
@@ -374,6 +374,230 @@ public final class EngineConfigDecoder
     public long maxOrdersPerLevel()
     {
         return (buffer.getInt(offset + 13, BYTE_ORDER) & 0xFFFF_FFFFL);
+    }
+
+
+    public static int behaviorVersionId()
+    {
+        return 6;
+    }
+
+    public static int behaviorVersionSinceVersion()
+    {
+        return 12;
+    }
+
+    public static int behaviorVersionEncodingOffset()
+    {
+        return 17;
+    }
+
+    public static int behaviorVersionEncodingLength()
+    {
+        return 4;
+    }
+
+    public static String behaviorVersionMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long behaviorVersionNullValue()
+    {
+        return 4294967295L;
+    }
+
+    public static long behaviorVersionMinValue()
+    {
+        return 0L;
+    }
+
+    public static long behaviorVersionMaxValue()
+    {
+        return 4294967294L;
+    }
+
+    public long behaviorVersion()
+    {
+        if (parentMessage.actingVersion < 12)
+        {
+            return 4294967295L;
+        }
+
+        return (buffer.getInt(offset + 17, BYTE_ORDER) & 0xFFFF_FFFFL);
+    }
+
+
+    public static int commandLedgerCapacityId()
+    {
+        return 7;
+    }
+
+    public static int commandLedgerCapacitySinceVersion()
+    {
+        return 12;
+    }
+
+    public static int commandLedgerCapacityEncodingOffset()
+    {
+        return 21;
+    }
+
+    public static int commandLedgerCapacityEncodingLength()
+    {
+        return 4;
+    }
+
+    public static String commandLedgerCapacityMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long commandLedgerCapacityNullValue()
+    {
+        return 4294967295L;
+    }
+
+    public static long commandLedgerCapacityMinValue()
+    {
+        return 0L;
+    }
+
+    public static long commandLedgerCapacityMaxValue()
+    {
+        return 4294967294L;
+    }
+
+    public long commandLedgerCapacity()
+    {
+        if (parentMessage.actingVersion < 12)
+        {
+            return 4294967295L;
+        }
+
+        return (buffer.getInt(offset + 21, BYTE_ORDER) & 0xFFFF_FFFFL);
+    }
+
+
+    public static int genesisIdId()
+    {
+        return 8;
+    }
+
+    public static int genesisIdSinceVersion()
+    {
+        return 12;
+    }
+
+    public static int genesisIdEncodingOffset()
+    {
+        return 25;
+    }
+
+    public static int genesisIdEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String genesisIdMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long genesisIdNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long genesisIdMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long genesisIdMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public long genesisId()
+    {
+        if (parentMessage.actingVersion < 12)
+        {
+            return -9223372036854775808L;
+        }
+
+        return buffer.getLong(offset + 25, BYTE_ORDER);
+    }
+
+
+    public static int maxWireVersionId()
+    {
+        return 9;
+    }
+
+    public static int maxWireVersionSinceVersion()
+    {
+        return 12;
+    }
+
+    public static int maxWireVersionEncodingOffset()
+    {
+        return 33;
+    }
+
+    public static int maxWireVersionEncodingLength()
+    {
+        return 2;
+    }
+
+    public static String maxWireVersionMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static int maxWireVersionNullValue()
+    {
+        return 65535;
+    }
+
+    public static int maxWireVersionMinValue()
+    {
+        return 0;
+    }
+
+    public static int maxWireVersionMaxValue()
+    {
+        return 65534;
+    }
+
+    public int maxWireVersion()
+    {
+        if (parentMessage.actingVersion < 12)
+        {
+            return 65535;
+        }
+
+        return (buffer.getShort(offset + 33, BYTE_ORDER) & 0xFFFF);
     }
 
 
@@ -903,6 +1127,18 @@ public final class EngineConfigDecoder
         builder.append('|');
         builder.append("maxOrdersPerLevel=");
         builder.append(this.maxOrdersPerLevel());
+        builder.append('|');
+        builder.append("behaviorVersion=");
+        builder.append(this.behaviorVersion());
+        builder.append('|');
+        builder.append("commandLedgerCapacity=");
+        builder.append(this.commandLedgerCapacity());
+        builder.append('|');
+        builder.append("genesisId=");
+        builder.append(this.genesisId());
+        builder.append('|');
+        builder.append("maxWireVersion=");
+        builder.append(this.maxWireVersion());
         builder.append('|');
         builder.append("markets=[");
         final int marketsOriginalOffset = markets.offset;

@@ -2,8 +2,8 @@
 <sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
                    package="com.match.infrastructure.generated"
                    id="1"
-                   version="11"
-                   semanticVersion="5.2"
+                   version="12"
+                   semanticVersion="5.3"
                    description="Match Order Schema - Optimized for Ultra-Low Latency"
 >
     <types>
@@ -45,6 +45,11 @@
             <validValue name="ARRAY">0</validValue>
             <validValue name="DIRECT">1</validValue>
         </enum>
+        <!-- v12: scope of a ReleaseCommandIds group entry (template 10). -->
+        <enum name="ReleaseScope" encodingType="uint8">
+            <validValue name="UP_TO">0</validValue>
+            <validValue name="ORDER">1</validValue>
+        </enum>
         <!-- Group size encoding for variable-length groups -->
         <composite name="groupSizeEncoding" description="Repeating group dimensions">
             <type name="blockLength" primitiveType="uint16"/>
@@ -77,8 +82,28 @@
         <field name="commandKind" id="10" type="uint8"/>
         <field name="orderType" id="11" type="uint8"/>
         <field name="orderSide" id="12" type="uint8"/>
+        <!-- v12: block 71 -> 80. 0 GTC, 1 IOC, 2 FOK. A pre-12 frame decodes as the null value (255). -->
+        <field name="timeInForce" id="13" type="uint8" sinceVersion="12"/>
+        <!-- v12: UPDATE only, the old leg's remaining quantity as the core believed it at mint;
+             0 for CREATE and CANCEL. A pre-12 frame decodes as the null value. -->
+        <field name="expectedOldRemaining" id="14" type="int64" sinceVersion="12"/>
     </sbe:message>
 
+    <!-- v12: command-id release (new, group of up to 48 entries, entry block 17). Served from S4
+         under behaviour 2; the S1 demuxer only counts it as unserved. -->
+    <sbe:message name="ReleaseCommandIds" id="10" sinceVersion="12">
+        <!-- The core dispatchSeq of the group's first entry, diagnostics only. -->
+        <field name="releaseSeq" id="1" type="int64"/>
+        <group name="releases" id="10" dimensionType="groupSizeEncoding">
+            <field name="commandIdHigh" id="1" type="int64"/>
+            <field name="idLowFloor" id="2" type="int64"/>
+            <field name="scope" id="3" type="ReleaseScope"/>
+        </group>
+    </sbe:message>
+
+    <!-- RESERVED from v12: never encoded again. Record 3 (CommandOutcome) of the ME journal
+         schema 4 (me-journal-schema.xml) replaces it. The layout is unchanged and kept only so
+         no generated class disappears from match-common consumers in this bump. -->
     <sbe:message name="JournalCommandOutcome" id="28" sinceVersion="11">
         <field name="egressSeq" id="1" type="int64"/>
         <field name="commandIdHigh" id="2" type="int64"/>
@@ -154,6 +179,12 @@
         <field name="maxMatchesPerOrder" id="4" type="uint32"/>
         <!-- Per-level open-order limit — an engine-creation value, replicated via the cluster log. -->
         <field name="maxOrdersPerLevel" id="5" type="uint32"/>
+        <!-- v12: root block 17 -> 35. A pre-12 frame decodes these as the null value; the demuxer
+             maps them (behaviorVersion 1, commandLedgerCapacity 100000, genesisId 0, maxWireVersion 0). -->
+        <field name="behaviorVersion" id="6" type="uint32" sinceVersion="12"/>
+        <field name="commandLedgerCapacity" id="7" type="uint32" sinceVersion="12"/>
+        <field name="genesisId" id="8" type="int64" sinceVersion="12"/>
+        <field name="maxWireVersion" id="9" type="uint16" sinceVersion="12"/>
         <!-- Markets to create engines for — replicated via the log so every replica builds the same set. -->
         <group name="markets" id="10" dimensionType="groupSizeEncoding">
             <field name="marketId" id="1" type="int32"/>
@@ -177,6 +208,8 @@
         <!-- v8: uint8 (was int64) — an Aeron cluster member id, always 0-2 today. -->
         <field name="nodeId" id="1" type="uint8"/>
         <field name="timestamp" id="2" type="int64"/>
+        <!-- v12: block 9 -> 17. The recorded genesisId; S1 encodes 0. -->
+        <field name="meEpoch" id="3" type="int64" sinceVersion="12"/>
     </sbe:message>
 
     <!-- ========== EGRESS BATCH MESSAGES (Cluster to Gateway) ========== -->

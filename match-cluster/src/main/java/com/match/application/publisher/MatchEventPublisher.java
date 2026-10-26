@@ -109,7 +109,8 @@ public class MatchEventPublisher implements MatchEventSink {
     // The command itself was applied like on every other replica; only this node's output is dark.
     private final AtomicLong darkCommandOutcomeCount = new AtomicLong();
 
-    @Override public void publishCommandOutcome(long position, com.match.domain.commands.DurableCommandOutcome outcome) {
+    @Override public void publishCommandOutcome(long position, com.match.domain.commands.DurableCommandOutcome outcome,
+                                                int ledgerSizeAfter) {
         final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
         if (journal == null) {
             if (darkCommandOutcomeCount.getAndIncrement() == 0) {
@@ -118,7 +119,7 @@ public class MatchEventPublisher implements MatchEventSink {
             }
             return;
         }
-        journal.appendCommandOutcome(position, outcome);
+        journal.appendCommandOutcome(position, outcome, ledgerSizeAfter);
     }
 
     public long getDarkCommandOutcomeCount() { return darkCommandOutcomeCount.get(); }
@@ -444,7 +445,8 @@ public class MatchEventPublisher implements MatchEventSink {
             terminalStatusCount++;
             final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
             if (journal != null && !suppressJournalTerminal) {
-                journal.appendTerminal(egressSeq, orderId, userId, marketId, orderStatus, timestamp, omsOrderId);
+                journal.appendTerminal(egressSeq, orderId, userId, marketId, orderStatus, timestamp, omsOrderId,
+                        rejectReason);
             }
         }
 

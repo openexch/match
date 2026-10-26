@@ -9,8 +9,8 @@ public final class JournalCommandOutcomeEncoder
     public static final int BLOCK_LENGTH = 116;
     public static final int TEMPLATE_ID = 28;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 11;
-    public static final String SEMANTIC_VERSION = "5.2";
+    public static final int SCHEMA_VERSION = 12;
+    public static final String SEMANTIC_VERSION = "5.3";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
     private final JournalCommandOutcomeEncoder parentMessage = this;

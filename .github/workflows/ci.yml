@@ -166,7 +166,7 @@ jobs:
       # what the box deploys; the load generator rides along because a published
       # benchmark has to be re-runnable from the artifacts it was measured on, and a
       # harness rebuilt from source months later is a different harness.
-      JARS: match-cluster match-loadtest
+      JARS: match-common match-cluster match-loadtest
     steps:
       - uses: actions/checkout@v7
 
@@ -191,7 +191,7 @@ jobs:
           # work either way. (The assets repo's twin of this step has an extra
           # cross-repo install here; match needs none.)
           mvn -B -s .mvn-settings.xml clean package -pl "${JARS// /,}" -am -DskipTests \
-            -DbuildSha=$(git rev-parse --short HEAD)
+            -DbuildSha=$(git rev-parse --short=7 HEAD)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -199,11 +199,11 @@ jobs:
         run: |
           set -euo pipefail
           for m in ${JARS}; do
-            JAR=$m/target/$m.jar
+            JAR="$m/target/$m.jar"; [ -f "$JAR" ] || JAR=$(ls "$m"/target/"$m"-[0-9]*.jar 2>/dev/null | grep -v -e -sources -e -tests | head -n1 || true)
             [ -f "$JAR" ] || { echo "::error::${JARS} lists $m but $JAR was not built"; exit 1; }
             unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep "^Build-Sha:" | sed "s/^/$m /"
             unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' \
-              | grep -q "^Build-Sha: $(git rev-parse --short HEAD)$" || {
+              | grep -q "^Build-Sha: $(git rev-parse --short=7 HEAD)$" || {
               echo "::error::$m's Build-Sha does not match this commit"
               exit 1
             }
@@ -255,7 +255,7 @@ jobs:
           set -euo pipefail
           printf 'Implementation-Version: %s\n' "$TAG" > version.mf
           for m in ${JARS}; do
-            JAR=$m/target/$m.jar
+            JAR="$m/target/$m.jar"; [ -f "$JAR" ] || JAR=$(ls "$m"/target/"$m"-[0-9]*.jar 2>/dev/null | grep -v -e -sources -e -tests | head -n1 || true)
             jar ufm "$JAR" version.mf
 
             # Both entries are re-checked AFTER the merge, not just the new one.
@@ -269,7 +269,7 @@ jobs:
               echo "::error::the release version did not land in $m's manifest"
               exit 1
             }
-            echo "$MF" | grep -q "^Build-Sha: $(git rev-parse --short HEAD)$" || {
+            echo "$MF" | grep -q "^Build-Sha: $(git rev-parse --short=7 HEAD)$" || {
               echo "::error::stamping the version dropped Build-Sha from $m's manifest"
               exit 1
             }
@@ -288,7 +288,7 @@ jobs:
           # so it may not name a file that is not up yet.
           ENTRIES=""
           for m in ${JARS}; do
-            JAR=$m/target/$m.jar
+            JAR="$m/target/$m.jar"; [ -f "$JAR" ] || JAR=$(ls "$m"/target/"$m"-[0-9]*.jar 2>/dev/null | grep -v -e -sources -e -tests | head -n1 || true)
             SUM=$(sha256sum "$JAR" | cut -d' ' -f1)
             BYTES=$(stat -c%s "$JAR")
             aws s3 cp "$JAR" "${PREFIX}/${m}.jar" \
@@ -304,7 +304,7 @@ jobs:
           {
             "repo": "${ARTIFACT}",
             "sha": "${GITHUB_SHA}",
-            "shortSha": "$(git rev-parse --short HEAD)",
+            "shortSha": "$(git rev-parse --short=7 HEAD)",
             "ref": "${GITHUB_REF}",
             "tag": "${TAG}",
             "builtAt": "${BUILT_AT}",
@@ -328,7 +328,8 @@ jobs:
           set -euo pipefail
           for m in ${JARS}; do
             aws s3 cp "s3://${BUCKET}/${DEST}/${m}.jar" ./roundtrip --no-progress
-            diff <(sha256sum < "$m/target/$m.jar") <(sha256sum < ./roundtrip) \
+            JAR="$m/target/$m.jar"; [ -f "$JAR" ] || JAR=$(ls "$m"/target/"$m"-[0-9]*.jar 2>/dev/null | grep -v -e -sources -e -tests | head -n1 || true)
+            diff <(sha256sum < "$JAR") <(sha256sum < ./roundtrip) \
               || { echo "::error::$m did not round-trip"; exit 1; }
             echo "$m round-tripped"
           done
@@ -396,6 +397,7 @@ jobs:
           # ".," so the parent pom deploys too: match-common's pom references it, and a
           # consumer resolving the module needs the parent resolvable as well.
           mvn -B -s .mvn-settings.xml deploy -pl .,match-common -am -DskipTests \
+            -DbuildSha="${GITHUB_SHA::7}" \
             -DaltDeploymentRepository=github::https://maven.pkg.github.com/openexch/match
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "published com.match:match-common:$V"

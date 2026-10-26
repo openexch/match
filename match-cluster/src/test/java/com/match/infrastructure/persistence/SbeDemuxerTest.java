@@ -411,4 +411,197 @@ public class SbeDemuxerTest {
 
         assertTrue("Ask should be consumed by market buy", dme.isAskEmpty());
     }
+    // ==================== order-schema v12 (RC2 S1 contract 3, 8.2) ====================
+
+    /** A durable-command engine with a schema-4 journal, the way the cluster wires it. */
+    private static final class Durable implements AutoCloseable {
+        final Engine engine = new Engine("direct");
+        final com.match.application.publisher.MatchEventPublisher publisher =
+                new com.match.application.publisher.MatchEventPublisher();
+        final com.match.infrastructure.journal.SettlementJournal journal =
+                new com.match.infrastructure.journal.SettlementJournal(1 << 16);
+        final SbeDemuxer demuxer = new SbeDemuxer(engine);
+
+        Durable() {
+            publisher.setSettlementJournal(journal);
+            publisher.initMarket(1, new com.match.application.publisher.MarketEventHandler() {
+                public int getMarketId() { return 1; }
+                public void onEvent(com.match.application.publisher.PublishEvent e, long seq, boolean end) { }
+            });
+            publisher.start();
+            engine.setEventPublisher(publisher);
+        }
+
+        java.util.List<byte[]> drain() {
+            final java.util.List<byte[]> out = new java.util.ArrayList<>();
+            journal.ringBuffer().read((t, b, i, n) -> {
+                final byte[] v = new byte[n];
+                b.getBytes(i, v);
+                out.add(v);
+            }, 1024);
+            return out;
+        }
+
+        @Override public void close() { publisher.shutdown(); engine.close(); }
+    }
+
+    private static final long V12_PRICE = FixedPoint.fromDouble(59000);
+    private static final long V12_QTY = FixedPoint.fromDouble(1);
+
+    /** A v12 DurableOrderCommand CREATE (block 80) through the generated encoder. */
+    private int encodeDurableV12(final long idLow, final int tif, final long expectedOldRemaining) {
+        new DurableOrderCommandEncoder().wrapAndApplyHeader(buffer, 0, headerEncoder)
+                .commandIdHigh(17).commandIdLow(idLow).userId(100).omsOrderId(9001).oldOrderId(0)
+                .price(V12_PRICE).quantity(V12_QTY).budget(0).marketId(1)
+                .commandKind((short) 0).orderType((short) 0).orderSide((short) 0)
+                .timeInForce((short) tif).expectedOldRemaining(expectedOldRemaining);
+        return MessageHeaderEncoder.ENCODED_LENGTH + DurableOrderCommandEncoder.BLOCK_LENGTH;
+    }
+
+    /** The same command as a v11 frame: header version 11, block 71, the first 71 root bytes. */
+    private int encodeDurableV11(final long idLow) {
+        encodeDurableV12(idLow, 0, 0);
+        headerEncoder.wrap(buffer, 0).blockLength(71).version(11);
+        // Bytes past the v11 frame are not part of it; poison them so a decoder that read past
+        // the declared block would see garbage.
+        buffer.putByte(8 + 71, (byte) 0x7F);
+        return MessageHeaderEncoder.ENCODED_LENGTH + 71;
+    }
+
+    private static com.match.infrastructure.mejournal.generated.CommandOutcomeDecoder outcome(final byte[] frame) {
+        final UnsafeBuffer b = new UnsafeBuffer(frame);
+        return new com.match.infrastructure.mejournal.generated.CommandOutcomeDecoder().wrapAndApplyHeader(
+                b, 0, new com.match.infrastructure.mejournal.generated.MessageHeaderDecoder());
+    }
+
+    @Test
+    public void perVersionMinimumBlockOfTheGrownTemplates() {
+        assertEquals(71, SbeDemuxer.minimumBlockLength(DurableOrderCommandDecoder.TEMPLATE_ID, 9));
+        assertEquals(71, SbeDemuxer.minimumBlockLength(DurableOrderCommandDecoder.TEMPLATE_ID, 11));
+        assertEquals(80, SbeDemuxer.minimumBlockLength(DurableOrderCommandDecoder.TEMPLATE_ID, 12));
+        assertEquals(17, SbeDemuxer.minimumBlockLength(EngineConfigDecoder.TEMPLATE_ID, 9));
+        assertEquals(17, SbeDemuxer.minimumBlockLength(EngineConfigDecoder.TEMPLATE_ID, 11));
+        assertEquals(35, SbeDemuxer.minimumBlockLength(EngineConfigDecoder.TEMPLATE_ID, 12));
+        assertEquals(8, SbeDemuxer.minimumBlockLength(ReleaseCommandIdsDecoder.TEMPLATE_ID, 12));
+        for (int v = 9; v <= 12; v++) {
+            assertEquals(CreateOrderDecoder.BLOCK_LENGTH, SbeDemuxer.minimumBlockLength(CreateOrderDecoder.TEMPLATE_ID, v));
+            assertEquals(CancelOrderDecoder.BLOCK_LENGTH, SbeDemuxer.minimumBlockLength(CancelOrderDecoder.TEMPLATE_ID, v));
+            assertEquals(UpdateOrderDecoder.BLOCK_LENGTH, SbeDemuxer.minimumBlockLength(UpdateOrderDecoder.TEMPLATE_ID, v));
+        }
+    }
+
+    @Test
+    public void v12DurableCommandCarriesTimeInForceAndExpectedOldRemaining() {
+        try (Durable d = new Durable()) {
+            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 2, 5), 1000L);
+            assertEquals(0, d.demuxer.decodeRejectCount());
+            final java.util.List<byte[]> records = d.drain();
+            assertEquals(1, records.size());
+            final var o = outcome(records.get(0));
+            assertEquals(2, o.timeInForce());
+            assertEquals(5L, o.expectedOldRemaining());
+            assertEquals(1, d.engine.commandLedger().size());
+        }
+    }
+
+    @Test
+    public void v12TimeInForceThreeIsDecodePoison() {
+        try (Durable d = new Durable()) {
+            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 3, 0), 1000L);
+            assertEquals(1, d.demuxer.decodeRejectCount());
+            assertEquals(0, d.demuxer.applyErrorCount());
+            assertEquals(0, d.engine.commandLedger().size());
+            assertTrue(d.drain().isEmpty());
+        }
+    }
+
+    @Test
+    public void v12NegativeExpectedOldRemainingIsDecodePoison() {
+        try (Durable d = new Durable()) {
+            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 0, -1), 1000L);
+            assertEquals(1, d.demuxer.decodeRejectCount());
+            assertEquals(0, d.demuxer.applyErrorCount());
+            assertEquals(0, d.engine.commandLedger().size());
+            assertTrue(d.drain().isEmpty());
+        }
+    }
+
+    @Test
+    public void v11DurableCommandMapsToZeroZeroAndJournalsLikeAV12ZeroZeroFrame() {
+        final byte[] v11Record;
+        try (Durable d = new Durable()) {
+            d.demuxer.dispatch(buffer, 0, encodeDurableV11(1), 1000L);
+            assertEquals("a v11 block-71 frame is not a poison or bounds reject", 0, d.demuxer.decodeRejectCount());
+            assertEquals(0, d.demuxer.schemaRejectCount());
+            assertEquals(1, d.engine.commandLedger().size());
+            final java.util.List<byte[]> records = d.drain();
+            assertEquals(1, records.size());
+            v11Record = records.get(0);
+            assertEquals(0, outcome(v11Record).timeInForce());
+            assertEquals(0L, outcome(v11Record).expectedOldRemaining());
+        }
+        try (Durable d = new Durable()) {
+            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 0, 0), 1000L);
+            assertArrayEquals("v11 and v12 0/0 frames journal identical records",
+                    v11Record, d.drain().get(0));
+        }
+    }
+
+    @Test
+    public void v12HeaderWithThePre12BlockOnTemplate9IsAFrameBoundsReject() {
+        try (Durable d = new Durable()) {
+            encodeDurableV12(1, 0, 0);
+            headerEncoder.wrap(buffer, 0).blockLength(71);
+            d.demuxer.dispatch(buffer, 0, MessageHeaderEncoder.ENCODED_LENGTH + 71, 1000L);
+            assertEquals(1, d.demuxer.decodeRejectCount());
+            assertEquals(0, d.engine.commandLedger().size());
+            assertTrue(d.drain().isEmpty());
+        }
+    }
+
+    private int encodeRelease(final int entries) {
+        final ReleaseCommandIdsEncoder e = new ReleaseCommandIdsEncoder();
+        final ReleaseCommandIdsEncoder.ReleasesEncoder g = e.wrapAndApplyHeader(buffer, 0, headerEncoder)
+                .releaseSeq(3).releasesCount(entries);
+        for (int i = 0; i < entries; i++) {
+            g.next().commandIdHigh(17).idLowFloor(i).scope(ReleaseScope.UP_TO);
+        }
+        return MessageHeaderEncoder.ENCODED_LENGTH + e.encodedLength();
+    }
+
+    @Test
+    public void releaseCommandIdsIsCountedUnservedAndLeavesTheLedgerAlone() {
+        try (Durable d = new Durable()) {
+            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 0, 0), 1000L);
+            d.drain();
+            final int before = d.engine.commandLedger().size();
+            d.demuxer.dispatch(buffer, 0, encodeRelease(2), 1001L);
+            assertEquals(1, d.demuxer.unservedTemplateCount());
+            assertEquals(0, d.demuxer.decodeRejectCount());
+            assertEquals(before, d.engine.commandLedger().size());
+            assertTrue("no journal record for an unserved template", d.drain().isEmpty());
+        }
+    }
+
+    @Test
+    public void releaseCommandIdsWithNumInGroupPastTheFrameIsAFrameBoundsReject() {
+        try (Durable d = new Durable()) {
+            final int len = encodeRelease(2);
+            // group header after the 8-byte root: numInGroup at 8 + 8 + 2
+            buffer.putShort(8 + 8 + 2, (short) 3, java.nio.ByteOrder.LITTLE_ENDIAN);
+            d.demuxer.dispatch(buffer, 0, len, 1000L);
+            assertEquals(1, d.demuxer.decodeRejectCount());
+            assertEquals(0, d.demuxer.unservedTemplateCount());
+        }
+    }
+
+    @Test
+    public void releaseCommandIdsWithATruncatedGroupHeaderIsAFrameBoundsReject() {
+        try (Durable d = new Durable()) {
+            encodeRelease(0);
+            d.demuxer.dispatch(buffer, 0, MessageHeaderEncoder.ENCODED_LENGTH + 8 + 2, 1000L);
+            assertEquals(1, d.demuxer.decodeRejectCount());
+            assertEquals(0, d.demuxer.unservedTemplateCount());
+        }
+    }
 }

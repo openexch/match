@@ -10,9 +10,9 @@ import com.match.domain.commands.UpdateOrderCommand;
 import com.match.domain.enums.OrderSide;
 import com.match.domain.enums.OrderType;
 import com.match.infrastructure.journal.SettlementJournal;
-import com.match.infrastructure.journal.generated.JournalTerminalDecoder;
-import com.match.infrastructure.journal.generated.JournalTradeDecoder;
-import com.match.infrastructure.journal.generated.MessageHeaderDecoder;
+import com.match.infrastructure.mejournal.generated.TerminalDecoder;
+import com.match.infrastructure.mejournal.generated.TradeDecoder;
+import com.match.infrastructure.mejournal.generated.MessageHeaderDecoder;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -81,12 +81,12 @@ public class AmendSettlementJournalTest {
         List<Entry> result = new ArrayList<>();
         journal.ringBuffer().read((type, buffer, index, length) -> {
             MessageHeaderDecoder h = new MessageHeaderDecoder().wrap(buffer, index);
-            if (h.templateId() == JournalTerminalDecoder.TEMPLATE_ID) {
-                JournalTerminalDecoder d = new JournalTerminalDecoder().wrap(buffer,
+            if (h.templateId() == TerminalDecoder.TEMPLATE_ID) {
+                TerminalDecoder d = new TerminalDecoder().wrap(buffer,
                     index + MessageHeaderDecoder.ENCODED_LENGTH, h.blockLength(), h.version());
                 result.add(new Entry(h.templateId(), d.orderId(), d.omsOrderId(), d.status().value()));
             } else {
-                assertEquals(JournalTradeDecoder.TEMPLATE_ID, h.templateId());
+                assertEquals(TradeDecoder.TEMPLATE_ID, h.templateId());
                 result.add(new Entry(h.templateId(), 0, 0, 0));
             }
         }, 1024);
@@ -116,8 +116,8 @@ public class AmendSettlementJournalTest {
         assertTrue(engine.getEngine(MARKET).isBidEmpty());
         List<Entry> entries = drain();
         assertEquals("amend rejection must not release a still-live order's hold", 3, entries.size());
-        assertEquals(JournalTradeDecoder.TEMPLATE_ID, entries.get(0).template());
-        assertTrue(entries.contains(new Entry(JournalTerminalDecoder.TEMPLATE_ID, old, OMS, OrderStatusType.FILLED)));
+        assertEquals(TradeDecoder.TEMPLATE_ID, entries.get(0).template());
+        assertTrue(entries.contains(new Entry(TerminalDecoder.TEMPLATE_ID, old, OMS, OrderStatusType.FILLED)));
         assertEquals(2, journal.appendedTerminals());
     }
 
@@ -152,7 +152,7 @@ public class AmendSettlementJournalTest {
         CancelOrderCommand c = new CancelOrderCommand();
         c.setUserId(OMS); c.setOrderId(replacement);
         engine.acceptOrder(MARKET, Engine.CMD_CANCEL, c, 3000);
-        assertEquals(List.of(new Entry(JournalTerminalDecoder.TEMPLATE_ID,
+        assertEquals(List.of(new Entry(TerminalDecoder.TEMPLATE_ID,
             replacement, OMS, OrderStatusType.CANCELLED)), drain());
     }
     @Test public void failedReplacementAfterOldCancelStillJournalsTerminal() {
@@ -160,13 +160,13 @@ public class AmendSettlementJournalTest {
         long old = create(OrderSide.BID, PRICE - FixedPoint.fromDouble(1000), QTY, OMS);
         long replacement = engine.getOrderIdGenerator();
         amend(old, OrderSide.BID, PRICE, QTY);
-        assertEquals(List.of(new Entry(JournalTerminalDecoder.TEMPLATE_ID,
+        assertEquals(List.of(new Entry(TerminalDecoder.TEMPLATE_ID,
             replacement, OMS, OrderStatusType.REJECTED)), drain());
         assertEquals(-1, engine.getOrderIdToOmsOrderId().get(old));
     }
     @Test public void rejectedCreateStillJournalsTerminal() {
         long id = create(OrderSide.BID, PRICE, 0, OMS);
-        assertEquals(List.of(new Entry(JournalTerminalDecoder.TEMPLATE_ID,
+        assertEquals(List.of(new Entry(TerminalDecoder.TEMPLATE_ID,
             id, OMS, OrderStatusType.REJECTED)), drain());
     }
 }

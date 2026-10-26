@@ -15,6 +15,11 @@
     <name>Match Common</name>
     <description>Shared code: domain models, SBE codecs, constants</description>
 
+    <properties>
+        <!-- Overridden with -DbuildSha=<7-char git sha> by CI; the manifest records it. -->
+        <buildSha>unknown</buildSha>
+    </properties>
+
     <dependencies>
         <!-- Agrona for buffers and data structures -->
         <dependency>
@@ -66,6 +71,17 @@
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifestEntries>
+                            <Build-Sha>${buildSha}</Build-Sha>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+            </plugin>
             <!-- SBE code generation -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
@@ -106,6 +122,30 @@
                             <mainClass>uk.co.real_logic.sbe.SbeTool</mainClass>
                             <arguments>
                                 <argument>${project.basedir}/src/main/resources/sbe/settlement-journal-schema.xml</argument>
+                            </arguments>
+                            <systemProperties>
+                                <systemProperty>
+                                    <key>sbe.output.dir</key>
+                                    <value>${project.basedir}/src/main/java</value>
+                                </systemProperty>
+                                <systemProperty>
+                                    <key>sbe.target.language</key>
+                                    <value>Java</value>
+                                </systemProperty>
+                            </systemProperties>
+                        </configuration>
+                    </execution>
+                    <!-- ME journal schema (id=4): own execution/package (mejournal.generated). -->
+                    <execution>
+                        <id>generate-sbe-me-journal</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                        <configuration>
+                            <mainClass>uk.co.real_logic.sbe.SbeTool</mainClass>
+                            <arguments>
+                                <argument>${project.basedir}/src/main/resources/sbe/me-journal-schema.xml</argument>
                             </arguments>
                             <systemProperties>
                                 <systemProperty>

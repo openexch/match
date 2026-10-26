@@ -80,18 +80,64 @@ public class DurableCommandTest {
         engine.setCurrentLogPosition(256); var retry=engine.acceptDurable(c,2000);
         assertEquals(original,retry);
         var events=entries(); assertEquals(2,events.size());
-        for(byte[] bytes:events) {
-            var b=new org.agrona.concurrent.UnsafeBuffer(bytes);
-            var h=new com.match.infrastructure.generated.MessageHeaderDecoder();
-            var d=new com.match.infrastructure.generated.JournalCommandOutcomeDecoder().wrapAndApplyHeader(b,0,h);
-            assertEquals(1,h.schemaId()); assertEquals(28,h.templateId());
+        long[] egress={128,256};
+        for(int i=0;i<events.size();i++) {
+            var b=new org.agrona.concurrent.UnsafeBuffer(events.get(i));
+            var h=new com.match.infrastructure.mejournal.generated.MessageHeaderDecoder();
+            var d=new com.match.infrastructure.mejournal.generated.CommandOutcomeDecoder().wrapAndApplyHeader(b,0,h);
+            assertEquals(4,h.schemaId()); assertEquals(3,h.templateId());
+            assertEquals(egress[i],d.egressSeq());
             assertEquals(128,d.appliedPosition()); assertEquals(1000,d.timestamp()); assertEquals(original.orderId(),d.orderId());
+            assertEquals(0,d.journalSeq()); assertEquals(0,d.meEpoch());
+            assertEquals(0,d.timeInForce()); assertEquals(0,d.expectedOldRemaining());
+            assertEquals(1,d.ledgerSize()); assertEquals(100_000,d.ledgerCapacity()); assertEquals(1,d.behaviorVersion());
         }
         String export=System.getProperty("runtime.command.fixture");
         if(export!=null) {
             java.nio.file.Files.write(java.nio.file.Path.of(export+".first.bin"),events.get(0));
             java.nio.file.Files.write(java.nio.file.Path.of(export+".retry.bin"),events.get(1));
         }
+    }
+    // Independent wire fixture: schema 1/v12, template 9, block 80 (timeInForce @71, expectedOldRemaining @72).
+    private void sendV12(long id, int kind, long old, long price, int tif, long expectedOldRemaining) {
+        var b = new ExpandableArrayBuffer();
+        b.putShort(0, (short)80, ByteOrder.LITTLE_ENDIAN);
+        b.putShort(2, (short)9, ByteOrder.LITTLE_ENDIAN);
+        b.putShort(4, (short)1, ByteOrder.LITTLE_ENDIAN);
+        b.putShort(6, (short)12, ByteOrder.LITTLE_ENDIAN);
+        long[] values = {17, id, 100, 9001, old, price, QTY};
+        for (int i=0; i<7; i++) b.putLong(8+i*8, values[i], ByteOrder.LITTLE_ENDIAN);
+        b.putLong(64, 0, ByteOrder.LITTLE_ENDIAN);
+        b.putInt(72, 1, ByteOrder.LITTLE_ENDIAN);
+        b.putByte(76, (byte)kind); b.putByte(77, (byte)0); b.putByte(78, (byte)0);
+        b.putByte(79, (byte)tif); b.putLong(80, expectedOldRemaining, ByteOrder.LITTLE_ENDIAN);
+        demux.dispatch(b, 0, 88, 1000 + id);
+    }
+    @Test public void retryWithDifferentTifIsStillADuplicateInBehaviour1() {
+        long before=engine.getOrderIdGenerator();
+        sendV12(1,0,0,PRICE,0,0); entries();
+        sendV12(1,0,0,PRICE,2,0);
+        assertEquals(before+1, engine.getOrderIdGenerator());
+        assertEquals(4, engine.getEngine(1).getBidOrders().length);
+        assertEquals(0, demux.decodeRejectCount());
+        var events=entries(); assertEquals(1,events.size());
+        var b=new org.agrona.concurrent.UnsafeBuffer(events.get(0));
+        var h=new com.match.infrastructure.mejournal.generated.MessageHeaderDecoder();
+        var d=new com.match.infrastructure.mejournal.generated.CommandOutcomeDecoder().wrapAndApplyHeader(b,0,h);
+        // DUPLICATE (the original outcome, result APPLIED), not CONFLICT; the record echoes this frame's tail.
+        assertEquals(0,d.result()); assertEquals(1000+1,d.timestamp());
+        assertEquals(2,d.timeInForce()); assertEquals(1,d.ledgerSize());
+        assertEquals(1, engine.commandLedger().size());
+    }
+    @Test public void retryWithDifferentTifAfterSnapshotRestoreIsTheSameDuplicate() {
+        sendV12(1,0,0,PRICE,1,0); entries();
+        sendV12(1,0,0,PRICE,2,0); var live=entries().get(0);
+        var snapshot=new ExpandableArrayBuffer(); int n=SnapshotCodec.serialize(engine,0,0,snapshot);
+        engine.close(); engine=new Engine("direct"); engine.setEventPublisher(publisher);
+        SnapshotCodec.deserialize(snapshot,0,n,engine); demux=new SbeDemuxer(engine);
+        sendV12(1,0,0,PRICE,2,0); var restored=entries().get(0);
+        // The journaled retry is a function of the log entry, not of the restore.
+        assertArrayEquals(live, restored);
     }
     @Test public void rejectedAmendHasDurableOutcomeButNoFinancialTerminal() {
         var created=engine.acceptDurable(intent(1,0,0,PRICE,0),1000); entries();

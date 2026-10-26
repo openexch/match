@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.match.infrastructure.journal;
 
-import com.match.infrastructure.journal.generated.JournalTerminalDecoder;
-import com.match.infrastructure.journal.generated.JournalTradeDecoder;
-import com.match.infrastructure.journal.generated.MessageHeaderDecoder;
+import com.match.infrastructure.mejournal.generated.TerminalDecoder;
+import com.match.infrastructure.mejournal.generated.TradeDecoder;
+import com.match.infrastructure.mejournal.generated.MessageHeaderDecoder;
 import io.aeron.Aeron;
 import io.aeron.Subscription;
 import io.aeron.archive.Archive;
@@ -104,7 +104,7 @@ public class JournalWriterIntegrationTest {
     public void appendedEntriesAreRecordedAndReplayableInOrder() throws Exception {
         journal.appendTrade(500L, 1L, 1, 11L, 900_001L, 22L, 900_002L, 1_000L, 2_000L, true, 42L, 7_011L, 7_022L);
         journal.appendTrade(510L, 2L, 1, 33L, 900_003L, 22L, 900_002L, 1_100L, 900L, false, 43L, 7_033L, 7_022L);
-        journal.appendTerminal(510L, 22L, 900_002L, 1, 2, 44L, 7_022L);
+        journal.appendTerminal(510L, 22L, 900_002L, 1, 2, 44L, 7_022L, 0);
 
         final long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(10);
         while (agent.writtenEntries() < 3) {
@@ -125,13 +125,17 @@ public class JournalWriterIntegrationTest {
             assertTrue("journal recording must exist", recordingId[0] != Aeron.NULL_VALUE);
 
             final MessageHeaderDecoder header = new MessageHeaderDecoder();
-            final JournalTradeDecoder trade = new JournalTradeDecoder();
-            final JournalTerminalDecoder terminal = new JournalTerminalDecoder();
+            final TradeDecoder trade = new TradeDecoder();
+            final TerminalDecoder terminal = new TerminalDecoder();
             final FragmentHandler handler = (buffer, offset, length, hdr) -> {
                 final UnsafeBuffer copy = new UnsafeBuffer(new byte[length]);
                 buffer.getBytes(offset, copy, 0, length);
                 header.wrap(copy, 0);
-                if (header.templateId() == JournalTradeDecoder.TEMPLATE_ID) {
+                if (header.schemaId() != 4 || header.version() != 1) {
+                    throw new AssertionError("journal frame is not schema 4 v1: schemaId="
+                            + header.schemaId() + " version=" + header.version());
+                }
+                if (header.templateId() == TradeDecoder.TEMPLATE_ID) {
                     trade.wrap(copy, header.encodedLength(), header.blockLength(), header.version());
                     seen.add(new long[] {header.templateId(), trade.egressSeq(), trade.tradeId()});
                 } else {
@@ -152,13 +156,13 @@ public class JournalWriterIntegrationTest {
         }
 
         assertEquals(3, seen.size());
-        assertEquals(JournalTradeDecoder.TEMPLATE_ID, (int) seen.get(0)[0]);
+        assertEquals(TradeDecoder.TEMPLATE_ID, (int) seen.get(0)[0]);
         assertEquals(500L, seen.get(0)[1]);
         assertEquals(1L, seen.get(0)[2]);
-        assertEquals(JournalTradeDecoder.TEMPLATE_ID, (int) seen.get(1)[0]);
+        assertEquals(TradeDecoder.TEMPLATE_ID, (int) seen.get(1)[0]);
         assertEquals(510L, seen.get(1)[1]);
         assertEquals(2L, seen.get(1)[2]);
-        assertEquals(JournalTerminalDecoder.TEMPLATE_ID, (int) seen.get(2)[0]);
+        assertEquals(TerminalDecoder.TEMPLATE_ID, (int) seen.get(2)[0]);
         assertEquals(510L, seen.get(2)[1]);
         assertEquals(22L, seen.get(2)[2]);
     }

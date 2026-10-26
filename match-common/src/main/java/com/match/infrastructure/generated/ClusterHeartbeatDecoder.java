@@ -10,11 +10,11 @@ import org.agrona.DirectBuffer;
 @SuppressWarnings("all")
 public final class ClusterHeartbeatDecoder
 {
-    public static final int BLOCK_LENGTH = 9;
+    public static final int BLOCK_LENGTH = 17;
     public static final int TEMPLATE_ID = 21;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 11;
-    public static final String SEMANTIC_VERSION = "5.2";
+    public static final int SCHEMA_VERSION = 12;
+    public static final String SEMANTIC_VERSION = "5.3";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
     private final ClusterHeartbeatDecoder parentMessage = this;
@@ -234,6 +234,62 @@ public final class ClusterHeartbeatDecoder
     }
 
 
+    public static int meEpochId()
+    {
+        return 3;
+    }
+
+    public static int meEpochSinceVersion()
+    {
+        return 12;
+    }
+
+    public static int meEpochEncodingOffset()
+    {
+        return 9;
+    }
+
+    public static int meEpochEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String meEpochMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long meEpochNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long meEpochMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long meEpochMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public long meEpoch()
+    {
+        if (parentMessage.actingVersion < 12)
+        {
+            return -9223372036854775808L;
+        }
+
+        return buffer.getLong(offset + 9, BYTE_ORDER);
+    }
+
+
     public String toString()
     {
         if (null == buffer)
@@ -280,6 +336,9 @@ public final class ClusterHeartbeatDecoder
         builder.append('|');
         builder.append("timestamp=");
         builder.append(this.timestamp());
+        builder.append('|');
+        builder.append("meEpoch=");
+        builder.append(this.meEpoch());
 
         limit(originalLimit);
 
