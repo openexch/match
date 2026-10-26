@@ -31,7 +31,7 @@ public class EngineConfigCrossCheckTest {
         try (BehaviourTwoHarness h = BehaviourTwoHarness.configMode()) {
             h.apply(config, 64L);
             final ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
-            final int len = SnapshotCodec.serialize(h.engine, h.publisher.getTradeIdGenerator(), 0L, buf);
+            final int len = SnapshotCodec.serialize(h.engine, 0L, buf);
             return Arrays.copyOf(buf.byteArray(), len);
         }
     }

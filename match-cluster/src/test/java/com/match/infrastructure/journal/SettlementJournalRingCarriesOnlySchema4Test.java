@@ -54,7 +54,7 @@ public class SettlementJournalRingCarriesOnlySchema4Test {
                     new DurableOrderIntent(17, 3, 300, 9003, 0, PRICE, QTY, 0, 1, 0, 0, 0), 1003);
             engine.setCurrentLogPosition(640);
             engine.acceptDurable(new DurableOrderIntent(17, 4, 300, 9003, resting.orderId(), 0, 0, 0, 1, 1, 0, 0), 1004);
-            journal.appendCommandRelease(768, 9, 4, 100_000, 1, 1,
+            journal.appendCommandRelease(0L, 768, 9, 4, 100_000, 1, 1,
                     new long[] {17}, new long[] {1}, new int[] {0}, new int[] {0}, new int[] {1});
             journal.appendEngineConfig(0, 64, 1, 1, 100_000, 12, 0);
 

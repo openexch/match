@@ -17,7 +17,7 @@ import static org.junit.Assert.*;
 /**
  * RC2 S2 contract section 7: snapshot splice equality A + B == A + SNAPSHOT + B on a behaviour-2
  * log. The restored replica must emit the same journal frames byte for byte (meEpoch G, the
- * second BUMP at journalSeq 3, the INVALID record), end with the same snapshot bytes, the same
+ * second BUMP at its dense journalSeq, the INVALID record), end with the same snapshot bytes, the same
  * recorded config (the four included), the same {@code MeIdentity} and the same decisions.
  */
 public class EngineConfigSpliceDeterminismTest {
@@ -30,13 +30,13 @@ public class EngineConfigSpliceDeterminismTest {
         f.add(durableCreate(1, 100, 9001, 0, 59_000, 2));                    // 1 bid rests
         f.add(durableCreate(2, 200, 9002, 1, 59_000, 1));                    // 2 trade
         f.add(durableCreate(3, 300, 9003, 1, 59_000, 1));                    // 3 trade, bid filled (last trade of A)
-        f.add(engineConfig(2, 2, G, 12, 50_000));                          // 4 BUMP (journalSeq 2)
+        f.add(engineConfig(2, 2, G, 12, 50_000));                          // 4 BUMP
         // ---- B ----
         f.add(durableCreate(4, 100, 9004, 0, 58_000, 1));                    // 5 bid rests
         f.add(engineConfig(2, 2, G, 12, 50_000));                          // 6 DUPLICATE
         f.add(engineConfig(1, 2, G, 12, 50_000));                          // 7 STALE
         f.add(withHeaderVersion(durableCreate(5, 500, 9005, 1, 58_000, 1), 13)); // 8 above ceiling -> INVALID
-        f.add(engineConfig(3, 2, G, 12, 50_000));                          // 9 second BUMP (journalSeq 3)
+        f.add(engineConfig(3, 2, G, 12, 50_000));                          // 9 second BUMP
         f.add(durableCreate(6, 400, 9006, 1, 58_000, 1));                    // 10 v12 CREATE, trade
         f.add(durableCreate(1, 100, 9001, 0, 59_000, 2));                    // 11 retry of entry 1 (ledger duplicate)
         return positioned(f);
@@ -127,7 +127,12 @@ public class EngineConfigSpliceDeterminismTest {
         }
         final List<byte[]> r5 = BehaviourTwoHarness.ofTemplate(b, 5);
         assertEquals(1, r5.size());
-        assertEquals(3L, BehaviourTwoHarness.record5(r5.get(0)).journalSeq());
+        // RC2 S3: dense seqs, so the second BUMP is 1 + every frame journaled before it.
+        int framesBeforeSecondBump = 0;
+        for (int i = 0; i < 9; i++) {
+            framesBeforeSecondBump += s.framesPerEntry.get(i).size();
+        }
+        assertEquals(1L + framesBeforeSecondBump, BehaviourTwoHarness.record5(r5.get(0)).journalSeq());
         assertEquals(ConfigDecision.BUMP, BehaviourTwoHarness.record5(r5.get(0)).decision());
         int invalid = 0;
         for (byte[] f : BehaviourTwoHarness.ofTemplate(b, 3)) {

@@ -58,9 +58,9 @@ public class SettlementJournalTest {
     public void tradeAndTerminalRoundTripInAppendOrder() {
         final SettlementJournal journal = new SettlementJournal(1 << 16);
 
-        journal.appendTrade(1000L, 42L, 3, 11L, 100001L, 22L, 100002L,
+        journal.appendTrade(0L, 1000L, 42L, 3, 11L, 100001L, 22L, 100002L,
                 6_012_345_000L, 25_000_000L, true, 1_752_100_000_123L, 9_011L, 9_022L);
-        journal.appendTerminal(1001L, 22L, 100002L, 3, 2 /* FILLED */, 1_752_100_000_124L, 9_022L, 0);
+        journal.appendTerminal(0L, 1001L, 22L, 100002L, 3, 2 /* FILLED */, 1_752_100_000_124L, 9_022L, 0);
 
         final Drained drained = drainAll(journal);
         assertEquals(2, drained.msgTypes.size());
@@ -125,11 +125,11 @@ public class SettlementJournalTest {
     private static byte[] appendFixedSequenceAndDrain() {
         final SettlementJournal journal = new SettlementJournal(1 << 16);
         for (int i = 0; i < 50; i++) {
-            journal.appendTrade(100 + i, 1 + i, 1 + (i % 5), 10 + i, 900_000 + i,
+            journal.appendTrade(0L, 100 + i, 1 + i, 1 + (i % 5), 10 + i, 900_000 + i,
                     20 + i, 900_100 + i, 1_000_000L * (1 + i), 50_000_000L, (i & 1) == 0, 1_000_000L + i,
                     5_000L + i, 6_000L + i);
             if (i % 5 == 0) {
-                journal.appendTerminal(100 + i, 20 + i, 900_100 + i, 1 + (i % 5), 2 + (i % 3), 1_000_001L + i, 6_000L + i,
+                journal.appendTerminal(0L, 100 + i, 20 + i, 900_100 + i, 1 + (i % 5), 2 + (i % 3), 1_000_001L + i, 6_000L + i,
                         (i % 3) == 2 ? 6 : 0);
             }
         }
@@ -146,7 +146,7 @@ public class SettlementJournalTest {
     @Test
     public void rejectedTerminalCarriesTheMeReasonVerbatim() {
         final SettlementJournal journal = new SettlementJournal(1 << 16);
-        journal.appendTerminal(7L, 8L, 9L, 1, 4 /* REJECTED */, 10L, 11L, 7 /* MATCH_LIMIT */);
+        journal.appendTerminal(0L, 7L, 8L, 9L, 1, 4 /* REJECTED */, 10L, 11L, 7 /* MATCH_LIMIT */);
         final byte[] frame = drainAll(journal).payloads.get(0);
         final MessageHeaderDecoder header = new MessageHeaderDecoder().wrap(new UnsafeBuffer(frame), 0);
         final TerminalDecoder t = new TerminalDecoder()
@@ -157,7 +157,42 @@ public class SettlementJournalTest {
 
     @Test(expected = IllegalArgumentException.class)
     public void terminalRejectReason255IsNeverWritten() {
-        new SettlementJournal(1 << 16).appendTerminal(7L, 8L, 9L, 1, 4, 10L, 11L, 255);
+        new SettlementJournal(1 << 16).appendTerminal(0L, 7L, 8L, 9L, 1, 4, 10L, 11L, 255);
+    }
+
+    /**
+     * RC2 S3 (section 6): records 1-4 carry the caller's journalSeq verbatim (no placeholder) and
+     * meEpoch from the bound identity; the journal neither allocates nor rewrites the seq.
+     */
+    @Test
+    public void nonZeroJournalSeqIsWrittenThroughOnRecordsOneToFour() {
+        final SettlementJournal journal = new SettlementJournal(1 << 16);
+        final com.match.application.engine.MeIdentity identity =
+                com.match.application.engine.MeIdentityTestAccess.restored(0x1234_5678_9ABC_DEF1L, 20L, 2L);
+        journal.bindIdentity(identity);
+        journal.appendTrade(11L, 1000L, 42L, 3, 11L, 100001L, 22L, 100002L,
+                6_012_345_000L, 25_000_000L, true, 1_752_100_000_123L, 9_011L, 9_022L);
+        journal.appendTerminal(12L, 1001L, 22L, 100002L, 3, 2 /* FILLED */, 1_752_100_000_124L, 9_022L, 0);
+        final DurableOrderIntent intent = new DurableOrderIntent(17L, 99L, 100L, 9001L, 0L,
+                123_000L, 7_000L, 0L, 1, 0, 0, 1, 0, 0L);
+        journal.appendCommandOutcome(13L, 1002L, new DurableCommandOutcome(intent, 1002L, 1_700L,
+                56L, 0, 0, false, DurableCommandOutcome.APPLIED), 1);
+        journal.appendCommandRelease(14L, 1003L, 5L, 1, 100_000, 0, 1, new long[] {17L}, new long[] {2L},
+                new int[] {0}, new int[] {0}, new int[] {1});
+        final Drained drained = drainAll(journal);
+        assertEquals(4, drained.payloads.size());
+        for (int i = 0; i < 4; i++) {
+            final UnsafeBuffer b = new UnsafeBuffer(drained.payloads.get(i));
+            assertEquals("journalSeq of record " + (i + 1), 11L + i, b.getLong(8, java.nio.ByteOrder.LITTLE_ENDIAN));
+            assertEquals("meEpoch of record " + (i + 1), 0x1234_5678_9ABC_DEF1L,
+                    b.getLong(16, java.nio.ByteOrder.LITTLE_ENDIAN));
+            assertEquals("egressSeq of record " + (i + 1), 1000L + i, b.getLong(24, java.nio.ByteOrder.LITTLE_ENDIAN));
+        }
+        final CommandOutcomeDecoder o = new CommandOutcomeDecoder().wrapAndApplyHeader(
+                new UnsafeBuffer(drained.payloads.get(2)), 0, new MessageHeaderDecoder());
+        assertEquals(13L, o.journalSeq());
+        assertEquals(2L, o.behaviorVersion());
+        assertEquals("the journal never touches the identity's counter", 20L, identity.nextJournalSeq());
     }
 
     @Test
@@ -167,7 +202,7 @@ public class SettlementJournalTest {
                 123_000L, 7_000L, 0L, 1, 2 /* UPDATE */, 0, 1, 2 /* FOK */, 5_000L);
         final DurableCommandOutcome outcome = new DurableCommandOutcome(intent, 4_096L, 1_700L,
                 56L, 1, 0, true, DurableCommandOutcome.APPLIED);
-        journal.appendCommandOutcome(8_192L, outcome, 3);
+        journal.appendCommandOutcome(0L, 8_192L, outcome, 3);
 
         final Drained drained = drainAll(journal);
         assertEquals(SettlementJournal.MSG_TYPE_OUTCOME, (int) drained.msgTypes.get(0));
@@ -226,7 +261,7 @@ public class SettlementJournalTest {
             result[i] = i % 3;
             removed[i] = i * 2;
         }
-        journal.appendCommandRelease(77L, 5L, 10, 100_000, 4, n, high, floor, scope, result, removed);
+        journal.appendCommandRelease(0L, 77L, 5L, 10, 100_000, 4, n, high, floor, scope, result, removed);
 
         final Drained drained = drainAll(journal);
         assertEquals(SettlementJournal.MSG_TYPE_RELEASE, (int) drained.msgTypes.get(0));
@@ -263,7 +298,7 @@ public class SettlementJournalTest {
     @Test
     public void commandReleaseWithNoEntriesRoundTrips() {
         final SettlementJournal journal = new SettlementJournal(1 << 16);
-        journal.appendCommandRelease(1L, 2L, 0, 100_000, 0, 0,
+        journal.appendCommandRelease(0L, 1L, 2L, 0, 100_000, 0, 0,
                 new long[0], new long[0], new int[0], new int[0], new int[0]);
         assertEquals(56, drainAll(journal).payloads.get(0).length);
     }
@@ -273,7 +308,7 @@ public class SettlementJournalTest {
         final SettlementJournal journal = new SettlementJournal(1 << 16);
         final int n = SettlementJournal.MAX_RELEASE_ENTRIES + 1;
         try {
-            journal.appendCommandRelease(1L, 2L, 0, 100_000, 0, n,
+            journal.appendCommandRelease(0L, 1L, 2L, 0, 100_000, 0, n,
                     new long[n], new long[n], new int[n], new int[n], new int[n]);
             org.junit.Assert.fail("a 49-entry CommandRelease must be refused");
         } catch (final IllegalArgumentException expected) {
@@ -321,7 +356,7 @@ public class SettlementJournalTest {
 
         final CountDownLatch blockedAppendDone = new CountDownLatch(1);
         final Thread appender = new Thread(() -> {
-            journal.appendTrade(9999, 9999, 1, 1, 1, 2, 2, 100, 100, false, 9999, 1, 2);
+            journal.appendTrade(0L, 9999, 9999, 1, 1, 1, 2, 2, 100, 100, false, 9999, 1, 2);
             blockedAppendDone.countDown();
         }, "test-blocked-appender");
         appender.start();

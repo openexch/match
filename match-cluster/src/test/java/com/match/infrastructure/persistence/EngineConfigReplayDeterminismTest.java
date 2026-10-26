@@ -46,7 +46,7 @@ public class EngineConfigReplayDeterminismTest {
 
         byte[] snapshot() {
             ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
-            int len = SnapshotCodec.serialize(engine, 1L, 0L, buf);
+            engine.setTradeIdGenerator(1L); int len = SnapshotCodec.serialize(engine, 0L, buf);
             return Arrays.copyOf(buf.byteArray(), len);
         }
     }

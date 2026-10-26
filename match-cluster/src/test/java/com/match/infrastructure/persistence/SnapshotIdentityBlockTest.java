@@ -24,14 +24,14 @@ import static org.junit.Assert.*;
  */
 public class SnapshotIdentityBlockTest {
 
-    private static byte[] image(Engine engine, long tradeId) {
+    private static byte[] image(Engine engine) {
         final ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
-        final int len = SnapshotCodec.serialize(engine, tradeId, 0L, buf);
+        final int len = SnapshotCodec.serialize(engine, 0L, buf);
         return Arrays.copyOf(buf.byteArray(), len);
     }
 
     private static byte[] image(BehaviourTwoHarness h) {
-        return image(h.engine, h.publisher.getTradeIdGenerator());
+        return image(h.engine);
     }
 
     /** Harness at FRESH {@code config} plus, optionally, one resting durable CREATE. */
@@ -128,8 +128,9 @@ public class SnapshotIdentityBlockTest {
             final int ledgerLength = 1 + 4 + 4 + 120;
             final int split = p1.length - ledgerLength;
             assertEquals("ledger marker", 2, p1[split]);
+            // RC2 S3: FRESH took journalSeq 1 and the durable outcome 2, so the block carries 3.
             final byte[] expected = concat(concat(Arrays.copyOf(p1, split),
-                    identityBlock(1, 2, 50_000, 12, G, G, 2)), Arrays.copyOfRange(p1, split, p1.length));
+                    identityBlock(1, 2, 50_000, 12, G, G, 3)), Arrays.copyOfRange(p1, split, p1.length));
             assertArrayEquals(expected, p2);
         }
     }
@@ -166,7 +167,7 @@ public class SnapshotIdentityBlockTest {
             // No config block before it: a config-less image followed by the block.
             final Engine legacy = new Engine("direct");
             try {
-                final byte[] noConfig = image(legacy, 1L);
+                final byte[] noConfig = image(legacy);
                 assertFalse(enveloped(noConfig));
                 assertRefused("no config block precedes it",
                         envelope(good, concat(noConfig, identityBlock(1, 2, 50_000, 12, G, G, 2))));

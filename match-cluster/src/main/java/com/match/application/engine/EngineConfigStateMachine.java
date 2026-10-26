@@ -221,7 +221,8 @@ public final class EngineConfigStateMachine {
     private Decision fresh(EngineConfigState incoming) {
         engine.createEnginesFromConfig(incoming);
         final MeIdentity identity = engine.meIdentity();
-        identity.bindFresh(incoming.genesisId, incoming.behaviorVersion);
+        // RC2 S3: bound through the engine so dense allocation (records 1-4) starts here too.
+        engine.bindFreshIdentity(incoming.genesisId, incoming.behaviorVersion);
         final long journalSeq = identity.allocateJournalSeq();
         acceptedCount++;
         final String msg = "[ENGINE-CONFIG] ACCEPTED (fresh, behaviour " + incoming.behaviorVersion

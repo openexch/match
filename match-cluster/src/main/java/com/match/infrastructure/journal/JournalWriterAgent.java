@@ -48,6 +48,8 @@ public final class JournalWriterAgent implements Agent {
     private final JournalCheckpointFile checkpoints;
     private final long segmentFileLength;
     private final IdleStrategy offerIdle = new BackoffIdleStrategy();
+    // RC2 S3 drill seam: doWork does nothing while false. Production passes a constant true.
+    private final java.util.function.BooleanSupplier drainGate;
 
     private AeronArchive archive;
     private ExclusivePublication publication;
@@ -67,6 +69,19 @@ public final class JournalWriterAgent implements Agent {
             final int streamId,
             final JournalCheckpointFile checkpoints,
             final long segmentFileLength) {
+        this(ring, archiveClientContext, channel, streamId, checkpoints, segmentFileLength, () -> true);
+    }
+
+    /** RC2 S3: as above with a drain gate (the kill -9 drill holds it; production never does). */
+    JournalWriterAgent(
+            final OneToOneRingBuffer ring,
+            final Supplier<AeronArchive.Context> archiveClientContext,
+            final String channel,
+            final int streamId,
+            final JournalCheckpointFile checkpoints,
+            final long segmentFileLength,
+            final java.util.function.BooleanSupplier drainGate) {
+        this.drainGate = drainGate;
         this.ring = ring;
         this.archiveClientContext = archiveClientContext;
         this.channel = channel;
@@ -77,6 +92,9 @@ public final class JournalWriterAgent implements Agent {
 
     @Override
     public int doWork() {
+        if (!drainGate.getAsBoolean()) {
+            return 0;
+        }
         if (publication == null) {
             return tryConnect() ? 1 : 0;
         }

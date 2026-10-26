@@ -82,15 +82,14 @@ public final class SnapshotCodec {
     }
 
     /**
-     * Scalars recovered from a snapshot that the caller must apply to its own collaborators
-     * (the {@code Engine}'s order-id generator is applied in-place by {@link #deserialize};
-     * {@code tradeIdGenerator} goes to the event publisher and {@code timerCorrelationId} to
-     * the timer manager).
+     * Scalars recovered from a snapshot. The {@code Engine}'s order-id and (RC2 S3) trade-id
+     * generators are applied in place by {@link #deserialize}; only {@code timerCorrelationId}
+     * is for the caller (the timer manager).
      */
     public static final class Decoded {
         /** Order-id generator value (already applied to the engine by {@link #deserialize}). */
         public final long orderIdGenerator;
-        /** Trade-id generator value — caller must apply to the event publisher. */
+        /** Trade-id generator value (already applied to the engine by {@link #deserialize}; for logs). */
         public final long tradeIdGenerator;
         /** Legacy timer correlation counter — caller applies only if {@link #timerCorrelationIdPresent}. */
         public final long timerCorrelationId;
@@ -122,16 +121,19 @@ public final class SnapshotCodec {
     }
 
     /**
-     * Serialize engine state plus the two externally-held scalars into {@code dst}.
+     * Serialize engine state plus the externally-held timer counter into {@code dst}.
      *
-     * @param engine             matching engine whose order books + order-id generator are written
-     * @param tradeIdGenerator   current trade-id generator value (held by the event publisher)
+     * <p>RC2 S3: the trade-id generator is engine-owned and read from
+     * {@link Engine#getTradeIdGenerator()} (payload offset 8, layout unchanged); the pre-S3
+     * form that took it as an argument is gone, so no second copy can be written.</p>
+     *
+     * @param engine             matching engine whose order books + id generators are written
      * @param timerCorrelationId current timer correlation counter (held by the timer manager)
      * @param dst                destination buffer (an {@code ExpandableArrayBuffer} grows as needed)
      * @return number of bytes written — offer {@code dst, 0, length}
      */
-    public static int serialize(Engine engine, long tradeIdGenerator, long timerCorrelationId,
-                                MutableDirectBuffer dst) {
+    public static int serialize(Engine engine, long timerCorrelationId, MutableDirectBuffer dst) {
+        final long tradeIdGenerator = engine.getTradeIdGenerator();
         int pos = 0;
 
         dst.putLong(pos, engine.getOrderIdGenerator());
@@ -291,8 +293,8 @@ public final class SnapshotCodec {
 
     /**
      * Decode a complete (reassembled) snapshot payload into {@code engine}, restoring its order
-     * books and order-id generator. The trade-id generator and timer correlation counter are
-     * returned in {@link Decoded} for the caller to apply to its publisher / timer manager.
+     * books and its order-id and trade-id generators in place. The timer correlation counter is
+     * returned in {@link Decoded} for the caller to apply to its timer manager.
      *
      * @param src    source buffer
      * @param offset start of the payload within {@code src}
@@ -321,6 +323,7 @@ public final class SnapshotCodec {
 
         final long tradeIdGen = src.getLong(pos);
         pos += 8;
+        engine.setTradeIdGenerator(tradeIdGen);
 
         final int numMarkets = src.getInt(pos);
         pos += 4;
@@ -545,7 +548,8 @@ public final class SnapshotCodec {
             }
             // Only now bind the identity, in both branches.
             if (identityPresent) {
-                engine.meIdentity().restore(meEpoch, nextJournalSeq, behaviorVersion);
+                // RC2 S3: through the engine, which turns dense journalSeq allocation on.
+                engine.restoreIdentity(meEpoch, nextJournalSeq, behaviorVersion);
             }
         } else if (enginesWereEmpty && !parkedMarketIds.isEmpty()) {
             // Config-mode node restoring a snapshot that has market books but NO config block:

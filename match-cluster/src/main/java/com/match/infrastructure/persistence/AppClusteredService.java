@@ -155,7 +155,11 @@ public class AppClusteredService implements ClusteredService {
             journal.bindIdentity(engine.meIdentity());
         }
         eventPublisher.setSettlementJournal(journal);
+        settlementJournal = journal;
     }
+
+    // RC2 S3: the armed journal (null = dark), read by the backpressure gauge only.
+    private volatile com.match.infrastructure.journal.SettlementJournal settlementJournal;
 
     // Store cluster reference for snapshot idle strategy and broadcasting
     private Cluster cluster;
@@ -706,6 +710,15 @@ public class AppClusteredService implements ClusteredService {
                     .gauge("match_engine_me_epoch",
                             "Recorded ME epoch (the genesisId bound by a FRESH at behaviour >= 2); 0 when unbound. Compare as text (identity, not magnitude) (RC2 S2)",
                             () -> engine.meIdentity().meEpoch())
+                    .gauge("match_engine_next_journal_seq",
+                            "The next ME journalSeq this engine will allocate (0 while unbound); minus one is the last journalSeq allocated. Input of the core's rollback precheck (RC2 S3)",
+                            () -> engine.meIdentity().nextJournalSeq())
+                    .counter("match_journal_ring_backpressure_events_total",
+                            "Journal entries that met a full settlement-journal ring at least once (the service thread then blocks); node-local (RC2 S3)",
+                            () -> {
+                                final com.match.infrastructure.journal.SettlementJournal j = settlementJournal;
+                                return j == null ? 0L : j.backpressureEvents();
+                            })
                     .counter("match_engine_config_stale_total",
                             "EngineConfig commands at behaviour >= 2 with configVersion <= the recorded one (RC2 S2)",
                             engineConfigStateMachine::staleCount)
@@ -762,12 +775,15 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_egress_oversize_drops_total",
                             "Egress frames larger than the session publication's max message length (term length / 8), lost for that session; should stay 0",
                             egressOversizeDrops::get)
+                    .counter("match_durable_duplicates_suppressed_total",
+                            "Equal-intent duplicates of a recorded durable command suppressed under behaviour 2: nothing journaled, no journalSeq consumed (RC2 S3 X4)",
+                            engine::suppressedDuplicateCount)
                     .counter("match_dark_command_outcomes_total",
                             "Durable command outcomes applied but not journaled because the settlement journal is off on this node; OMS cannot resolve them from this node",
                             eventPublisher::getDarkCommandOutcomeCount)
                     .counter("match_overflow_rejects_total", "Orders rejected for fixed-point overflow", engine::getOverflowRejectCount)
                     .counter("match_invalid_qty_rejects_total", "Orders rejected for non-positive quantity", engine::getInvalidQuantityRejectCount)
-                    .counter("match_trades_total", "Trades executed (trade id high-water mark)", eventPublisher::getTradeIdGenerator)
+                    .counter("match_trades_total", "Trades executed (trade id high-water mark; engine-owned, RC2 S3)", engine::getTradeIdGenerator)
                     .counter("match_dropped_market_msgs_total", "Lossy market-data egress drops", droppedMessages::get)
                     .counter("match_follower_egress_skipped_total", "Lossy market-data egress skipped on followers (no consumer)", followerSkipped::get)
                     .counter("match_dropped_oms_egress_total", "Reliable OMS egress drops (should stay 0)", droppedOmsEgress::get)
@@ -1234,7 +1250,7 @@ public class AppClusteredService implements ClusteredService {
         // back the scalars we own externally.
         final SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(buf, offset, length, engine);
 
-        eventPublisher.setTradeIdGenerator(decoded.tradeIdGenerator);
+        // RC2 S3: the trade-id generator was restored into the engine in place by the codec.
         System.out.println("[SNAPSHOT] Restored OrderIdGenerator=" + decoded.orderIdGenerator
                 + " TradeIdGenerator=" + decoded.tradeIdGenerator);
 
@@ -1531,9 +1547,9 @@ public class AppClusteredService implements ClusteredService {
         // and decode can never drift. Byte format is identical to the historical inline encoder.
         final ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();
         final long orderId = engine.getOrderIdGenerator();
-        final long tradeId = eventPublisher.getTradeIdGenerator();
+        final long tradeId = engine.getTradeIdGenerator();
         final long timerCorrelationId = timerManager.getCorrelationId();
-        final int pos = SnapshotCodec.serialize(engine, tradeId, timerCorrelationId, buffer);
+        final int pos = SnapshotCodec.serialize(engine, timerCorrelationId, buffer);
 
         System.out.println("[SNAPSHOT] OrderIdGenerator=" + orderId
                 + " TradeIdGenerator=" + tradeId

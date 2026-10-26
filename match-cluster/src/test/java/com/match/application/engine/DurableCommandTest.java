@@ -60,7 +60,7 @@ public class DurableCommandTest {
     }
     @Test public void snapshotRestartRetainsDedupe() {
         long before=engine.getOrderIdGenerator(); send(1,0,0,PRICE);
-        var snapshot=new ExpandableArrayBuffer(); int n=SnapshotCodec.serialize(engine,0,0,snapshot);
+        var snapshot=new ExpandableArrayBuffer(); engine.setTradeIdGenerator(0); int n=SnapshotCodec.serialize(engine, 0, snapshot);
         engine.close(); engine=new Engine("direct"); engine.setEventPublisher(publisher);
         SnapshotCodec.deserialize(snapshot,0,n,engine); demux=new SbeDemuxer(engine);
         send(1,0,0,PRICE); assertEquals(before+1, engine.getOrderIdGenerator());
@@ -132,7 +132,7 @@ public class DurableCommandTest {
     @Test public void retryWithDifferentTifAfterSnapshotRestoreIsTheSameDuplicate() {
         sendV12(1,0,0,PRICE,1,0); entries();
         sendV12(1,0,0,PRICE,2,0); var live=entries().get(0);
-        var snapshot=new ExpandableArrayBuffer(); int n=SnapshotCodec.serialize(engine,0,0,snapshot);
+        var snapshot=new ExpandableArrayBuffer(); engine.setTradeIdGenerator(0); int n=SnapshotCodec.serialize(engine, 0, snapshot);
         engine.close(); engine=new Engine("direct"); engine.setEventPublisher(publisher);
         SnapshotCodec.deserialize(snapshot,0,n,engine); demux=new SbeDemuxer(engine);
         sendV12(1,0,0,PRICE,2,0); var restored=entries().get(0);
@@ -180,7 +180,7 @@ public class DurableCommandTest {
         assertEquals(1,publisher.getDarkCommandOutcomeCount()); assertTrue(entries().isEmpty());
     }
     @Test public void truncatedOrCorruptSnapshotCannotDiscardDedupe() {
-        send(1,0,0,PRICE); var b=new ExpandableArrayBuffer(); int n=SnapshotCodec.serialize(engine,0,0,b);
+        send(1,0,0,PRICE); var b=new ExpandableArrayBuffer(); engine.setTradeIdGenerator(0); int n=SnapshotCodec.serialize(engine, 0, b);
         for(int cut=20;cut<n;cut++) {
             final int len=cut;
             assertThrows(IllegalStateException.class,()->SnapshotCodec.deserialize(b,0,len,engine));
@@ -193,7 +193,7 @@ public class DurableCommandTest {
         var created=engine.acceptDurable(intent(1,0,0,PRICE,0),1000);
         var change=intent(2,2,created.orderId(),PRICE+100000000,0);
         var replaced=engine.acceptDurable(change,2000);
-        var b=new ExpandableArrayBuffer(); int n=SnapshotCodec.serialize(engine,0,0,b);
+        var b=new ExpandableArrayBuffer(); engine.setTradeIdGenerator(0); int n=SnapshotCodec.serialize(engine, 0, b);
         engine.close(); engine=new Engine("direct"); engine.setEventPublisher(publisher);
         assertEquals(n,SnapshotCodec.deserialize(b,0,n,engine).bytesConsumed);
         assertEquals(replaced,engine.acceptDurable(change,3000));
@@ -244,8 +244,10 @@ public class DurableCommandTest {
             assertEquals(engine.acceptDurable(c,1000), dark.acceptDurable(c,1000));
             engine.setCurrentLogPosition(256); dark.setCurrentLogPosition(256);
             assertEquals(engine.acceptDurable(c,2000), dark.acceptDurable(c,2000));
-            var a = new ExpandableArrayBuffer(); int n = SnapshotCodec.serialize(engine,0,0,a);
-            var b = new ExpandableArrayBuffer(); int m = SnapshotCodec.serialize(dark,0,0,b);
+            // RC2 S3 review FIX-1: the tradeId generator is engine state now; compare it, never zero it.
+            assertEquals(engine.getTradeIdGenerator(), dark.getTradeIdGenerator());
+            var a = new ExpandableArrayBuffer(); int n = SnapshotCodec.serialize(engine, 0, a);
+            var b = new ExpandableArrayBuffer(); int m = SnapshotCodec.serialize(dark, 0, b);
             assertEquals(n, m);
             byte[] x = new byte[n], y = new byte[m]; a.getBytes(0,x); b.getBytes(0,y);
             assertArrayEquals(x, y);

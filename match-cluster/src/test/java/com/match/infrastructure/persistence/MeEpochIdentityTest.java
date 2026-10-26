@@ -48,7 +48,7 @@ public class MeEpochIdentityTest {
             originalFrames = original.apply(log, 0, log.size());
             assertEquals(G, original.h.engine.meIdentity().meEpoch());
             nextSeq = original.h.engine.meIdentity().nextJournalSeq();
-            assertEquals("FRESH took 1, the BUMP 2", 3L, nextSeq);
+            assertEquals("FRESH 1, five records, BUMP 7", 8L, nextSeq);
             image = original.snapshot();
         }
 

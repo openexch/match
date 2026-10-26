@@ -35,10 +35,12 @@ public class ApplyFailureFenceTest {
                 if (failure instanceof RuntimeException e) throw e;
                 throw (Error) failure;
             }
-            public boolean publishTradeExecution(int m, long ts, long to, long tu, long mo,
-                    long mu, long p, long q, boolean buy, long toms, long moms, long seq) {
+            @Override
+            public boolean publishTradeExecution(int m, long ts, long tradeId, long journalSeq, long to,
+                    long tu, long mo, long mu, long p, long q, boolean buy, long toms, long moms, long seq) {
                 return fail();
             }
+            @Override
             public boolean publishOrderStatusUpdate(int m, long ts, long order, long user,
                     int status, long remaining, long filled, long price, boolean buy,
                     long oms, int reason, long seq) {

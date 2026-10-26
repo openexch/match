@@ -84,6 +84,21 @@ final class BehaviourTwoLog {
         return durable(idLow, 0, userId, omsOrderId, 0L, side, price, qty, 0, 0L);
     }
 
+    /** A legacy-lane CreateOrder (template 1), LIMIT. */
+    static byte[] createOrder(long userId, long omsOrderId, int side, double price, double qty) {
+        final UnsafeBuffer buffer = new UnsafeBuffer(new byte[256]);
+        final CreateOrderEncoder encoder = new CreateOrderEncoder();
+        encoder.wrapAndApplyHeader(buffer, 0, new MessageHeaderEncoder())
+                .userId(userId)
+                .price(FixedPoint.fromDouble(price))
+                .quantity(FixedPoint.fromDouble(qty))
+                .marketId(BehaviourTwoHarness.MARKET)
+                .orderType(OrderType.LIMIT)
+                .orderSide(side == 0 ? OrderSide.BID : OrderSide.ASK)
+                .omsOrderId(omsOrderId);
+        return Arrays.copyOf(buffer.byteArray(), MessageHeaderEncoder.ENCODED_LENGTH + encoder.encodedLength());
+    }
+
     static byte[] cancelOrder(long userId, long orderId) {
         final UnsafeBuffer buffer = new UnsafeBuffer(new byte[256]);
         final CancelOrderEncoder encoder = new CancelOrderEncoder();
@@ -104,6 +119,23 @@ final class BehaviourTwoLog {
         return copy;
     }
 
+    /** Byte-for-byte equality of two frame lists, with the frame index in the message. */
+    static void assertFramesEqual(String what, List<byte[]> expected, List<byte[]> actual) {
+        org.junit.Assert.assertEquals(what + ": frame count", expected.size(), actual.size());
+        for (int i = 0; i < expected.size(); i++) {
+            org.junit.Assert.assertArrayEquals(what + ": frame " + i, expected.get(i), actual.get(i));
+        }
+    }
+
+    /** RC2 S3 frame invariant (contract 7.2): journalSeq 0 iff meEpoch 0, on every frame. */
+    static void assertSeqEpochInvariant(List<byte[]> frames) {
+        for (int i = 0; i < frames.size(); i++) {
+            final byte[] f = frames.get(i);
+            org.junit.Assert.assertEquals("frame " + i + ": (journalSeq == 0) == (meEpoch == 0)",
+                    BehaviourTwoHarness.journalSeqOf(f) == 0, BehaviourTwoHarness.meEpochOf(f) == 0);
+        }
+    }
+
     /** One replica: harness (engine, publisher, journal, state machine) + the real demuxer. */
     static final class Replica implements AutoCloseable {
         final BehaviourTwoHarness h;
@@ -117,9 +149,18 @@ final class BehaviourTwoLog {
             this(engine, com.match.infrastructure.generated.MessageHeaderDecoder.SCHEMA_VERSION);
         }
 
+        /** RC2 S3: a replica of the given shape (journaled, dark, ring-less or sink-less). */
+        Replica(Engine engine, BehaviourTwoHarness.Shape shape) {
+            this(engine, com.match.infrastructure.generated.MessageHeaderDecoder.SCHEMA_VERSION, shape);
+        }
+
         /** A replica whose jar accepts header versions up to {@code jarVersion} (a later jar). */
         Replica(Engine engine, int jarVersion) {
-            h = new BehaviourTwoHarness(engine);
+            this(engine, jarVersion, BehaviourTwoHarness.Shape.JOURNALED);
+        }
+
+        Replica(Engine engine, int jarVersion, BehaviourTwoHarness.Shape shape) {
+            h = new BehaviourTwoHarness(engine, shape);
             demuxer = new SbeDemuxer(engine, jarVersion);
             demuxer.setEngineConfigHandler(config -> h.decisions.add(h.sm.onEngineConfig(config)));
             demuxer.setPreConfigOrderRejectHandler((m, u, o, b, t) -> { });
@@ -143,16 +184,15 @@ final class BehaviourTwoLog {
 
         byte[] snapshot() {
             final ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
-            final int len = SnapshotCodec.serialize(h.engine, h.publisher.getTradeIdGenerator(), 0L, buf);
+            final int len = SnapshotCodec.serialize(h.engine, 0L, buf);
             return Arrays.copyOf(buf.byteArray(), len);
         }
 
         /** A new config-mode replica restored from this one's snapshot bytes. */
         static Replica restoredFrom(byte[] image) {
             final Replica r = new Replica();
-            final SnapshotCodec.Decoded decoded =
-                    SnapshotCodec.deserialize(new UnsafeBuffer(image), 0, image.length, r.h.engine);
-            r.h.publisher.setTradeIdGenerator(decoded.tradeIdGenerator);
+            // RC2 S3: the codec restores the tradeId generator into the engine in place.
+            SnapshotCodec.deserialize(new UnsafeBuffer(image), 0, image.length, r.h.engine);
             return r;
         }
 

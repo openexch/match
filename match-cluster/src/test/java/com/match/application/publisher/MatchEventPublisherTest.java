@@ -99,16 +99,8 @@ public class MatchEventPublisherTest {
 
     // ==================== Snapshot Support ====================
 
-    @Test
-    public void tradeIdGeneratorDefaultStartsAt1() {
-        assertEquals(1L, publisher.getTradeIdGenerator());
-    }
-
-    @Test
-    public void setAndGetTradeIdGenerator() {
-        publisher.setTradeIdGenerator(1000L);
-        assertEquals(1000L, publisher.getTradeIdGenerator());
-    }
+    // RC2 S3: the trade-id generator moved to the engine (EngineTradeIdTest); the publisher holds
+    // no counter and carries the engine's tradeId.
 
     // ==================== Trade Execution Publishing ====================
 
@@ -117,7 +109,7 @@ public class MatchEventPublisherTest {
         publisher.start();
 
         boolean result = publisher.publishTradeExecution(
-            MARKET_ID, 12345L, 10L, 100L, 20L, 200L, 5000L, 250L, true, 0L, 0L, 0L);
+            MARKET_ID, 12345L, 7L, 0L, 10L, 100L, 20L, 200L, 5000L, 250L, true, 0L, 0L, 0L);
 
         assertTrue("Publish should succeed", result);
         Thread.sleep(200);
@@ -136,20 +128,20 @@ public class MatchEventPublisherTest {
     public void publishTradeExecutionToUnknownMarketReturnsFalse() {
         publisher.start();
         boolean result = publisher.publishTradeExecution(
-            999, 1000L, 1L, 1L, 2L, 2L, 100L, 10L, true, 0L, 0L, 0L);
+            999, 1000L, 7L, 0L, 1L, 1L, 2L, 2L, 100L, 10L, true, 0L, 0L, 0L);
         assertFalse("Unknown market should return false", result);
     }
 
     @Test
-    public void tradeIdGeneratorIncrementsOnPublish() throws Exception {
+    public void tradeIdIsCarriedFromTheEngineNotAllocated() throws Exception {
         publisher.start();
-        long before = publisher.getTradeIdGenerator();
 
-        publisher.publishTradeExecution(MARKET_ID, 100L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L);
-        Thread.sleep(200);
+        publisher.publishTradeExecution(MARKET_ID, 100L, 41L, 0L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L);
+        publisher.publishTradeExecution(MARKET_ID, 101L, 41L, 0L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L);
+        pollUntil(() -> handler.events.size() >= 2, 3000, "both trades delivered");
 
-        // After one publish, generator should have incremented
-        assertEquals(before + 1, publisher.getTradeIdGenerator());
+        assertEquals("the engine's tradeId, unchanged", 41L, handler.events.get(0).tradeId);
+        assertEquals("no publisher-side increment", 41L, handler.events.get(1).tradeId);
     }
 
     // ==================== Order Book Level Update Publishing ====================
@@ -246,7 +238,7 @@ public class MatchEventPublisherTest {
     public void multipleEventsDeliveredInOrder() throws Exception {
         publisher.start();
 
-        publisher.publishTradeExecution(MARKET_ID, 100L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L);
+        publisher.publishTradeExecution(MARKET_ID, 100L, 7L, 0L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L);
         publisher.publishOrderBookLevelUpdate(MARKET_ID, 200L, 60L, 20L, 3, false);
         publisher.publishOrderStatusUpdate(MARKET_ID, 300L, 1L, 1L, OrderStatusType.FILLED, 0L, 10L, 50L, true, 0L, 0, 0L);
 
@@ -266,8 +258,8 @@ public class MatchEventPublisherTest {
         publisher.initMarket(2, handler2);
         publisher.start();
 
-        publisher.publishTradeExecution(MARKET_ID, 100L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L);
-        publisher.publishTradeExecution(2, 200L, 3L, 3L, 4L, 4L, 70L, 5L, false, 0L, 0L, 0L);
+        publisher.publishTradeExecution(MARKET_ID, 100L, 7L, 0L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L);
+        publisher.publishTradeExecution(2, 200L, 7L, 0L, 3L, 3L, 4L, 4L, 70L, 5L, false, 0L, 0L, 0L);
 
         Thread.sleep(200);
 
@@ -306,7 +298,7 @@ public class MatchEventPublisherTest {
             final int burst = 1000;
             for (int i = 0; i < burst; i++) {
                 assertTrue("trade publish " + i + " should claim a slot",
-                        p.publishTradeExecution(MARKET_ID, i, i, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L));
+                        p.publishTradeExecution(MARKET_ID, i, 7L, 0L, i, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L));
                 assertTrue("book publish " + i + " should claim a slot",
                         p.publishOrderBookLevelUpdate(MARKET_ID, i, 60L, 20L, 3, false));
                 assertTrue("status publish " + i + " should claim a slot",
@@ -342,13 +334,13 @@ public class MatchEventPublisherTest {
 
             // First event: handler throws. The Disruptor calls handleEventException, which
             // swallows + counts it, then advances past the failed event.
-            p.publishTradeExecution(MARKET_ID, 111L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L);
+            p.publishTradeExecution(MARKET_ID, 111L, 7L, 0L, 1L, 1L, 2L, 2L, 50L, 10L, true, 0L, 0L, 0L);
             pollUntil(() -> p.disruptorExceptionCount() >= 1, 3000,
                     "disruptorExceptionCount should reach >= 1 after the handler throws");
             assertTrue("swallowed exception was counted", p.disruptorExceptionCount() >= 1);
 
             // Second event: the publisher thread must have survived the throw and keep working.
-            p.publishTradeExecution(MARKET_ID, 222L, 3L, 3L, 4L, 4L, 60L, 5L, false, 0L, 0L, 0L);
+            p.publishTradeExecution(MARKET_ID, 222L, 7L, 0L, 3L, 3L, 4L, 4L, 60L, 5L, false, 0L, 0L, 0L);
             pollUntil(() -> !throwing.capturedTimestamps.isEmpty(), 3000,
                     "publisher thread should still deliver events after swallowing an exception");
             assertEquals("the surviving thread delivered the post-exception event",
@@ -381,6 +373,7 @@ public class MatchEventPublisherTest {
         long timestamp;
         long price;
         long quantity;
+        long tradeId;
         boolean takerIsBuy;
         boolean isSnapshot;
     }
@@ -401,6 +394,7 @@ public class MatchEventPublisherTest {
             copy.timestamp = event.getTimestamp();
             copy.price = event.getPrice();
             copy.quantity = event.getQuantity();
+            copy.tradeId = event.getTradeId();
             copy.takerIsBuy = event.isTakerIsBuy();
             copy.isSnapshot = event.isSnapshot();
             events.add(copy);
