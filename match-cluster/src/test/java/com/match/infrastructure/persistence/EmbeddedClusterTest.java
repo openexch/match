@@ -59,6 +59,10 @@ public class EmbeddedClusterTest {
     // periodic heartbeats don't inflate pollEgress counts in other tests)
     private static final java.util.concurrent.atomic.AtomicLong clusterHeartbeatCount =
             new java.util.concurrent.atomic.AtomicLong(0);
+    // RC2 S1: the last keep-warm's header version, root block and v12 meEpoch (Long.MIN_VALUE = none yet).
+    private static volatile int lastHeartbeatVersion = -1;
+    private static volatile int lastHeartbeatBlock = -1;
+    private static volatile long lastHeartbeatMeEpoch = Long.MIN_VALUE;
 
     // SBE encoders (reused)
     private static final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
@@ -153,6 +157,11 @@ public class EmbeddedClusterTest {
                     listenerHeaderDecoder.wrap(buffer, offset);
                     if (listenerHeaderDecoder.schemaId() == 1
                             && listenerHeaderDecoder.templateId() == ClusterHeartbeatDecoder.TEMPLATE_ID) {
+                        final ClusterHeartbeatDecoder hb = new ClusterHeartbeatDecoder()
+                                .wrapAndApplyHeader(buffer, offset, listenerHeaderDecoder);
+                        lastHeartbeatVersion = listenerHeaderDecoder.version();
+                        lastHeartbeatBlock = listenerHeaderDecoder.blockLength();
+                        lastHeartbeatMeEpoch = hb.meEpoch();
                         clusterHeartbeatCount.incrementAndGet();
                         return;
                     }
@@ -525,6 +534,10 @@ public class EmbeddedClusterTest {
         assertTrue("Idle client must receive periodic ClusterHeartbeat egress keep-warm "
                         + "(got " + (clusterHeartbeatCount.get() - before) + " in 5s, expected >= 2)",
                 clusterHeartbeatCount.get() >= before + 2);
+        // RC2 S1 (contract 3.4 / 8.2): the v12 keep-warm carries meEpoch, encoded 0 until S2.
+        assertEquals("keep-warm header version", 12, lastHeartbeatVersion);
+        assertEquals("keep-warm root block", ClusterHeartbeatDecoder.BLOCK_LENGTH, lastHeartbeatBlock);
+        assertEquals("keep-warm meEpoch in S1", 0L, lastHeartbeatMeEpoch);
 
         System.out.println("Egress keep-warm test passed: "
                 + (clusterHeartbeatCount.get() - before) + " heartbeats in idle period.");

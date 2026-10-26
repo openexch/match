@@ -7,7 +7,7 @@ import java.util.Comparator;
 /**
  * Immutable, replicated engine-creation config (slice C of behaviour versioning).
  *
- * <p>This is the in-memory form of a logged {@code EngineConfig} command (SBE v10, template 8):
+ * <p>This is the in-memory form of a logged {@code EngineConfig} command (SBE v10+, template 8):
  * the set of values a replica needs to create its matching engines — implementation, capacity,
  * match caps, and the market table. It is REPLICATED STATE: it only ever comes from the cluster
  * log (or from a snapshot that recorded it), never from a node's env, and it is part of the
@@ -42,6 +42,25 @@ public final class EngineConfigState {
     /** Sorted ascending by marketId (normalized in {@link #of}). Never null; may be empty (invalid). */
     public final MarketDef[] markets;
 
+    // ---- order-schema v12 (RC2 S1 contract 3.3) ----
+    // Carried as decoded (pre-12 frames map to the defaults below). In S1 these four are EXCLUDED
+    // from equalsConfig, equalsIgnoringVersion, canonicalString/canonicalHash, toString and the
+    // snapshot block, and no structural rule applies to them; S2 moves them into the decision
+    // table and a trailing snapshot block.
+    /** Pre-12 default of {@link #behaviorVersion}. */
+    public static final long DEFAULT_BEHAVIOR_VERSION = 1L;
+    /** Pre-12 default of {@link #commandLedgerCapacity}. */
+    public static final long DEFAULT_COMMAND_LEDGER_CAPACITY = 100_000L;
+    /** Pre-12 default of {@link #genesisId}. */
+    public static final long DEFAULT_GENESIS_ID = 0L;
+    /** Pre-12 default of {@link #maxWireVersion}. */
+    public static final long DEFAULT_MAX_WIRE_VERSION = 0L;
+
+    public final long behaviorVersion;       // uint32 on the wire
+    public final long commandLedgerCapacity; // uint32 on the wire
+    public final long genesisId;             // int64 on the wire
+    public final long maxWireVersion;        // uint16 on the wire
+
     /** One market's engine-creation values. Immutable. */
     public static final class MarketDef {
         public final int marketId;
@@ -74,13 +93,19 @@ public final class EngineConfigState {
     }
 
     private EngineConfigState(long configVersion, String impl, long bookCapacity,
-                              long maxMatchesPerOrder, long maxOrdersPerLevel, MarketDef[] markets) {
+                              long maxMatchesPerOrder, long maxOrdersPerLevel, MarketDef[] markets,
+                              long behaviorVersion, long commandLedgerCapacity, long genesisId,
+                              long maxWireVersion) {
         this.configVersion = configVersion;
         this.impl = impl;
         this.bookCapacity = bookCapacity;
         this.maxMatchesPerOrder = maxMatchesPerOrder;
         this.maxOrdersPerLevel = maxOrdersPerLevel;
         this.markets = markets;
+        this.behaviorVersion = behaviorVersion;
+        this.commandLedgerCapacity = commandLedgerCapacity;
+        this.genesisId = genesisId;
+        this.maxWireVersion = maxWireVersion;
     }
 
     /**
@@ -90,10 +115,22 @@ public final class EngineConfigState {
     public static EngineConfigState of(long configVersion, String impl, long bookCapacity,
                                        long maxMatchesPerOrder, long maxOrdersPerLevel,
                                        MarketDef[] markets) {
+        return of(configVersion, impl, bookCapacity, maxMatchesPerOrder, maxOrdersPerLevel, markets,
+                DEFAULT_BEHAVIOR_VERSION, DEFAULT_COMMAND_LEDGER_CAPACITY, DEFAULT_GENESIS_ID,
+                DEFAULT_MAX_WIRE_VERSION);
+    }
+
+    /** {@link #of} with the four v12 values (carried, excluded from every comparison in S1). */
+    public static EngineConfigState of(long configVersion, String impl, long bookCapacity,
+                                       long maxMatchesPerOrder, long maxOrdersPerLevel,
+                                       MarketDef[] markets, long behaviorVersion,
+                                       long commandLedgerCapacity, long genesisId,
+                                       long maxWireVersion) {
         final MarketDef[] sorted = markets == null ? new MarketDef[0] : markets.clone();
         Arrays.sort(sorted, Comparator.comparingInt(m -> m.marketId));
         return new EngineConfigState(configVersion, impl, bookCapacity,
-                maxMatchesPerOrder, maxOrdersPerLevel, sorted);
+                maxMatchesPerOrder, maxOrdersPerLevel, sorted, behaviorVersion,
+                commandLedgerCapacity, genesisId, maxWireVersion);
     }
 
     /**

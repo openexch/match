@@ -71,13 +71,26 @@ public class Engine {
             com.match.domain.commands.DurableOrderIntent c, long timestamp) {
         var prior = commandLedger.get(c);
         if (prior != null) {
-            var result = prior.intent().equals(c) ? prior : commandRejection(c, timestamp, 2);
-            eventPublisher.publishCommandOutcome(currentLogPosition, result);
+            // Behaviour 1: the 12-field compare. The v12 fields (timeInForce, expectedOldRemaining)
+            // are not in the ledger snapshot, so they can not decide DUPLICATE vs CONFLICT.
+            if (prior.intent().sameCommandBehaviour1(c)) {
+                // The journaled record 3 echoes THIS frame's intent (12 fields equal to the prior's)
+                // so its v12 tail is a function of the log entry, not of whether this node
+                // restored the prior from a snapshot.
+                eventPublisher.publishCommandOutcome(currentLogPosition,
+                    prior.intent().equals(c) ? prior : new com.match.domain.commands.DurableCommandOutcome(
+                        c, prior.appliedPosition(), prior.timestamp(), prior.orderId(), prior.status(),
+                        prior.reason(), prior.oldCancelled(), prior.result()),
+                    commandLedger.size());
+                return prior;
+            }
+            var result = commandRejection(c, timestamp, 2);
+            eventPublisher.publishCommandOutcome(currentLogPosition, result, commandLedger.size());
             return result;
         }
         if (commandLedger.size() >= DurableCommandLedger.MAX_ENTRIES) {
             var result = commandRejection(c, timestamp, 3);
-            eventPublisher.publishCommandOutcome(currentLogPosition, result);
+            eventPublisher.publishCommandOutcome(currentLogPosition, result, commandLedger.size());
             return result;
         }
         int reject = 0;
@@ -114,7 +127,8 @@ public class Engine {
             } finally { applyingIntent=null; }
         }
         // Publisher failure is an application failure: service halts, replay restores the whole command.
-        eventPublisher.publishCommandOutcome(currentLogPosition,result);
+        // ledgerSize on record 3 is the size AFTER this outcome is recorded (the next line).
+        eventPublisher.publishCommandOutcome(currentLogPosition,result,commandLedger.size()+1);
         commandLedger.record(result);
         return result;
     }

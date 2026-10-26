@@ -60,6 +60,10 @@ public class SbeDemuxer {
     private long schemaRejectCount;  // G-2: header schemaId/version outside this build's supported range
     private long decodeRejectCount;  // A-4: a body decode threw (e.g. out-of-range enum byte) — poison input, expected
     private long applyErrorCount;
+    // RC2 S1: frames of a template this build decodes for bounds and class but does not serve yet
+    // (order-schema v12 ReleaseCommandIds 10, served from S4). Counted, never applied. Same
+    // discipline as the reject counters: service thread only, not replicated, not snapshotted.
+    private long unservedTemplateCount;
     // Service-thread only. Once a command may have partially applied, this instance cannot
     // establish another applied prefix. Decode-only poison never enters this state.
     private boolean applying;
@@ -77,6 +81,46 @@ public class SbeDemuxer {
     // pre-v9 frames in any replayable log are provably gone — never as a side effect of a
     // routine schema bump. Package-private so the gate tests track the real constant.
     static final int MIN_SUPPORTED_SCHEMA_VERSION = 9;
+
+    // First header version whose root blocks carry the v12 appended fields (RC2 S1 contract 3).
+    static final int V12 = 12;
+    // Pre-12 root blocks of the two templates that grew in v12. The generated BLOCK_LENGTH
+    // constants are the v12 values (DurableOrderCommand 80, EngineConfig 35).
+    static final int DURABLE_ORDER_COMMAND_PRE_V12_BLOCK_LENGTH = 71;
+    static final int ENGINE_CONFIG_PRE_V12_BLOCK_LENGTH = 17;
+
+    /**
+     * Minimum root block per (template, header version): the frame-bounds rule of the RC2 S1
+     * contract section 3. Templates 9 and 8 grew in v12, so their minimum depends on the header
+     * version (9: 71 for v9..v11, 80 for v12; 8: 17 for v9..v11, 35 for v12): a v12 header
+     * carrying a pre-12 block is a frame-bounds reject, and a pre-12 frame is never held to the
+     * v12 length. Every other template's fixed prefix is identical across the supported range.
+     * 0 for a template this build does not decode.
+     */
+    static int minimumBlockLength(final int templateId, final int version) {
+        switch (templateId) {
+            case com.match.infrastructure.generated.DurableOrderCommandDecoder.TEMPLATE_ID:
+                return version >= V12
+                        ? com.match.infrastructure.generated.DurableOrderCommandDecoder.BLOCK_LENGTH
+                        : DURABLE_ORDER_COMMAND_PRE_V12_BLOCK_LENGTH;
+            case com.match.infrastructure.generated.EngineConfigDecoder.TEMPLATE_ID:
+                return version >= V12
+                        ? com.match.infrastructure.generated.EngineConfigDecoder.BLOCK_LENGTH
+                        : ENGINE_CONFIG_PRE_V12_BLOCK_LENGTH;
+            case com.match.infrastructure.generated.ReleaseCommandIdsDecoder.TEMPLATE_ID:
+                return com.match.infrastructure.generated.ReleaseCommandIdsDecoder.BLOCK_LENGTH;
+            case CreateOrderDecoder.TEMPLATE_ID:
+                return CreateOrderDecoder.BLOCK_LENGTH;
+            case CancelOrderDecoder.TEMPLATE_ID:
+                return CancelOrderDecoder.BLOCK_LENGTH;
+            case UpdateOrderDecoder.TEMPLATE_ID:
+                return UpdateOrderDecoder.BLOCK_LENGTH;
+            case com.match.infrastructure.generated.RequestOpenOrdersSnapshotDecoder.TEMPLATE_ID:
+                return com.match.infrastructure.generated.RequestOpenOrdersSnapshotDecoder.BLOCK_LENGTH;
+            default:
+                return 0;
+        }
+    }
 
     // Loud-log the first reject of each kind, then one in every REJECT_LOG_INTERVAL, so a
     // storm of poison frames cannot flood the log. Mirrors EgressSessionMetrics.shouldLog.
@@ -179,25 +223,25 @@ public class SbeDemuxer {
 
         // Check the declared frame, not the backing receive buffer (which can contain old
         // commands beyond length). Explicit checks remain effective with Agrona bounds checks
-        // disabled. The known fixed prefixes are identical throughout supported versions 9..10.
+        // disabled. The minimum root block is a function of (template, header version): templates
+        // 9 and 8 grew in v12, every other known prefix is identical across versions 9..12
+        // (minimumBlockLength, RC2 S1 contract section 3 frame-bounds rule).
         final int block = headerDecoder.blockLength();
-        final int minimum = switch (headerDecoder.templateId()) {
-            case com.match.infrastructure.generated.DurableOrderCommandDecoder.TEMPLATE_ID ->
-                    com.match.infrastructure.generated.DurableOrderCommandDecoder.BLOCK_LENGTH;
-            case CreateOrderDecoder.TEMPLATE_ID -> CreateOrderDecoder.BLOCK_LENGTH;
-            case CancelOrderDecoder.TEMPLATE_ID -> CancelOrderDecoder.BLOCK_LENGTH;
-            case UpdateOrderDecoder.TEMPLATE_ID -> UpdateOrderDecoder.BLOCK_LENGTH;
-            case com.match.infrastructure.generated.RequestOpenOrdersSnapshotDecoder.TEMPLATE_ID ->
-                    com.match.infrastructure.generated.RequestOpenOrdersSnapshotDecoder.BLOCK_LENGTH;
-            case com.match.infrastructure.generated.EngineConfigDecoder.TEMPLATE_ID ->
-                    com.match.infrastructure.generated.EngineConfigDecoder.BLOCK_LENGTH;
-            default -> 0;
-        };
+        final int minimum = minimumBlockLength(headerDecoder.templateId(), version);
         if (block < minimum || block > length - MessageHeaderDecoder.ENCODED_LENGTH) {
             rejectFrameBounds();
             return;
         }
-        if (headerDecoder.templateId() == com.match.infrastructure.generated.EngineConfigDecoder.TEMPLATE_ID) {
+        // Group bounds. The group header sits after the frame's OWN root block, so a v11
+        // EngineConfig's group is found at 8 + 17 and a v12 one's at 8 + 35.
+        final int groupEntryMinimum = switch (headerDecoder.templateId()) {
+            case com.match.infrastructure.generated.EngineConfigDecoder.TEMPLATE_ID ->
+                    com.match.infrastructure.generated.EngineConfigDecoder.MarketsDecoder.sbeBlockLength();
+            case com.match.infrastructure.generated.ReleaseCommandIdsDecoder.TEMPLATE_ID ->
+                    com.match.infrastructure.generated.ReleaseCommandIdsDecoder.ReleasesDecoder.sbeBlockLength();
+            default -> 0;
+        };
+        if (groupEntryMinimum > 0) {
             final int groupOffset = MessageHeaderDecoder.ENCODED_LENGTH + block;
             if (length - groupOffset < 4) {
                 rejectFrameBounds();
@@ -205,7 +249,7 @@ public class SbeDemuxer {
             }
             final int groupBlock = Short.toUnsignedInt(frame.getShort(groupOffset, ByteOrder.LITTLE_ENDIAN));
             final int count = Short.toUnsignedInt(frame.getShort(groupOffset + 2, ByteOrder.LITTLE_ENDIAN));
-            if (groupBlock < com.match.infrastructure.generated.EngineConfigDecoder.MarketsDecoder.sbeBlockLength()
+            if (groupBlock < groupEntryMinimum
                     || (long) groupBlock * count > length - groupOffset - 4) {
                 rejectFrameBounds();
                 return;
@@ -226,9 +270,27 @@ public class SbeDemuxer {
                     if (version < 11) { rejectFrameBounds(); break; }
                     var d = new com.match.infrastructure.generated.DurableOrderCommandDecoder()
                         .wrapAndApplyHeader(frame,0,headerDecoder);
+                    // Null before range (RC2 S1 contract section 3): a pre-12 header maps the two v12
+                    // fields to 0/0 and runs NO range check (the decoder would return the SBE null);
+                    // a v12 header reads them and range-checks (poison = decode reject below).
+                    final int timeInForce;
+                    final long expectedOldRemaining;
+                    if (version < V12) {
+                        timeInForce = 0;
+                        expectedOldRemaining = 0L;
+                    } else {
+                        timeInForce = d.timeInForce();
+                        if (timeInForce > 2) {
+                            throw new IllegalArgumentException("timeInForce " + timeInForce);
+                        }
+                        expectedOldRemaining = d.expectedOldRemaining();
+                        if (expectedOldRemaining < 0) {
+                            throw new IllegalArgumentException("expectedOldRemaining " + expectedOldRemaining);
+                        }
+                    }
                     var intent = new com.match.domain.commands.DurableOrderIntent(d.commandIdHigh(),d.commandIdLow(),
                         d.userId(),d.omsOrderId(),d.oldOrderId(),d.price(),d.quantity(),d.budget(),d.marketId(),
-                        d.commandKind(),d.orderType(),d.orderSide());
+                        d.commandKind(),d.orderType(),d.orderSide(),timeInForce,expectedOldRemaining);
                     applying = true;
                     engine.acceptDurable(intent,timestamp);
                     break;
@@ -275,7 +337,13 @@ public class SbeDemuxer {
                     // allocation is fine. Decode failures (poison enum byte, truncation) fall
                     // into the SAME non-throwing catch blocks below as every other template
                     // (the #202 pattern): counted, loud-logged, dropped — never rethrown.
-                    handleEngineConfig(frame, 0);
+                    handleEngineConfig(frame, 0, version);
+                    break;
+
+                case com.match.infrastructure.generated.ReleaseCommandIdsDecoder.TEMPLATE_ID:
+                    // RC2 S1: defined and bounds-checked above, served from S4 (behaviour 2).
+                    // Counted, never applied: the command ledger is untouched, no egress.
+                    countUnserved();
                     break;
 
                 default:
@@ -309,6 +377,20 @@ public class SbeDemuxer {
 
     public long createOrderCount() {
         return createOrderCount;
+    }
+
+    private void countUnserved() {
+        final long n = ++unservedTemplateCount;
+        if (shouldLogReject(n)) {
+            System.err.println("INGRESS UNSERVED: templateId=" + headerDecoder.templateId()
+                    + " is defined in this schema but not served by this build; unservedTemplates=" + n);
+        }
+    }
+
+    /** Scrapeable (match_ingress_unserved_templates_total): frames of a defined but not yet served
+     *  template (v12 ReleaseCommandIds 10 in S1), counted and never applied. */
+    public long unservedTemplateCount() {
+        return unservedTemplateCount;
     }
 
     private void rejectFrameBounds() {
@@ -392,13 +474,30 @@ public class SbeDemuxer {
      * SEMANTIC validity (capacity ranges, duplicate markets, price bands) is the state machine's
      * deterministic reject, so it is counted apart from decode drops.
      */
-    private void handleEngineConfig(DirectBuffer buffer, int offset) {
+    private void handleEngineConfig(DirectBuffer buffer, int offset, int version) {
         engineConfigDecoder.wrapAndApplyHeader(buffer, offset, headerDecoder);
         final long configVersion = engineConfigDecoder.configVersion();
         final String impl = toEngineImplName(engineConfigDecoder.impl());
         final long bookCapacity = engineConfigDecoder.bookCapacity();
         final long maxMatchesPerOrder = engineConfigDecoder.maxMatchesPerOrder();
         final long maxOrdersPerLevel = engineConfigDecoder.maxOrdersPerLevel();
+        // v12 root fields (RC2 S1 contract 3.3), null before range: a pre-12 header maps the
+        // defaults without reading; a v12 header reads them as encoded (no S1 range rule).
+        final long behaviorVersion;
+        final long commandLedgerCapacity;
+        final long genesisId;
+        final long maxWireVersion;
+        if (version < V12) {
+            behaviorVersion = com.match.application.engine.EngineConfigState.DEFAULT_BEHAVIOR_VERSION;
+            commandLedgerCapacity = com.match.application.engine.EngineConfigState.DEFAULT_COMMAND_LEDGER_CAPACITY;
+            genesisId = com.match.application.engine.EngineConfigState.DEFAULT_GENESIS_ID;
+            maxWireVersion = com.match.application.engine.EngineConfigState.DEFAULT_MAX_WIRE_VERSION;
+        } else {
+            behaviorVersion = engineConfigDecoder.behaviorVersion();
+            commandLedgerCapacity = engineConfigDecoder.commandLedgerCapacity();
+            genesisId = engineConfigDecoder.genesisId();
+            maxWireVersion = engineConfigDecoder.maxWireVersion();
+        }
 
         final java.util.ArrayList<com.match.application.engine.EngineConfigState.MarketDef> defs =
                 new java.util.ArrayList<>();
@@ -411,7 +510,8 @@ public class SbeDemuxer {
         if (engineConfigHandler != null) {
             final var config = com.match.application.engine.EngineConfigState.of(
                     configVersion, impl, bookCapacity, maxMatchesPerOrder, maxOrdersPerLevel,
-                    defs.toArray(new com.match.application.engine.EngineConfigState.MarketDef[0]));
+                    defs.toArray(new com.match.application.engine.EngineConfigState.MarketDef[0]),
+                    behaviorVersion, commandLedgerCapacity, genesisId, maxWireVersion);
             applying = true;
             engineConfigHandler.onEngineConfig(config);
         }

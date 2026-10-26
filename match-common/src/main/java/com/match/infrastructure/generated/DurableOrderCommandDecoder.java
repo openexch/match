@@ -6,11 +6,11 @@ import org.agrona.DirectBuffer;
 @SuppressWarnings("all")
 public final class DurableOrderCommandDecoder
 {
-    public static final int BLOCK_LENGTH = 71;
+    public static final int BLOCK_LENGTH = 80;
     public static final int TEMPLATE_ID = 9;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 11;
-    public static final String SEMANTIC_VERSION = "5.2";
+    public static final int SCHEMA_VERSION = 12;
+    public static final String SEMANTIC_VERSION = "5.3";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
     private final DurableOrderCommandDecoder parentMessage = this;
@@ -740,6 +740,118 @@ public final class DurableOrderCommandDecoder
     }
 
 
+    public static int timeInForceId()
+    {
+        return 13;
+    }
+
+    public static int timeInForceSinceVersion()
+    {
+        return 12;
+    }
+
+    public static int timeInForceEncodingOffset()
+    {
+        return 71;
+    }
+
+    public static int timeInForceEncodingLength()
+    {
+        return 1;
+    }
+
+    public static String timeInForceMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static short timeInForceNullValue()
+    {
+        return (short)255;
+    }
+
+    public static short timeInForceMinValue()
+    {
+        return (short)0;
+    }
+
+    public static short timeInForceMaxValue()
+    {
+        return (short)254;
+    }
+
+    public short timeInForce()
+    {
+        if (parentMessage.actingVersion < 12)
+        {
+            return (short)255;
+        }
+
+        return ((short)(buffer.getByte(offset + 71) & 0xFF));
+    }
+
+
+    public static int expectedOldRemainingId()
+    {
+        return 14;
+    }
+
+    public static int expectedOldRemainingSinceVersion()
+    {
+        return 12;
+    }
+
+    public static int expectedOldRemainingEncodingOffset()
+    {
+        return 72;
+    }
+
+    public static int expectedOldRemainingEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String expectedOldRemainingMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long expectedOldRemainingNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long expectedOldRemainingMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long expectedOldRemainingMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public long expectedOldRemaining()
+    {
+        if (parentMessage.actingVersion < 12)
+        {
+            return -9223372036854775808L;
+        }
+
+        return buffer.getLong(offset + 72, BYTE_ORDER);
+    }
+
+
     public String toString()
     {
         if (null == buffer)
@@ -816,6 +928,12 @@ public final class DurableOrderCommandDecoder
         builder.append('|');
         builder.append("orderSide=");
         builder.append(this.orderSide());
+        builder.append('|');
+        builder.append("timeInForce=");
+        builder.append(this.timeInForce());
+        builder.append('|');
+        builder.append("expectedOldRemaining=");
+        builder.append(this.expectedOldRemaining());
 
         limit(originalLimit);
 

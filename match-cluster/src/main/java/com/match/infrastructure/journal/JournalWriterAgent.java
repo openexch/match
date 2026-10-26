@@ -31,8 +31,13 @@ public final class JournalWriterAgent implements Agent {
 
     private static final Logger log = Logger.getLogger(JournalWriterAgent.class);
 
-    /** Byte offset of egressSeq inside every journal message: SBE header(8) + first field. */
-    private static final int EGRESS_SEQ_OFFSET = 8;
+    /**
+     * Byte offset of egressSeq inside every journal message: SBE header(8) + the schema 4 common
+     * head offset (journalSeq @0, meEpoch @8, egressSeq @16), identical on all five records.
+     */
+    static final int EGRESS_SEQ_OFFSET =
+            com.match.infrastructure.mejournal.generated.MessageHeaderEncoder.ENCODED_LENGTH
+            + com.match.infrastructure.mejournal.generated.TradeEncoder.egressSeqEncodingOffset();
     private static final int DRAIN_LIMIT = 64;
     private static final long CONNECT_RETRY_BACKOFF_MS = 1_000;
 

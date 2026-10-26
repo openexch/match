@@ -172,4 +172,104 @@ public class SbeDemuxerEngineConfigTest {
         assertEquals(1, demuxer.createOrderCount());
         assertFalse(engine.getEngine(1).isBidEmpty());
     }
+    // ---- order-schema v12 (RC2 S1 contract 3.3 / section 7 / 8.2) ----
+
+    private static final long[][] ONE_MARKET = {{7, 500_000_000L, 1_500_000_000L, 500_000L}};
+    private static final String[] ONE_SYMBOL = {"AAA-USD"};
+
+    /**
+     * Re-shapes the v12 frame encoded at offset 0 into a v11 frame: header version 11, root block
+     * 17 (the five v10 fields), the markets group moved up to 8 + 17. Returns the new length.
+     */
+    private int reshapeToV11(final int v12Length) {
+        final int v12Group = MessageHeaderEncoder.ENCODED_LENGTH + EngineConfigEncoder.BLOCK_LENGTH;
+        final int v11Group = MessageHeaderEncoder.ENCODED_LENGTH + 17;
+        final byte[] group = new byte[v12Length - v12Group];
+        buffer.getBytes(v12Group, group);
+        buffer.putBytes(v11Group, group);
+        headerEncoder.wrap(buffer, 0).blockLength(17).version(11);
+        return v11Group + group.length;
+    }
+
+    @Test
+    public void v11EngineConfigFrameMapsTheFourV12FieldsToTheirDefaults() {
+        Engine engine = Engine.deferredUntilConfig();
+        SbeDemuxer demuxer = new SbeDemuxer(engine);
+        List<EngineConfigState> received = new ArrayList<>();
+        demuxer.setEngineConfigHandler(received::add);
+
+        // Encode as v12 with non-default values, then strip to a v11 frame: the values are gone.
+        encodeEngineConfig(4L, EngineImpl.ARRAY, 4096, 100, 0, ONE_MARKET, ONE_SYMBOL);
+        new EngineConfigEncoder().wrap(buffer, MessageHeaderEncoder.ENCODED_LENGTH)
+                .behaviorVersion(2).commandLedgerCapacity(5).genesisId(99).maxWireVersion(12);
+        int v12Len = MessageHeaderEncoder.ENCODED_LENGTH + EngineConfigEncoder.BLOCK_LENGTH + 4
+                + EngineConfigEncoder.MarketsEncoder.sbeBlockLength();
+        int len = reshapeToV11(v12Len);
+        demuxer.dispatch(buffer, 0, len, 1000L);
+
+        assertEquals("a v11 block-17 frame is not a bounds reject", 0, demuxer.decodeRejectCount());
+        assertEquals(1, received.size());
+        EngineConfigState config = received.get(0);
+        assertEquals(4L, config.configVersion);
+        assertEquals(4096L, config.bookCapacity);
+        assertEquals("group found at 8 + 17", 1, config.markets.length);
+        assertEquals(7, config.markets[0].marketId);
+        assertEquals("AAA-USD", config.markets[0].symbol);
+        assertEquals(1L, config.behaviorVersion);
+        assertEquals(100_000L, config.commandLedgerCapacity);
+        assertEquals(0L, config.genesisId);
+        assertEquals(0L, config.maxWireVersion);
+    }
+
+    @Test
+    public void v12EngineConfigFrameCarriesTheFourValuesAsEncoded() {
+        Engine engine = Engine.deferredUntilConfig();
+        SbeDemuxer demuxer = new SbeDemuxer(engine);
+        List<EngineConfigState> received = new ArrayList<>();
+        demuxer.setEngineConfigHandler(received::add);
+
+        int len = encodeEngineConfig(4L, EngineImpl.ARRAY, 4096, 100, 0, ONE_MARKET, ONE_SYMBOL);
+        new EngineConfigEncoder().wrap(buffer, MessageHeaderEncoder.ENCODED_LENGTH)
+                .behaviorVersion(2).commandLedgerCapacity(4_294_967_294L)
+                .genesisId(-0x1234_5678_9ABC_DEF0L).maxWireVersion(12);
+        demuxer.dispatch(buffer, 0, len, 1000L);
+
+        assertEquals(0, demuxer.decodeRejectCount());
+        EngineConfigState config = received.get(0);
+        assertEquals(2L, config.behaviorVersion);
+        assertEquals(4_294_967_294L, config.commandLedgerCapacity);
+        assertEquals(-0x1234_5678_9ABC_DEF0L, config.genesisId);
+        assertEquals(12L, config.maxWireVersion);
+        assertEquals("group found at 8 + 35", 7, config.markets[0].marketId);
+    }
+
+    @Test
+    public void v12HeaderWithThePre12BlockOnTemplate8IsAFrameBoundsReject() {
+        Engine engine = Engine.deferredUntilConfig();
+        SbeDemuxer demuxer = new SbeDemuxer(engine);
+        List<EngineConfigState> received = new ArrayList<>();
+        demuxer.setEngineConfigHandler(received::add);
+
+        int v12Len = encodeEngineConfig(4L, EngineImpl.ARRAY, 4096, 100, 0, ONE_MARKET, ONE_SYMBOL);
+        int len = reshapeToV11(v12Len);
+        headerEncoder.wrap(buffer, 0).version(12); // block 17 under a v12 header
+        demuxer.dispatch(buffer, 0, len, 1000L);
+
+        assertEquals(1, demuxer.decodeRejectCount());
+        assertTrue(received.isEmpty());
+    }
+
+    @Test
+    public void theFourV12ValuesDoNotTakePartInConfigEqualityOrTheHash() {
+        EngineConfigState.MarketDef[] m = {new EngineConfigState.MarketDef(7, "AAA-USD",
+                500_000_000L, 1_500_000_000L, 500_000L)};
+        EngineConfigState plain = EngineConfigState.of(4L, EngineConfigState.IMPL_ARRAY, 4096, 100, 0, m);
+        EngineConfigState v12 = EngineConfigState.of(4L, EngineConfigState.IMPL_ARRAY, 4096, 100, 0, m,
+                2L, 5L, 99L, 12L);
+        assertTrue(plain.equalsConfig(v12));
+        assertTrue(plain.equalsIgnoringVersion(v12));
+        assertEquals(plain.canonicalString(), v12.canonicalString());
+        assertEquals(plain.canonicalHash(), v12.canonicalHash());
+        assertEquals(plain.toString(), v12.toString());
+    }
 }

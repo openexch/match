@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    ME journal wire schema (schemaId 4, version 1). RC2 S1 contract section 2.
+
+    Replaces schema 3 (settlement-journal-schema.xml, kept byte-identical for the frozen
+    bridge/loadgen) and the schema 1 JournalCommandOutcome (template 28, RESERVED) on the
+    ME journal stream. Own execution and package so nothing collides with schema 1 or 3.
+
+    Every record starts with journalSeq @0, meEpoch @8, egressSeq @16 so any reader extracts
+    them without a per-template decode. egressSeq is the cluster log position of the producing
+    command: sparse and non-unique, an order key only.
+
+    Each record is offered as ONE unfragmented frame; the largest legal frame is 1112 B
+    (CommandRelease with 48 entries), below the 1376 B aeron:ipc limit (MTU 1408).
+-->
+<sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
+                   package="com.match.infrastructure.mejournal.generated"
+                   id="4"
+                   version="1"
+                   semanticVersion="1.0"
+                   description="Match ME Journal Schema"
+                   byteOrder="littleEndian"
+>
+    <types>
+        <composite name="messageHeader" description="Message identifiers and length of message root">
+            <type name="blockLength" primitiveType="uint16"/>
+            <type name="templateId" primitiveType="uint16"/>
+            <type name="schemaId" primitiveType="uint16"/>
+            <type name="version" primitiveType="uint16"/>
+        </composite>
+        <composite name="groupSizeEncoding" description="Repeating group dimensions">
+            <type name="blockLength" primitiveType="uint16"/>
+            <type name="numInGroup" primitiveType="uint16"/>
+        </composite>
+        <enum name="BooleanType" encodingType="uint8">
+            <validValue name="FALSE">0</validValue>
+            <validValue name="TRUE">1</validValue>
+        </enum>
+        <enum name="TerminalStatus" encodingType="uint8">
+            <validValue name="FILLED">2</validValue>
+            <validValue name="CANCELLED">3</validValue>
+            <validValue name="REJECTED">4</validValue>
+        </enum>
+        <enum name="ReleaseScope" encodingType="uint8">
+            <validValue name="UP_TO">0</validValue>
+            <validValue name="ORDER">1</validValue>
+        </enum>
+        <enum name="ReleaseResult" encodingType="uint8">
+            <validValue name="APPLIED">0</validValue>
+            <validValue name="NOOP">1</validValue>
+            <validValue name="LEG_LIVE">2</validValue>
+        </enum>
+        <enum name="ConfigDecision" encodingType="uint8">
+            <validValue name="FRESH">0</validValue>
+            <validValue name="ADOPT">1</validValue>
+            <validValue name="SWITCH">2</validValue>
+            <validValue name="BUMP">3</validValue>
+        </enum>
+        <!-- The ME OrderRejectReason value VERBATIM: NONE = 0 is what a FILLED or CANCELLED terminal
+             carries. 255 is the SBE null only; a schema-4 ME never writes it and readers refuse 255
+             on record 2. -->
+        <type name="RejectReasonCode" primitiveType="uint8" presence="optional" nullValue="255"/>
+    </types>
+
+    <!-- Record 1: trade. Block 109, frame 117. -->
+    <sbe:message name="Trade" id="1" description="Executed trade">
+        <field name="journalSeq" id="1" type="int64"/>
+        <field name="meEpoch" id="2" type="int64"/>
+        <field name="egressSeq" id="3" type="int64"/>
+        <field name="tradeId" id="4" type="int64"/>
+        <field name="marketId" id="5" type="int32"/>
+        <field name="takerOrderId" id="6" type="int64"/>
+        <field name="takerUserId" id="7" type="int64"/>
+        <field name="makerOrderId" id="8" type="int64"/>
+        <field name="makerUserId" id="9" type="int64"/>
+        <field name="price" id="10" type="int64"/>
+        <field name="quantity" id="11" type="int64"/>
+        <field name="takerIsBuy" id="12" type="BooleanType"/>
+        <field name="timestamp" id="13" type="int64"/>
+        <field name="takerOmsOrderId" id="14" type="int64"/>
+        <field name="makerOmsOrderId" id="15" type="int64"/>
+    </sbe:message>
+
+    <!-- Record 2: terminal order status. Block 62, frame 70. -->
+    <sbe:message name="Terminal" id="2" description="Terminal order status">
+        <field name="journalSeq" id="1" type="int64"/>
+        <field name="meEpoch" id="2" type="int64"/>
+        <field name="egressSeq" id="3" type="int64"/>
+        <field name="orderId" id="4" type="int64"/>
+        <field name="userId" id="5" type="int64"/>
+        <field name="marketId" id="6" type="int32"/>
+        <field name="status" id="7" type="TerminalStatus"/>
+        <field name="timestamp" id="8" type="int64"/>
+        <field name="omsOrderId" id="9" type="int64"/>
+        <field name="rejectReason" id="10" type="RejectReasonCode"/>
+    </sbe:message>
+
+    <!-- Record 3: command outcome (replaces schema 1 template 28). Block 153, frame 161.
+         result: 0 APPLIED, 1 REJECTED, 2 CONFLICT, 3 CAPACITY, 4 UNKNOWN_LEG, 5 NOT_OWNER,
+         6 UNKNOWN_MARKET, 7 RELEASED, 8 INVALID. timeInForce: 0 GTC, 1 IOC, 2 FOK. -->
+    <sbe:message name="CommandOutcome" id="3" description="Command outcome">
+        <field name="journalSeq" id="1" type="int64"/>
+        <field name="meEpoch" id="2" type="int64"/>
+        <field name="egressSeq" id="3" type="int64"/>
+        <field name="commandIdHigh" id="4" type="int64"/>
+        <field name="commandIdLow" id="5" type="int64"/>
+        <field name="userId" id="6" type="int64"/>
+        <field name="omsOrderId" id="7" type="int64"/>
+        <field name="oldOrderId" id="8" type="int64"/>
+        <field name="price" id="9" type="int64"/>
+        <field name="quantity" id="10" type="int64"/>
+        <field name="budget" id="11" type="int64"/>
+        <field name="marketId" id="12" type="int32"/>
+        <field name="commandKind" id="13" type="uint8"/>
+        <field name="orderType" id="14" type="uint8"/>
+        <field name="orderSide" id="15" type="uint8"/>
+        <field name="appliedPosition" id="16" type="int64"/>
+        <field name="timestamp" id="17" type="int64"/>
+        <field name="orderId" id="18" type="int64"/>
+        <field name="status" id="19" type="int32"/>
+        <field name="reason" id="20" type="int32"/>
+        <field name="oldCancelled" id="21" type="uint8"/>
+        <field name="result" id="22" type="int32"/>
+        <field name="timeInForce" id="23" type="uint8"/>
+        <field name="expectedOldRemaining" id="24" type="int64"/>
+        <field name="ledgerSize" id="25" type="int32"/>
+        <field name="ledgerCapacity" id="26" type="int32"/>
+        <field name="behaviorVersion" id="27" type="uint32"/>
+    </sbe:message>
+
+    <!-- Record 4: command-id release. Root block 44, group entry block 22, cap 48 entries
+         (frame max 8 + 44 + 4 + 48 * 22 = 1112 B). -->
+    <sbe:message name="CommandRelease" id="4" description="Command-id release">
+        <field name="journalSeq" id="1" type="int64"/>
+        <field name="meEpoch" id="2" type="int64"/>
+        <field name="egressSeq" id="3" type="int64"/>
+        <field name="releaseSeq" id="4" type="int64"/>
+        <field name="ledgerSize" id="5" type="int32"/>
+        <field name="ledgerCapacity" id="6" type="int32"/>
+        <field name="tombstoneRanges" id="7" type="int32"/>
+        <group name="releases" id="10" dimensionType="groupSizeEncoding">
+            <field name="commandIdHigh" id="1" type="int64"/>
+            <field name="idLowFloor" id="2" type="int64"/>
+            <field name="scope" id="3" type="ReleaseScope"/>
+            <field name="result" id="4" type="ReleaseResult"/>
+            <field name="removed" id="5" type="int32"/>
+        </group>
+    </sbe:message>
+
+    <!-- Record 5: engine config decision. Block 39, frame 47. -->
+    <sbe:message name="EngineConfig" id="5" description="Engine config decision">
+        <field name="journalSeq" id="1" type="int64"/>
+        <field name="meEpoch" id="2" type="int64"/>
+        <field name="egressSeq" id="3" type="int64"/>
+        <field name="configVersion" id="4" type="uint32"/>
+        <field name="behaviorVersion" id="5" type="uint32"/>
+        <field name="ledgerCapacity" id="6" type="uint32"/>
+        <field name="maxWireVersion" id="7" type="uint16"/>
+        <field name="decision" id="8" type="ConfigDecision"/>
+    </sbe:message>
+
+</sbe:messageSchema>

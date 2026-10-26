@@ -110,7 +110,7 @@ public class JournalWriterReconnectTest {
     @Test
     public void closedPublicationReconnectsAndNeverDropsTheEntry() throws Exception {
         // 1) First entry drains through a connected recorded publication (the COMMIT path).
-        journal.appendTerminal(500L, 11L, 900_001L, 1, 2, 42L, 7_011L);
+        journal.appendTerminal(500L, 11L, 900_001L, 1, 2, 42L, 7_011L, 0);
         final long connectDeadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(10);
         driveUntil(() -> agent.writtenEntries() >= 1, connectDeadline);
         assertEquals(1, agent.writtenEntries());
@@ -127,7 +127,7 @@ public class JournalWriterReconnectTest {
 
         // 3) Next entry: the handler hits CLOSED, so it must null the publication (for reconnect),
         //    count exactly one reconnect, and ABORT, leaving the entry buffered and unwritten.
-        journal.appendTerminal(510L, 22L, 900_002L, 1, 2, 43L, 7_022L);
+        journal.appendTerminal(510L, 22L, 900_002L, 1, 2, 43L, 7_022L, 0);
         agent.doWork();
         assertNull("publication nulled so the next doWork reconnects", publicationField.get(agent));
         assertEquals("exactly one reconnect counted", 1, agent.reconnects());

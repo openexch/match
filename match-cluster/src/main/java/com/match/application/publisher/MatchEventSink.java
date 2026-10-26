@@ -15,8 +15,13 @@ public interface MatchEventSink {
     /**
      * Journal-only side output of a durable command. Whether a node journals is node
      * configuration, never replicated state, so the command is applied either way.
+     *
+     * @param ledgerSizeAfter the command ledger size after this outcome is recorded (unchanged
+     *                        for a duplicate, conflict or capacity outcome); ME journal record 3
+     *                        carries it as {@code ledgerSize}
      */
-    default void publishCommandOutcome(long journalPosition, com.match.domain.commands.DurableCommandOutcome outcome) {
+    default void publishCommandOutcome(long journalPosition, com.match.domain.commands.DurableCommandOutcome outcome,
+                                       int ledgerSizeAfter) {
     }
 
 

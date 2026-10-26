@@ -10,11 +10,11 @@ import org.agrona.MutableDirectBuffer;
 @SuppressWarnings("all")
 public final class ClusterHeartbeatEncoder
 {
-    public static final int BLOCK_LENGTH = 9;
+    public static final int BLOCK_LENGTH = 17;
     public static final int TEMPLATE_ID = 21;
     public static final int SCHEMA_ID = 1;
-    public static final int SCHEMA_VERSION = 11;
-    public static final String SEMANTIC_VERSION = "5.2";
+    public static final int SCHEMA_VERSION = 12;
+    public static final String SEMANTIC_VERSION = "5.3";
     public static final java.nio.ByteOrder BYTE_ORDER = java.nio.ByteOrder.LITTLE_ENDIAN;
 
     private final ClusterHeartbeatEncoder parentMessage = this;
@@ -197,6 +197,58 @@ public final class ClusterHeartbeatEncoder
     public ClusterHeartbeatEncoder timestamp(final long value)
     {
         buffer.putLong(offset + 1, value, BYTE_ORDER);
+        return this;
+    }
+
+
+    public static int meEpochId()
+    {
+        return 3;
+    }
+
+    public static int meEpochSinceVersion()
+    {
+        return 12;
+    }
+
+    public static int meEpochEncodingOffset()
+    {
+        return 9;
+    }
+
+    public static int meEpochEncodingLength()
+    {
+        return 8;
+    }
+
+    public static String meEpochMetaAttribute(final MetaAttribute metaAttribute)
+    {
+        if (MetaAttribute.PRESENCE == metaAttribute)
+        {
+            return "required";
+        }
+
+        return "";
+    }
+
+    public static long meEpochNullValue()
+    {
+        return -9223372036854775808L;
+    }
+
+    public static long meEpochMinValue()
+    {
+        return -9223372036854775807L;
+    }
+
+    public static long meEpochMaxValue()
+    {
+        return 9223372036854775807L;
+    }
+
+    public ClusterHeartbeatEncoder meEpoch(final long value)
+    {
+        buffer.putLong(offset + 9, value, BYTE_ORDER);
         return this;
     }
 

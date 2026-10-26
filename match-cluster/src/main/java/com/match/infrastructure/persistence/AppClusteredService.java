@@ -131,6 +131,8 @@ public class AppClusteredService implements ClusteredService {
     private static final long PERIODIC_RESNAPSHOT_INTERVAL_MS = 10_000;
     private long lastPeriodicResnapshotMs = 0;
     private final MessageHeaderEncoder keepWarmHeaderEncoder = new MessageHeaderEncoder();
+    // RC2 S1 placeholder for ClusterHeartbeat.meEpoch (v12): S2 sends the recorded genesisId.
+    static final long KEEP_WARM_ME_EPOCH = 0L;
     private final ClusterHeartbeatEncoder keepWarmEncoder = new ClusterHeartbeatEncoder();
     private final UnsafeBuffer keepWarmBuffer = new UnsafeBuffer(
             new byte[MessageHeaderEncoder.ENCODED_LENGTH + ClusterHeartbeatEncoder.BLOCK_LENGTH]);
@@ -673,6 +675,9 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_ingress_decode_rejects_total",
                             "Ingress frames rejected before application for invalid frame bounds or body decoding",
                             sbeDemuxer::decodeRejectCount)
+                    .counter("match_ingress_unserved_templates_total",
+                            "Ingress frames of a defined but not yet served template (v12 ReleaseCommandIds 10), counted and never applied (RC2 S1)",
+                            sbeDemuxer::unservedTemplateCount)
                     .counter("match_ingress_apply_errors_total",
                             "Unexpected application faults that fence this instance and trigger immediate process exit",
                             sbeDemuxer::applyErrorCount)
@@ -1410,7 +1415,9 @@ public class AppClusteredService implements ClusteredService {
             // v8: nodeId is uint8 on the wire (member ids are 0-2); SBE's Java codec
             // takes uint8 as short.
             .nodeId((short) cluster.memberId())
-            .timestamp(System.currentTimeMillis());
+            .timestamp(System.currentTimeMillis())
+            // v12: the recorded genesisId from S2; RC2 S1 encodes 0.
+            .meEpoch(KEEP_WARM_ME_EPOCH);
         int length = MessageHeaderEncoder.ENCODED_LENGTH + keepWarmEncoder.encodedLength();
 
         for (ClientSession session : clientSessions.getAllSessions()) {

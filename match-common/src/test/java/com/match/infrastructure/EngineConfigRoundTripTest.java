@@ -37,6 +37,11 @@ public class EngineConfigRoundTripTest {
         final long bookCapacity = 1_048_576L;
         final long maxMatchesPerOrder = 50_000L;
         final long maxOrdersPerLevel = 4_096L;
+        // v12 (RC2 S1 contract 3.3): appended root fields before the markets group.
+        final long behaviorVersion = 4_000_000_009L; // uint32 above Integer.MAX_VALUE
+        final long commandLedgerCapacity = 100_000L;
+        final long genesisId = -7_212_345_678_901_234_567L; // int64, any value incl. negative
+        final int maxWireVersion = 65_000;                   // uint16 above Short.MAX_VALUE
 
         final int[] marketIds = {1, 2, 7, 500, 65_000};
         // Varying lengths incl. one at exactly char[16]; shorter symbols are null-padded on the wire.
@@ -52,6 +57,10 @@ public class EngineConfigRoundTripTest {
                 .bookCapacity(bookCapacity)
                 .maxMatchesPerOrder(maxMatchesPerOrder)
                 .maxOrdersPerLevel(maxOrdersPerLevel)
+                .behaviorVersion(behaviorVersion)
+                .commandLedgerCapacity(commandLedgerCapacity)
+                .genesisId(genesisId)
+                .maxWireVersion(maxWireVersion)
                 .marketsCount(marketIds.length);
         for (int i = 0; i < marketIds.length; i++) {
             marketsEncoder.next()
@@ -66,6 +75,7 @@ public class EngineConfigRoundTripTest {
         assertEquals(EngineConfigDecoder.TEMPLATE_ID, headerDecoder.templateId());
         assertEquals(EngineConfigDecoder.SCHEMA_ID, headerDecoder.schemaId());
         assertEquals(EngineConfigDecoder.SCHEMA_VERSION, headerDecoder.version());
+        assertEquals(35, headerDecoder.blockLength());
 
         EngineConfigDecoder decoder = new EngineConfigDecoder().wrap(
                 buffer, headerDecoder.encodedLength(), headerDecoder.blockLength(), headerDecoder.version());
@@ -75,6 +85,10 @@ public class EngineConfigRoundTripTest {
         assertEquals(bookCapacity, decoder.bookCapacity());
         assertEquals(maxMatchesPerOrder, decoder.maxMatchesPerOrder());
         assertEquals(maxOrdersPerLevel, decoder.maxOrdersPerLevel());
+        assertEquals(behaviorVersion, decoder.behaviorVersion());
+        assertEquals(commandLedgerCapacity, decoder.commandLedgerCapacity());
+        assertEquals(genesisId, decoder.genesisId());
+        assertEquals(maxWireVersion, decoder.maxWireVersion());
 
         EngineConfigDecoder.MarketsDecoder markets = decoder.markets();
         assertEquals(marketIds.length, markets.count());
