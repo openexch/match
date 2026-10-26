@@ -81,9 +81,12 @@ public class EngineConfigBehaviorTableTest {
             final List<byte[]> terminals = BehaviourTwoHarness.ofTemplate(after, 2);
             assertEquals(1, trades.size());
             assertEquals("both legs FILLED", 2, terminals.size());
-            for (byte[] f : after) {
+            assertEquals("legacy lane: trade, taker FILLED, maker FILLED order; no outcome record", 3, after.size());
+            for (int i = 0; i < after.size(); i++) {
+                final byte[] f = after.get(i);
                 assertEquals("every record after FRESH carries meEpoch G", G, BehaviourTwoHarness.meEpochOf(f));
-                assertEquals("records 1-4 keep journalSeq 0 until S3", 0L, BehaviourTwoHarness.journalSeqOf(f));
+                assertEquals("RC2 S3: dense journalSeq after FRESH = 1, in ring order", 2L + i,
+                        BehaviourTwoHarness.journalSeqOf(f));
             }
         }
     }

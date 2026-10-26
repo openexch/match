@@ -32,7 +32,7 @@ public class SnapshotCodecTest {
         Engine orig = varied();
 
         ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
-        int len = SnapshotCodec.serialize(orig, TRADE_ID_IN, TIMER_ID_IN, buf);
+        orig.setTradeIdGenerator(TRADE_ID_IN); int len = SnapshotCodec.serialize(orig, TIMER_ID_IN, buf);
 
         Engine restored = new Engine();
         SnapshotCodec.Decoded d = SnapshotCodec.deserialize(buf, 0, len, restored);
@@ -60,9 +60,9 @@ public class SnapshotCodecTest {
         Engine orig = varied();
 
         ExpandableArrayBuffer b1 = new ExpandableArrayBuffer();
-        int l1 = SnapshotCodec.serialize(orig, TRADE_ID_IN, TIMER_ID_IN, b1);
+        orig.setTradeIdGenerator(TRADE_ID_IN); int l1 = SnapshotCodec.serialize(orig, TIMER_ID_IN, b1);
         ExpandableArrayBuffer b2 = new ExpandableArrayBuffer();
-        int l2 = SnapshotCodec.serialize(orig, TRADE_ID_IN, TIMER_ID_IN, b2);
+        orig.setTradeIdGenerator(TRADE_ID_IN); int l2 = SnapshotCodec.serialize(orig, TIMER_ID_IN, b2);
 
         assertEquals("payload length stable", l1, l2);
         assertArrayEquals("snapshot bytes must be deterministic", bytes(b1, l1), bytes(b2, l2));
@@ -73,17 +73,17 @@ public class SnapshotCodecTest {
     public void restoreIsIdempotent() {
         Engine orig = varied();
         ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
-        int len = SnapshotCodec.serialize(orig, TRADE_ID_IN, TIMER_ID_IN, buf);
+        orig.setTradeIdGenerator(TRADE_ID_IN); int len = SnapshotCodec.serialize(orig, TIMER_ID_IN, buf);
 
         Engine e1 = new Engine();
         SnapshotCodec.Decoded d1 = SnapshotCodec.deserialize(buf, 0, len, e1);
         ExpandableArrayBuffer r1 = new ExpandableArrayBuffer();
-        int lr1 = SnapshotCodec.serialize(e1, d1.tradeIdGenerator, d1.timerCorrelationId, r1);
+        int lr1 = SnapshotCodec.serialize(e1, d1.timerCorrelationId, r1);
 
         Engine e2 = new Engine();
         SnapshotCodec.Decoded d2 = SnapshotCodec.deserialize(r1, 0, lr1, e2);
         ExpandableArrayBuffer r2 = new ExpandableArrayBuffer();
-        int lr2 = SnapshotCodec.serialize(e2, d2.tradeIdGenerator, d2.timerCorrelationId, r2);
+        int lr2 = SnapshotCodec.serialize(e2, d2.timerCorrelationId, r2);
 
         assertArrayEquals("re-serialized snapshot must be stable", bytes(r1, lr1), bytes(r2, lr2));
     }
@@ -142,7 +142,7 @@ public class SnapshotCodecTest {
         }
 
         ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
-        int len = SnapshotCodec.serialize(orig, TRADE_ID_IN, TIMER_ID_IN, buf);
+        orig.setTradeIdGenerator(TRADE_ID_IN); int len = SnapshotCodec.serialize(orig, TIMER_ID_IN, buf);
 
         Engine restored = new Engine();
         SnapshotCodec.deserialize(buf, 0, len, restored);
@@ -155,7 +155,7 @@ public class SnapshotCodecTest {
 
         // Determinism: the same populated state serializes byte-identically twice.
         ExpandableArrayBuffer buf2 = new ExpandableArrayBuffer();
-        int len2 = SnapshotCodec.serialize(orig, TRADE_ID_IN, TIMER_ID_IN, buf2);
+        orig.setTradeIdGenerator(TRADE_ID_IN); int len2 = SnapshotCodec.serialize(orig, TIMER_ID_IN, buf2);
         assertEquals("payload length stable with oms map", len, len2);
         assertArrayEquals("snapshot with oms map must be byte-deterministic", bytes(buf, len), bytes(buf2, len2));
     }
@@ -175,7 +175,7 @@ public class SnapshotCodecTest {
         }
 
         ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
-        int len = SnapshotCodec.serialize(e, TRADE_ID_IN, TIMER_ID_IN, buf);
+        e.setTradeIdGenerator(TRADE_ID_IN); int len = SnapshotCodec.serialize(e, TIMER_ID_IN, buf);
 
         long[] serializedIds = extractOmsMapOrderIds(buf);
         long[] expected = insertOrder.clone();

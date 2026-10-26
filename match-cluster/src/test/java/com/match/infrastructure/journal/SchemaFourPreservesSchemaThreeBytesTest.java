@@ -32,7 +32,7 @@ public class SchemaFourPreservesSchemaThreeBytesTest {
     @Test
     public void tradeBodyBytesAreTheSchemaThreeBodyBytes() {
         final SettlementJournal journal = new SettlementJournal(1 << 16);
-        journal.appendTrade(1000L, 42L, 3, 11L, 100001L, 22L, 100002L,
+        journal.appendTrade(0L, 1000L, 42L, 3, 11L, 100001L, 22L, 100002L,
                 6_012_345_000L, 25_000_000L, true, 1_752_100_000_123L, 9_011L, 9_022L);
         final byte[] v4 = drain(journal).get(0);
 
@@ -56,7 +56,7 @@ public class SchemaFourPreservesSchemaThreeBytesTest {
     @Test
     public void terminalBodyBytesAreTheSchemaThreeBodyBytesPlusRejectReason() {
         final SettlementJournal journal = new SettlementJournal(1 << 16);
-        journal.appendTerminal(1001L, 22L, 100002L, 3, 4 /* REJECTED */, 1_752_100_000_124L, 9_022L, 7);
+        journal.appendTerminal(0L, 1001L, 22L, 100002L, 3, 4 /* REJECTED */, 1_752_100_000_124L, 9_022L, 7);
         final byte[] v4 = drain(journal).get(0);
 
         final UnsafeBuffer v3 = new UnsafeBuffer(ByteBuffer.allocateDirect(256));
@@ -81,7 +81,7 @@ public class SchemaFourPreservesSchemaThreeBytesTest {
         final DurableCommandOutcome outcome = new DurableCommandOutcome(intent, 4_096L, 1_700L,
                 56L, 1, 0, true, DurableCommandOutcome.APPLIED);
         final SettlementJournal journal = new SettlementJournal(1 << 16);
-        journal.appendCommandOutcome(8_192L, outcome, 3);
+        journal.appendCommandOutcome(0L, 8_192L, outcome, 3);
         final byte[] v4 = drain(journal).get(0);
 
         final UnsafeBuffer v1 = new UnsafeBuffer(ByteBuffer.allocateDirect(256));

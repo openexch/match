@@ -107,7 +107,7 @@ public class JournalWriterRestartCheckpointTest {
     @Test
     public void checkpointCarriesTheFrameEgressSeqBeforeAndAfterAWriterRestart() throws Exception {
         // 1) Fresh writer: the first entry (a record 2 Terminal, egressSeq 500) is checkpointed.
-        journal.appendTerminal(500L, 11L, 900_001L, 1, 2, 42L, 7_011L, 0);
+        journal.appendTerminal(0L, 500L, 11L, 900_001L, 1, 2, 42L, 7_011L, 0);
         driveUntil(() -> agent.writtenEntries() >= 1,
                 System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(10));
         List<long[]> checkpoints = JournalCheckpointFile.readAll(tmpDir);
@@ -121,7 +121,7 @@ public class JournalWriterRestartCheckpointTest {
         //    first entry it writes (a record 1 Trade, egressSeq 777) must checkpoint again.
         agent.onClose();
         agent = newAgent();
-        journal.appendTrade(777L, 1L, 1, 11L, 900_001L, 22L, 900_002L, 1_000L, 2_000L, true, 43L, 7_011L, 7_022L);
+        journal.appendTrade(0L, 777L, 1L, 1, 11L, 900_001L, 22L, 900_002L, 1_000L, 2_000L, true, 43L, 7_011L, 7_022L);
         driveUntil(() -> agent.writtenEntries() >= 1,
                 System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(10));
         checkpoints = JournalCheckpointFile.readAll(tmpDir);

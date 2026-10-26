@@ -46,9 +46,9 @@ public class SnapshotCodecEngineConfigTest {
         orig.getOrderIdToOmsOrderId().put(3, 9300);
 
         ExpandableArrayBuffer b1 = new ExpandableArrayBuffer();
-        int l1 = SnapshotCodec.serialize(orig, 7L, 0L, b1);
+        orig.setTradeIdGenerator(7L); int l1 = SnapshotCodec.serialize(orig, 0L, b1);
         ExpandableArrayBuffer b2 = new ExpandableArrayBuffer();
-        int l2 = SnapshotCodec.serialize(orig, 7L, 0L, b2);
+        orig.setTradeIdGenerator(7L); int l2 = SnapshotCodec.serialize(orig, 0L, b2);
         assertEquals("length stable across two passes", l1, l2);
         assertArrayEquals("config-bearing snapshot must be byte-deterministic", bytes(b1, l1), bytes(b2, l2));
 
@@ -70,7 +70,7 @@ public class SnapshotCodecEngineConfigTest {
 
         // ...and the rebuilt engine re-serializes to the SAME bytes (replica-identical snapshots).
         ExpandableArrayBuffer b3 = new ExpandableArrayBuffer();
-        int l3 = SnapshotCodec.serialize(restored, decoded.tradeIdGenerator, decoded.timerCorrelationId, b3);
+        int l3 = SnapshotCodec.serialize(restored, decoded.timerCorrelationId, b3);
         assertArrayEquals("fresh-from-snapshot rebuild must re-serialize byte-identically",
                 bytes(b1, l1), bytes(b3, l3));
     }
@@ -84,7 +84,7 @@ public class SnapshotCodecEngineConfigTest {
                         new EngineConfigState.MarketDef(7, "AAA-USD", 500_000_000L, 1_500_000_000L, 500_000L)}));
 
         ExpandableArrayBuffer b = new ExpandableArrayBuffer();
-        int len = SnapshotCodec.serialize(orig, 1L, 0L, b);
+        orig.setTradeIdGenerator(1L); int len = SnapshotCodec.serialize(orig, 0L, b);
 
         Engine restored = Engine.deferredUntilConfig();
         SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(b, 0, len, restored);
@@ -105,7 +105,7 @@ public class SnapshotCodecEngineConfigTest {
         assertNull("legacy engine records no config", legacy.getEngineConfig());
 
         ExpandableArrayBuffer b = new ExpandableArrayBuffer();
-        int len = SnapshotCodec.serialize(legacy, 1L, 0L, b);
+        legacy.setTradeIdGenerator(1L); int len = SnapshotCodec.serialize(legacy, 0L, b);
 
         int expected = 8 + 8 + 4 + MarketConfig.ALL_MARKETS.length * (4 + 4 + 4) + 8 + 4;
         assertEquals("config-less snapshot must stay bit-for-bit the v9 layout", expected, len);
@@ -171,7 +171,7 @@ public class SnapshotCodecEngineConfigTest {
         source.getEngine(Engine.MARKET_BTC_USD).addOrderNoMatch(1, 100, true, 6_000_000_000_000L, 100_000_000L);
 
         ExpandableArrayBuffer b = new ExpandableArrayBuffer();
-        int len = SnapshotCodec.serialize(source, 1L, 0L, b);
+        source.setTradeIdGenerator(1L); int len = SnapshotCodec.serialize(source, 0L, b);
 
         Engine restored = new Engine("array");
         com.match.application.orderbook.MatchingEngine before = restored.getEngine(Engine.MARKET_BTC_USD);
@@ -196,7 +196,7 @@ public class SnapshotCodecEngineConfigTest {
         legacy.getEngine(Engine.MARKET_BTC_USD).addOrderNoMatch(1, 100, true, 6_000_000_000_000L, 100_000_000L);
         legacy.getEngine(Engine.MARKET_ETH_USD).addOrderNoMatch(2, 101, false, 300_000_000_000L, 100_000_000L);
         ExpandableArrayBuffer b = new ExpandableArrayBuffer();
-        int len = SnapshotCodec.serialize(legacy, 1L, 0L, b);
+        legacy.setTradeIdGenerator(1L); int len = SnapshotCodec.serialize(legacy, 0L, b);
 
         Engine configMode = Engine.deferredUntilConfig();
         SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(b, 0, len, configMode);

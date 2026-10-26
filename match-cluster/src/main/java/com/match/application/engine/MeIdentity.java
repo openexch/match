@@ -18,7 +18,19 @@ package com.match.application.engine;
 public final class MeIdentity {
 
     private volatile long meEpoch;
+    // RC2 S3: written on the service thread only (the one allocator), published with release
+    // semantics and read with acquire so the /metrics scraper (match_engine_next_journal_seq, the
+    // S7 4.4 rollback precheck input) never sees a torn or stale-forever value (review NOTE-1).
     private long nextJournalSeq;
+    private static final java.lang.invoke.VarHandle NEXT_JOURNAL_SEQ;
+    static {
+        try {
+            NEXT_JOURNAL_SEQ = java.lang.invoke.MethodHandles.lookup()
+                    .findVarHandle(MeIdentity.class, "nextJournalSeq", long.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
     private long behaviorVersion = EngineConfigState.DEFAULT_BEHAVIOR_VERSION;
 
     /** True once a FRESH at behaviour >= 2 or a restore has bound the epoch. */
@@ -31,9 +43,9 @@ public final class MeIdentity {
         return meEpoch;
     }
 
-    /** The next journalSeq to allocate; 0 while unbound. */
+    /** The next journalSeq to allocate; 0 while unbound. Safe from any thread (acquire). */
     public long nextJournalSeq() {
-        return nextJournalSeq;
+        return (long) NEXT_JOURNAL_SEQ.getAcquire(this);
     }
 
     /**
@@ -61,24 +73,32 @@ public final class MeIdentity {
             throw new IllegalStateException("MeIdentity bind needs genesisId > 0 and behaviorVersion >= 2"
                     + " (genesisId=" + genesisId + " behaviorVersion=" + recordedBehaviorVersion + ")");
         }
-        this.nextJournalSeq = 1L;
+        NEXT_JOURNAL_SEQ.setRelease(this, 1L);
         this.behaviorVersion = recordedBehaviorVersion;
         this.meEpoch = genesisId;
     }
 
-    /** Consume and return the next journalSeq (S2: record 5 only). Bound identities only. */
+    /**
+     * The ONE journalSeq allocator (RC2 S3 contract section 2): consume and return the next
+     * journalSeq of records 1-5. Bound identities only. No volatile read on this path (review
+     * NOTE-2): an unbound identity has {@code nextJournalSeq == 0}, a bound one {@code >= 1}.
+     */
     long allocateJournalSeq() {
-        if (!isBound()) {
+        final long seq = nextJournalSeq;
+        if (seq == 0L) {
             throw new IllegalStateException("journalSeq allocated on an unbound MeIdentity");
         }
-        return nextJournalSeq++;
+        NEXT_JOURNAL_SEQ.setRelease(this, seq + 1);
+        return seq;
     }
 
     /**
      * Snapshot restore of the identity block (already range-checked by the codec):
      * {@code meEpoch == genesisId > 0}, {@code nextJournalSeq >= 2}, {@code behaviorVersion >= 2}.
      */
-    public void restore(final long restoredMeEpoch, final long restoredNextJournalSeq,
+    // RC2 S3 review FIX-2: package-private, so Engine.restoreIdentity (which also turns dense
+    // allocation on) is the only way to bind an engine's identity from a snapshot.
+    void restore(final long restoredMeEpoch, final long restoredNextJournalSeq,
                         final long restoredBehaviorVersion) {
         if (isBound()) {
             throw new IllegalStateException("MeIdentity already bound to meEpoch=" + meEpoch
@@ -88,7 +108,7 @@ public final class MeIdentity {
             throw new IllegalStateException("MeIdentity restore out of range: meEpoch=" + restoredMeEpoch
                     + " nextJournalSeq=" + restoredNextJournalSeq + " behaviorVersion=" + restoredBehaviorVersion);
         }
-        this.nextJournalSeq = restoredNextJournalSeq;
+        NEXT_JOURNAL_SEQ.setRelease(this, restoredNextJournalSeq);
         this.behaviorVersion = restoredBehaviorVersion;
         this.meEpoch = restoredMeEpoch;
     }

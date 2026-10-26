@@ -43,8 +43,8 @@ import java.nio.ByteBuffer;
  * {@code aeron:ipc} default MTU. Schema 3 and the schema 1 template 28 are never written again.
  * {@code meEpoch} is read on every append from the bound {@link MeIdentity} (RC2 S2 section 5):
  * 0 until a FRESH at behaviour >= 2 binds it, then the recorded genesisId. {@code journalSeq} is
- * the state machine's allocation on record 5 and 0 on records 1-4 until S3 makes it dense (this
- * intermediate ME is never deployed).
+ * the ENGINE's allocation on every record (RC2 S3): one dense sequence from FRESH = 1 under
+ * behaviour 2, 0 under behaviour 1; this class never allocates or checks it.
  *
  * Single-writer: all methods are called only from the cluster service thread. The counters
  * are volatile so a metrics/diagnostics thread can read them without tearing.
@@ -68,9 +68,6 @@ public final class SettlementJournal {
             + CommandReleaseEncoder.BLOCK_LENGTH + 4
             + MAX_RELEASE_ENTRIES * CommandReleaseEncoder.ReleasesEncoder.sbeBlockLength();
 
-    /** Placeholder journalSeq of records 1-4 until S3 makes allocation dense (S1 section 0). */
-    static final long S1_JOURNAL_SEQ = 0L;
-
     /**
      * Record 3 {@code ledgerCapacity}: the cap the behaviour-1 ledger actually enforces. Stays
      * 100000 in S2 (contract section 5); S4 switches it to the recorded capacity.
@@ -80,9 +77,10 @@ public final class SettlementJournal {
     /**
      * RC2 S2: the engine-owned identity (one reference, never a copy, so a later bind is seen).
      * Defaults to an unbound identity for a journal that is never bound (meEpoch 0, behaviour 1).
-     * Volatile: bound at bootstrap, read on the service thread.
+     * RC2 S3 (S2 review NOTE-2): a plain field, bound once at bootstrap before the cluster
+     * service thread starts (thread start publishes it); read on the service thread.
      */
-    private volatile MeIdentity identity = new MeIdentity();
+    private MeIdentity identity = new MeIdentity();
 
     /** Spin count between escalating "journal stalled" logs while blocked on a full ring. */
     private static final long SPINS_PER_STALL_LOG = 50_000_000L;
@@ -131,12 +129,12 @@ public final class SettlementJournal {
      * a v11 frame); {@code ledgerSizeAfter} is the command ledger size after this outcome is
      * recorded (the caller knows whether it will be).
      */
-    public void appendCommandOutcome(final long egressSeq, final DurableCommandOutcome o,
+    public void appendCommandOutcome(final long journalSeq, final long egressSeq, final DurableCommandOutcome o,
                                      final int ledgerSizeAfter) {
         final DurableOrderIntent c = o.intent();
         final MeIdentity id = identity;
         outcomeEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
-                .journalSeq(S1_JOURNAL_SEQ)
+                .journalSeq(journalSeq)
                 .meEpoch(id.meEpoch())
                 .egressSeq(egressSeq)
                 .commandIdHigh(c.idHigh())
@@ -173,7 +171,7 @@ public final class SettlementJournal {
      * (first {@code count} used) so the S4 apply can reuse preallocated storage. More than
      * {@link #MAX_RELEASE_ENTRIES} entries is refused: the frame would outgrow the IPC MTU.
      */
-    public void appendCommandRelease(final long egressSeq, final long releaseSeq,
+    public void appendCommandRelease(final long journalSeq, final long egressSeq, final long releaseSeq,
                                      final int ledgerSize, final int ledgerCapacity,
                                      final int tombstoneRanges, final int count,
                                      final long[] commandIdHigh, final long[] idLowFloor,
@@ -184,7 +182,7 @@ public final class SettlementJournal {
         }
         final CommandReleaseEncoder.ReleasesEncoder group = releaseEncoder
                 .wrapAndApplyHeader(scratch, 0, headerEncoder)
-                .journalSeq(S1_JOURNAL_SEQ)
+                .journalSeq(journalSeq)
                 .meEpoch(identity.meEpoch())
                 .egressSeq(egressSeq)
                 .releaseSeq(releaseSeq)
@@ -253,6 +251,7 @@ public final class SettlementJournal {
     }
 
     public void appendTrade(
+            final long journalSeq,
             final long egressSeq,
             final long tradeId,
             final int marketId,
@@ -268,7 +267,7 @@ public final class SettlementJournal {
             final long makerOmsOrderId) {
 
         tradeEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
-                .journalSeq(S1_JOURNAL_SEQ)
+                .journalSeq(journalSeq)
                 .meEpoch(identity.meEpoch())
                 .egressSeq(egressSeq)
                 .tradeId(tradeId)
@@ -290,6 +289,7 @@ public final class SettlementJournal {
     }
 
     public void appendTerminal(
+            final long journalSeq,
             final long egressSeq,
             final long orderId,
             final long userId,
@@ -305,7 +305,7 @@ public final class SettlementJournal {
             throw new IllegalArgumentException("Terminal rejectReason " + rejectReason + " is not a uint8 code");
         }
         terminalEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
-                .journalSeq(S1_JOURNAL_SEQ)
+                .journalSeq(journalSeq)
                 .meEpoch(identity.meEpoch())
                 .egressSeq(egressSeq)
                 .orderId(orderId)

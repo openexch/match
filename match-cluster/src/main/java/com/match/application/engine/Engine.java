@@ -35,6 +35,23 @@ public class Engine {
     // Atomic order ID generator
     private final AtomicLong orderIdGenerator = new AtomicLong(1);
 
+    // RC2 S3 (contract section 3, G2/K7): the trade-id generator, engine-owned REPLICATED state
+    // (snapshot payload offset 8). One getAndIncrement per match in publishTradeExecutions, before
+    // any sink call and outside every sink guard, so a ring-less, journal-dark or sink-less member
+    // allocates exactly what a production member does. AtomicLong like orderIdGenerator: the
+    // /metrics scraper reads it (match_trades_total).
+    private final AtomicLong tradeIdGenerator = new AtomicLong(1);
+
+    // RC2 S3 (contract section 2, review NOTE-2): true iff the MeIdentity is bound (recorded
+    // behaviour >= 2). A plain field set exactly where the identity is bound (FRESH and the
+    // snapshot restore of the identity block), so the hot path reads no volatile. Gates dense
+    // journalSeq allocation and the X4 duplicate suppression.
+    private boolean dense;
+
+    // RC2 S3 X4: equal-intent duplicates of a recorded outcome suppressed under behaviour 2. Not
+    // replicated (never snapshotted); single writer (service thread), volatile for the scraper.
+    private volatile long suppressedDuplicateCount;
+
     // Aeron log position of the session message currently being processed
     // (set by the clustered service before demux; single-threaded).
     private long currentLogPosition;
@@ -74,23 +91,42 @@ public class Engine {
             // Behaviour 1: the 12-field compare. The v12 fields (timeInForce, expectedOldRemaining)
             // are not in the ledger snapshot, so they can not decide DUPLICATE vs CONFLICT.
             if (prior.intent().sameCommandBehaviour1(c)) {
-                // The journaled record 3 echoes THIS frame's intent (12 fields equal to the prior's)
-                // so its v12 tail is a function of the log entry, not of whether this node
-                // restored the prior from a snapshot.
-                eventPublisher.publishCommandOutcome(currentLogPosition,
-                    prior.intent().equals(c) ? prior : new com.match.domain.commands.DurableCommandOutcome(
-                        c, prior.appliedPosition(), prior.timestamp(), prior.orderId(), prior.status(),
-                        prior.reason(), prior.oldCancelled(), prior.result()),
-                    commandLedger.size());
+                if (dense) {
+                    // RC2 S3 X4 (contract section 5): behaviour 2 journals nothing for an equal
+                    // duplicate of a recorded outcome and consumes no journalSeq. The original is
+                    // durable at its own seq on every journaling node; a re-journal would get a
+                    // new seq and could never fill another node's hole. The decision reads only
+                    // the ledger (replicated, snapshotted). Also at full capacity: this check
+                    // precedes the capacity check.
+                    suppressedDuplicateCount = suppressedDuplicateCount + 1;
+                    return prior;
+                }
+                // Behaviour 1: re-journal the prior outcome at journalSeq 0. The journaled record 3
+                // echoes THIS frame's intent (12 fields equal to the prior's) so its v12 tail is a
+                // function of the log entry, not of whether this node restored the prior from a
+                // snapshot.
+                if (eventPublisher != null) {
+                    eventPublisher.publishCommandOutcome(currentLogPosition, 0L,
+                        prior.intent().equals(c) ? prior : new com.match.domain.commands.DurableCommandOutcome(
+                            c, prior.appliedPosition(), prior.timestamp(), prior.orderId(), prior.status(),
+                            prior.reason(), prior.oldCancelled(), prior.result()),
+                        commandLedger.size());
+                }
                 return prior;
             }
             var result = commandRejection(c, timestamp, 2);
-            eventPublisher.publishCommandOutcome(currentLogPosition, result, commandLedger.size());
+            final long seq = journalSeqFor();
+            if (eventPublisher != null) {
+                eventPublisher.publishCommandOutcome(currentLogPosition, seq, result, commandLedger.size());
+            }
             return result;
         }
         if (commandLedger.size() >= DurableCommandLedger.MAX_ENTRIES) {
             var result = commandRejection(c, timestamp, 3);
-            eventPublisher.publishCommandOutcome(currentLogPosition, result, commandLedger.size());
+            final long seq = journalSeqFor();
+            if (eventPublisher != null) {
+                eventPublisher.publishCommandOutcome(currentLogPosition, seq, result, commandLedger.size());
+            }
             return result;
         }
         int reject = 0;
@@ -127,8 +163,12 @@ public class Engine {
             } finally { applyingIntent=null; }
         }
         // Publisher failure is an application failure: service halts, replay restores the whole command.
-        // ledgerSize on record 3 is the size AFTER this outcome is recorded (the next line).
-        eventPublisher.publishCommandOutcome(currentLogPosition,result,commandLedger.size()+1);
+        // ledgerSize on record 3 is the size AFTER this outcome is recorded (the next line). The
+        // outcome's journalSeq follows the trades and terminals of the command (ring order).
+        final long seq = journalSeqFor();
+        if (eventPublisher != null) {
+            eventPublisher.publishCommandOutcome(currentLogPosition, seq, result, commandLedger.size() + 1);
+        }
         commandLedger.record(result);
         return result;
     }
@@ -142,9 +182,42 @@ public class Engine {
      * capacity check, no apply, no trade or terminal.
      */
     public void journalInvalid(com.match.domain.commands.DurableOrderIntent c, long timestamp) {
-        eventPublisher.publishCommandOutcome(currentLogPosition,
-                commandRejection(c, timestamp, com.match.domain.commands.DurableCommandOutcome.INVALID),
-                commandLedger.size());
+        final var result = commandRejection(c, timestamp, com.match.domain.commands.DurableCommandOutcome.INVALID);
+        final long seq = journalSeqFor();
+        if (eventPublisher != null) {
+            eventPublisher.publishCommandOutcome(currentLogPosition, seq, result, commandLedger.size());
+        }
+    }
+
+    /**
+     * RC2 S3 (contract section 2): the engine's journalSeq allocation point, called exactly when
+     * the engine decides a record will be journaled, immediately before the sink call that
+     * carries it. Behaviour 2 (identity bound): the next dense seq from the one allocator,
+     * {@link MeIdentity#allocateJournalSeq()}; behaviour 1: 0. Never guarded by the sink, the
+     * ring, the journal or leadership. S4's record 4 and B0-B2 records call it too.
+     */
+    long journalSeqFor() {
+        return dense ? meIdentity.allocateJournalSeq() : 0L;
+    }
+
+    /** RC2 S3: FRESH at behaviour >= 2 binds the identity and turns dense allocation on. */
+    void bindFreshIdentity(long genesisId, long recordedBehaviorVersion) {
+        meIdentity.bindFresh(genesisId, recordedBehaviorVersion);
+        dense = true;
+    }
+
+    /**
+     * RC2 S3: the snapshot restore of the identity block (already range-checked by the codec)
+     * binds the identity and turns dense allocation on, as FRESH did on the original members.
+     */
+    public void restoreIdentity(long meEpoch, long nextJournalSeq, long behaviorVersion) {
+        meIdentity.restore(meEpoch, nextJournalSeq, behaviorVersion);
+        dense = true;
+    }
+
+    /** RC2 S3: true once journalSeq allocation is dense; always equals {@code meIdentity().isBound()}. */
+    public boolean isJournalSeqDense() {
+        return dense;
     }
 
     private com.match.domain.commands.DurableCommandOutcome commandRejection(
@@ -682,7 +755,11 @@ public class Engine {
      */
     private void publishTradeExecutions(MatchingEngine engine, int marketId, long timestamp,
             long takerOrderId, long takerUserId, boolean takerIsBuy, int matchCount, long takerOmsOrderId) {
-        if (eventPublisher == null || matchCount == 0) {
+        // RC2 S3 (contract 3.2, F-1): the loop runs whatever the sink. tradeId and journalSeq are
+        // allocated per match before any sink call, and the replicated maker bookkeeping below runs
+        // regardless of the sink, so a sink-less engine keeps the same orderIdToOmsOrderId (an
+        // input of the durable owner check, snapshotted) as a sink-attached one.
+        if (matchCount == 0) {
             return;
         }
 
@@ -698,14 +775,18 @@ public class Engine {
                 makerOmsOrderId = 0; // Not found (pre-OMS order)
             }
 
-            eventPublisher.publishTradeExecution(
-                marketId, timestamp,
-                takerOrderId, takerUserId,
-                makerOrderId, makerUserId,
-                matchPrice, matchQty, takerIsBuy,
-                takerOmsOrderId, makerOmsOrderId,
-                currentLogPosition
-            );
+            final long tradeId = tradeIdGenerator.getAndIncrement();
+            final long seq = journalSeqFor();
+            if (eventPublisher != null) {
+                eventPublisher.publishTradeExecution(
+                    marketId, timestamp, tradeId, seq,
+                    takerOrderId, takerUserId,
+                    makerOrderId, makerUserId,
+                    matchPrice, matchQty, takerIsBuy,
+                    takerOmsOrderId, makerOmsOrderId,
+                    currentLogPosition
+                );
+            }
 
             // A fully-consumed maker gets an explicit terminal FILLED. The OMS derives maker fill
             // state from the TradeExecutions above (late/duplicate statuses for terminal orders are
@@ -908,13 +989,28 @@ public class Engine {
             int orderStatus, long remainingQty, long filledQty, long orderPrice, boolean isBuy, long omsOrderId,
             int rejectReason) {
         captureCommandStatus(orderId, orderStatus, rejectReason);
+        // RC2 S3: the terminal journal decision lives here. Every FILLED / CANCELLED / REJECTED of
+        // this path is journaled (the same expression the publisher used before S3, so behaviour 1
+        // is byte-identical) and consumes one journalSeq; NEW and PARTIALLY_FILLED consume none.
+        final boolean journalTerminal = orderStatus >= OrderStatusType.FILLED;
+        long seq = 0L;
+        if (journalTerminal) {
+            // Review NOTE-9: guarantee what SettlementJournal.appendTerminal checks BEFORE the
+            // allocation, on every member, so a journal-side throw can never halt only the
+            // journaling nodes (a dark or sink-less member would continue on another value).
+            if (rejectReason < 0 || rejectReason > 254) {
+                throw new IllegalStateException("Terminal rejectReason " + rejectReason
+                        + " is not a uint8 journal code (0..254)");
+            }
+            seq = journalSeqFor();
+        }
         if (eventPublisher == null) {
             return;
         }
         eventPublisher.publishOrderStatusUpdate(
             marketId, timestamp, orderId, userId,
             orderStatus, remainingQty, filledQty, orderPrice, isBuy, omsOrderId, rejectReason,
-            currentLogPosition
+            currentLogPosition, journalTerminal, seq
         );
     }
 
@@ -931,10 +1027,11 @@ public class Engine {
         if (eventPublisher == null) {
             return;
         }
+        // Not journaled, no journalSeq (RC2 S3 section 4).
         eventPublisher.publishOrderStatusUpdate(
             marketId, timestamp, orderId, userId,
             OrderStatusType.REJECTED, 0, 0, price, isBuy, omsOrderId, rejectReason,
-            currentLogPosition, true
+            currentLogPosition, false, 0L
         );
     }
 
@@ -950,10 +1047,11 @@ public class Engine {
         if (eventPublisher == null) {
             return;
         }
+        // Not journaled, no journalSeq (RC2 S3 section 4).
         eventPublisher.publishOrderStatusUpdate(
             marketId, timestamp, orderId, userId,
             OrderStatusType.CANCELLED, 0, 0, 0, isBuy, omsOrderId, OrderRejectReason.NONE,
-            currentLogPosition, true
+            currentLogPosition, false, 0L
         );
     }
 
@@ -997,6 +1095,21 @@ public class Engine {
      */
     public void setOrderIdGenerator(long value) {
         orderIdGenerator.set(value);
+    }
+
+    /** RC2 S3: the engine-owned trade-id generator (the next tradeId; snapshot payload offset 8). */
+    public long getTradeIdGenerator() {
+        return tradeIdGenerator.get();
+    }
+
+    /** RC2 S3: snapshot restore only (applied in place by {@code SnapshotCodec.deserialize}). */
+    public void setTradeIdGenerator(long value) {
+        tradeIdGenerator.set(value);
+    }
+
+    /** RC2 S3 X4: equal-intent duplicates suppressed under behaviour 2 (node-local counter). */
+    public long suppressedDuplicateCount() {
+        return suppressedDuplicateCount;
     }
 
     /**

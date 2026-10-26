@@ -34,21 +34,51 @@ public final class BehaviourTwoHarness implements AutoCloseable {
     public final EngineConfigStateMachine sm;
     public final List<EngineConfigStateMachine.Decision> decisions = new ArrayList<>();
 
+    /**
+     * RC2 S3: the replica shapes a member can have (contract section 4: they must allocate the
+     * same tradeIds and journalSeqs at the same log position).
+     */
+    public enum Shape {
+        /** Publisher with an egress ring for every market and the journal armed (production). */
+        JOURNALED,
+        /** Publisher with rings, journal off (SETTLEMENT_JOURNAL_ENABLED unset). */
+        DARK,
+        /** Publisher with the journal armed and no egress ring (no initMarket). */
+        RINGLESS,
+        /** No sink attached to the engine at all (the RCS replica shape); record 5 unjournaled. */
+        SINKLESS
+    }
+
+    public final Shape shape;
+
     public BehaviourTwoHarness(Engine engine) {
+        this(engine, Shape.JOURNALED);
+    }
+
+    public BehaviourTwoHarness(Engine engine, Shape shape) {
         this.engine = engine;
+        this.shape = shape;
         journal.bindIdentity(engine.meIdentity());
-        publisher.setSettlementJournal(journal);
-        for (int m = 1; m <= 5; m++) {
-            final int marketId = m;
-            publisher.initMarket(marketId, new MarketEventHandler() {
-                public int getMarketId() { return marketId; }
-                public void onEvent(PublishEvent e, long seq, boolean end) { }
-            });
+        if (shape == Shape.JOURNALED || shape == Shape.RINGLESS) {
+            publisher.setSettlementJournal(journal);
+        }
+        if (shape == Shape.JOURNALED || shape == Shape.DARK) {
+            for (int m = 1; m <= 5; m++) {
+                final int marketId = m;
+                publisher.initMarket(marketId, new MarketEventHandler() {
+                    public int getMarketId() { return marketId; }
+                    public void onEvent(PublishEvent e, long seq, boolean end) { }
+                });
+            }
         }
         publisher.start();
-        engine.setEventPublisher(publisher);
-        sm = new EngineConfigStateMachine(engine, failFast::incrementAndGet, null,
-                publisher::publishEngineConfig);
+        if (shape != Shape.SINKLESS) {
+            engine.setEventPublisher(publisher);
+        }
+        sm = shape == Shape.SINKLESS
+                ? new EngineConfigStateMachine(engine, failFast::incrementAndGet, null)
+                : new EngineConfigStateMachine(engine, failFast::incrementAndGet, null,
+                        publisher::publishEngineConfig);
     }
 
     /** A config-mode replica. */

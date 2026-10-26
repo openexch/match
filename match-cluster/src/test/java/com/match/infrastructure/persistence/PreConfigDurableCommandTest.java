@@ -73,7 +73,7 @@ public class PreConfigDurableCommandTest {
 
         byte[] snapshot() {
             final ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
-            final int len = SnapshotCodec.serialize(engine, publisher.getTradeIdGenerator(), 0L, buf);
+            final int len = SnapshotCodec.serialize(engine, 0L, buf);
             return Arrays.copyOf(buf.byteArray(), len);
         }
 

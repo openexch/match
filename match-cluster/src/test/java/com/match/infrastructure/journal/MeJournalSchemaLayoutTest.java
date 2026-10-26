@@ -162,13 +162,13 @@ public class MeJournalSchemaLayoutTest {
     @Test
     public void allFiveRecordsRoundTripThroughTheWriterIncludingA48EntryRelease() {
         final SettlementJournal journal = new SettlementJournal(1 << 16);
-        journal.appendTrade(1L, 2L, 3, 4L, 5L, 6L, 7L, 8L, 9L, false, 10L, 11L, 12L);
-        journal.appendTerminal(1L, 4L, 5L, 3, 3, 10L, 11L, 0);
-        journal.appendCommandOutcome(1L, new com.match.domain.commands.DurableCommandOutcome(
+        journal.appendTrade(0L, 1L, 2L, 3, 4L, 5L, 6L, 7L, 8L, 9L, false, 10L, 11L, 12L);
+        journal.appendTerminal(0L, 1L, 4L, 5L, 3, 3, 10L, 11L, 0);
+        journal.appendCommandOutcome(0L, 1L, new com.match.domain.commands.DurableCommandOutcome(
                 new com.match.domain.commands.DurableOrderIntent(1L, 2L, 3L, 4L, 0L, 5L, 6L, 0L, 7, 0, 0, 0),
                 1L, 2L, 3L, 0, 0, false, 0), 1);
         final int n = SettlementJournal.MAX_RELEASE_ENTRIES;
-        journal.appendCommandRelease(1L, 2L, 0, 100_000, 0, n,
+        journal.appendCommandRelease(0L, 1L, 2L, 0, 100_000, 0, n,
                 new long[n], new long[n], new int[n], new int[n], new int[n]);
         journal.appendEngineConfig(0L, 1L, 1L, 1L, 100_000L, 12, 0);
 
@@ -197,7 +197,7 @@ public class MeJournalSchemaLayoutTest {
     public void aFortyNineEntryReleaseIsRefused() {
         final int n = SettlementJournal.MAX_RELEASE_ENTRIES + 1;
         try {
-            new SettlementJournal(1 << 16).appendCommandRelease(1L, 2L, 0, 100_000, 0, n,
+            new SettlementJournal(1 << 16).appendCommandRelease(0L, 1L, 2L, 0, 100_000, 0, n,
                     new long[n], new long[n], new int[n], new int[n], new int[n]);
             fail("49 entries must be refused");
         } catch (final IllegalArgumentException expected) {

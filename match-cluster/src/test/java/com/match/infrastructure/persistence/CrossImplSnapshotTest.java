@@ -41,7 +41,7 @@ public class CrossImplSnapshotTest {
         seedRestingBooks(from);
 
         ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();
-        int length = SnapshotCodec.serialize(from, 7L, 0L, buffer);
+        from.setTradeIdGenerator(7L); int length = SnapshotCodec.serialize(from, 0L, buffer);
 
         Engine to = new Engine(toImpl);
         SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(buffer, 0, length, to);

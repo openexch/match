@@ -45,6 +45,20 @@ public final class SettlementJournalRuntime implements AutoCloseable {
     private final SettlementJournal journal;
     private final JournalCheckpointFile checkpoints;
 
+    /** Constant true: what production always passes to the writer's drain gate. */
+    private static final java.util.function.BooleanSupplier ALWAYS_DRAIN = () -> true;
+
+    /**
+     * RC2 S3 drill seam (contract 11, A5): the writer's drain gate. Package-private and
+     * constant-true by default; only the test-scope drill child main replaces it, before
+     * bootstrap. No env var or system property reaches it.
+     */
+    private static volatile java.util.function.BooleanSupplier drainGate = ALWAYS_DRAIN;
+
+    static void installDrainGateForDrill(final java.util.function.BooleanSupplier gate) {
+        drainGate = gate == null ? ALWAYS_DRAIN : gate;
+    }
+
     private Archive journalArchive;
     private AgentRunner writerRunner;
 
@@ -141,7 +155,8 @@ public final class SettlementJournalRuntime implements AutoCloseable {
                 InfrastructureConstants.settlementJournalChannel(),
                 InfrastructureConstants.SETTLEMENT_JOURNAL_STREAM_ID,
                 checkpoints,
-                SEGMENT_FILE_LENGTH);
+                SEGMENT_FILE_LENGTH,
+                drainGate);
 
         writerRunner = new AgentRunner(new BackoffIdleStrategy(), errorHandler, null, agent);
         AgentRunner.startOnThread(writerRunner);

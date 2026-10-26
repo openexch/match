@@ -178,17 +178,17 @@ public final class ScenarioRunner {
 
     /**
      * Real snapshot round-trip: serialize current engine state, restore into a FRESH engine, and
-     * swap it in — simulating a node restart mid-scenario. The sink (and its trade-id counter)
-     * persists, exactly as production's event publisher persists while engine state is rebuilt.
+     * swap it in — simulating a node restart mid-scenario. The sink persists, exactly as
+     * production's event publisher persists while engine state is rebuilt; the trade-id counter
+     * is engine-owned (RC2 S3) and travels in the snapshot.
      */
     private void snapshotRoundTrip() {
         ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();
-        int length = SnapshotCodec.serialize(engine, sink.getTradeIdGenerator(), timerCorrelationId, buffer);
+        int length = SnapshotCodec.serialize(engine, timerCorrelationId, buffer);
 
         Engine fresh = newEngine();
         SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(buffer, 0, length, fresh);
         fresh.setEventPublisher(sink);
-        sink.setTradeIdGenerator(decoded.tradeIdGenerator);
         if (decoded.timerCorrelationIdPresent) {
             timerCorrelationId = decoded.timerCorrelationId;
         }

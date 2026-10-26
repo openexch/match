@@ -13,14 +13,21 @@ package com.match.application.publisher;
  */
 public interface MatchEventSink {
     /**
-     * Journal-only side output of a durable command. Whether a node journals is node
-     * configuration, never replicated state, so the command is applied either way.
+     * Journal-only side output of a durable command (ME journal record 3). Whether a node
+     * journals is node configuration, never replicated state, so the command is applied either
+     * way.
      *
+     * <p>RC2 S3 compile fence (review FIX-9): the pre-S3 {@code (long, DurableCommandOutcome, int)}
+     * form is gone with no bridge, and every implementor carries {@code @Override}, so a sink left
+     * on the old signature fails to compile instead of silently journaling nothing.</p>
+     *
+     * @param egressSeq       the entry's log position
+     * @param journalSeq      the engine's allocation for this record (0 under behaviour 1)
      * @param ledgerSizeAfter the command ledger size after this outcome is recorded (unchanged
-     *                        for a duplicate, conflict or capacity outcome); ME journal record 3
-     *                        carries it as {@code ledgerSize}
+     *                        for a conflict, capacity or invalid outcome); record 3 {@code ledgerSize}
      */
-    default void publishCommandOutcome(long journalPosition, com.match.domain.commands.DurableCommandOutcome outcome,
+    default void publishCommandOutcome(long egressSeq, long journalSeq,
+                                       com.match.domain.commands.DurableCommandOutcome outcome,
                                        int ledgerSizeAfter) {
     }
 
@@ -37,13 +44,18 @@ public interface MatchEventSink {
     }
 
     /**
-     * Publish a single trade execution. Called once per match, in match order.
+     * Publish a single trade execution. Called once per match, in match order. RC2 S3: the
+     * engine owns both ids (contract section 3); the sink holds no counter.
      *
+     * @param tradeId    the engine-allocated trade id (1, +1 per trade in match order)
+     * @param journalSeq the engine-allocated journalSeq of record 1 (0 under behaviour 1)
      * @return true if accepted by the sink, false if the market is unknown
      */
     boolean publishTradeExecution(
             int marketId,
             long timestamp,
+            long tradeId,
+            long journalSeq,
             long takerOrderId,
             long takerUserId,
             long makerOrderId,
@@ -56,7 +68,8 @@ public interface MatchEventSink {
             long egressSeq);
 
     /**
-     * Publish an order status update (NEW / PARTIALLY_FILLED / FILLED / CANCELLED / REJECTED).
+     * Publish an order status update (NEW / PARTIALLY_FILLED / FILLED / CANCELLED / REJECTED) to
+     * egress only; this form never journals.
      *
      * @param rejectReason raw {@link com.match.application.orderbook.OrderRejectReason} code explaining
      *                     WHY a REJECTED (or reason-carrying CANCELLED) status fired;
@@ -82,12 +95,12 @@ public interface MatchEventSink {
             long egressSeq);
 
     /**
-     * Variant with journal-terminal suppression for an amend rejected before cancellation, or
-     * the old-leg CANCELLED of an accepted cancel-replace. Neither proves that the OMS order
-     * (the AE money key) is terminal; journaling these wire responses would prematurely release
-     * its hold. A replacement rejected after cancellation still journals its terminal normally.
-     * Sinks without a settlement journal can ignore the flag — this default delegates to the
-     * 12-arg form. Command outcomes require a separate durable recovery contract.
+     * RC2 S3: the engine's terminal journal decision travels with the status. The engine sets
+     * {@code journalTerminal} for every FILLED / CANCELLED / REJECTED it publishes through its
+     * plain status path, and clears it for the pre-cancel amend rejection and the replace
+     * old-leg CANCELLED (neither closes the OMS order, the AE money key). A sink journals a
+     * terminal iff the engine says so, at the engine's {@code journalSeq}. Sinks without a
+     * settlement journal can ignore both: this default delegates to the egress-only form.
      */
     default boolean publishOrderStatusUpdate(
             int marketId,
@@ -102,7 +115,8 @@ public interface MatchEventSink {
             long omsOrderId,
             int rejectReason,
             long egressSeq,
-            boolean suppressJournalTerminal) {
+            boolean journalTerminal,
+            long journalSeq) {
         return publishOrderStatusUpdate(marketId, timestamp, orderId, userId, orderStatus,
             remainingQty, filledQty, orderPrice, orderIsBuy, omsOrderId, rejectReason, egressSeq);
     }

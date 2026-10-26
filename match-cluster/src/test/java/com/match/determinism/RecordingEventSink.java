@@ -6,7 +6,6 @@ import com.match.application.publisher.MatchEventSink;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Synchronous {@link MatchEventSink} that records every engine event inline on the calling
@@ -14,24 +13,21 @@ import java.util.concurrent.atomic.AtomicLong;
  * exactly assertable: the engine calls these methods within {@code acceptOrder}, so the captured
  * list is the complete, globally-ordered output stream the moment {@code acceptOrder} returns.
  *
- * <p>The trade-id counter mirrors {@code MatchEventPublisher} (an {@code AtomicLong} starting at
- * 1, incremented once per trade) so captured trade IDs equal what production would assign. The
- * counter is exposed so a snapshot round-trip can carry it across an in-scenario "restart",
- * exactly as production restores it from the snapshot.</p>
+ * <p>RC2 S3: the trade id is the engine's allocation (contract section 3), rendered as given, so
+ * captured trade IDs are exactly what production assigns; the sink holds no counter.</p>
  */
 public final class RecordingEventSink implements MatchEventSink {
 
     private final List<EngineEvent> events = new ArrayList<>();
-    private final AtomicLong tradeIdGenerator = new AtomicLong(1);
 
     @Override
     public boolean publishTradeExecution(
-            int marketId, long timestamp, long takerOrderId, long takerUserId,
+            int marketId, long timestamp, long tradeId, long journalSeq, long takerOrderId, long takerUserId,
             long makerOrderId, long makerUserId, long price, long quantity,
             boolean takerIsBuy, long takerOmsOrderId, long makerOmsOrderId, long egressSeq) {
-        // egressSeq is a transport-ordering value (Aeron log position), not a logical engine event
-        // field — deliberately NOT recorded, so the determinism goldens stay implementation-agnostic.
-        long tradeId = tradeIdGenerator.getAndIncrement();
+        // egressSeq (Aeron log position) and journalSeq (journal sequence) are transport/journal
+        // ordering values, not logical engine event fields — deliberately NOT recorded, so the
+        // determinism goldens stay implementation-agnostic.
         events.add(new EngineEvent.Trade(marketId, timestamp, tradeId, takerOrderId, takerUserId,
                 makerOrderId, makerUserId, price, quantity, takerIsBuy, takerOmsOrderId, makerOmsOrderId));
         return true;
@@ -60,15 +56,5 @@ public final class RecordingEventSink implements MatchEventSink {
             sb.append(e.render()).append('\n');
         }
         return sb.toString();
-    }
-
-    // --- trade-id counter, mirroring MatchEventPublisher's snapshot get/set ---
-
-    public long getTradeIdGenerator() {
-        return tradeIdGenerator.get();
-    }
-
-    public void setTradeIdGenerator(long value) {
-        tradeIdGenerator.set(value);
     }
 }
