@@ -56,7 +56,7 @@ public class SettlementJournalRingCarriesOnlySchema4Test {
             engine.acceptDurable(new DurableOrderIntent(17, 4, 300, 9003, resting.orderId(), 0, 0, 0, 1, 1, 0, 0), 1004);
             journal.appendCommandRelease(768, 9, 4, 100_000, 1, 1,
                     new long[] {17}, new long[] {1}, new int[] {0}, new int[] {0}, new int[] {1});
-            journal.appendEngineConfig(64, 1, 1, 100_000, 12, 0);
+            journal.appendEngineConfig(0, 64, 1, 1, 100_000, 12, 0);
 
             final List<int[]> frames = new ArrayList<>(); // {msgType, schemaId, version, templateId}
             journal.ringBuffer().read((msgTypeId, buffer, index, length) -> {

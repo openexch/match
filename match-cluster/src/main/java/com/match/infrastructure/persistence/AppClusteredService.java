@@ -106,9 +106,14 @@ public class AppClusteredService implements ClusteredService {
     static void failFastHalt() {
         Runtime.getRuntime().halt(1);
     }
+    // RC2 S2: record 5 goes through a DEFERRING adapter. This field initializer runs before the
+    // eventPublisher field below is initialized, so the publisher is dereferenced per call
+    // (this.eventPublisher inside the lambda body), never captured here (it would be null).
     private final com.match.application.engine.EngineConfigStateMachine engineConfigStateMachine =
             new com.match.application.engine.EngineConfigStateMachine(
-                    engine, () -> failFast.run(), this::onEnginesCreatedFromConfig);
+                    engine, () -> failFast.run(), this::onEnginesCreatedFromConfig,
+                    (egressSeq, journalSeq, recorded, decision) ->
+                            this.eventPublisher.publishEngineConfig(egressSeq, journalSeq, recorded, decision));
 
     private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
 
@@ -131,8 +136,6 @@ public class AppClusteredService implements ClusteredService {
     private static final long PERIODIC_RESNAPSHOT_INTERVAL_MS = 10_000;
     private long lastPeriodicResnapshotMs = 0;
     private final MessageHeaderEncoder keepWarmHeaderEncoder = new MessageHeaderEncoder();
-    // RC2 S1 placeholder for ClusterHeartbeat.meEpoch (v12): S2 sends the recorded genesisId.
-    static final long KEEP_WARM_ME_EPOCH = 0L;
     private final ClusterHeartbeatEncoder keepWarmEncoder = new ClusterHeartbeatEncoder();
     private final UnsafeBuffer keepWarmBuffer = new UnsafeBuffer(
             new byte[MessageHeaderEncoder.ENCODED_LENGTH + ClusterHeartbeatEncoder.BLOCK_LENGTH]);
@@ -147,6 +150,10 @@ public class AppClusteredService implements ClusteredService {
      * bootstrap because it owns the second (journal) archive's lifecycle.
      */
     public void setSettlementJournal(final com.match.infrastructure.journal.SettlementJournal journal) {
+        // RC2 S2: the journal stamps meEpoch from THE engine's identity (a reference, not a copy).
+        if (journal != null) {
+            journal.bindIdentity(engine.meIdentity());
+        }
         eventPublisher.setSettlementJournal(journal);
     }
 
@@ -685,8 +692,35 @@ public class AppClusteredService implements ClusteredService {
                     // version set this build supports (just 1 for now); the counters are the
                     // EngineConfig decision table + the fresh-cluster order guard.
                     .gauge("match_supported_behavior_versions",
-                            "Behavior versions this build supports (constant 1 — version set {1}; slice C)",
-                            () -> 1L)
+                            "Behavior versions this build supports, as a bitmask (bit v-1): 3 = {1, 2} (RC2 S2; the slice C value 1 is the same encoding of {1})",
+                            () -> com.match.application.engine.EngineConfigStateMachine.SUPPORTED_BEHAVIOR_VERSIONS_MASK)
+                    .gauge("match_engine_behavior_version",
+                            "Recorded behaviour version of the replicated EngineConfig; 0 when none is recorded (RC2 S2)",
+                            engineConfigStateMachine::recordedBehaviorVersion)
+                    .gauge("match_supported_max_wire_version",
+                            "Highest order-schema version this build decodes (RC2 S2)",
+                            () -> (long) com.match.application.engine.EngineConfigStateMachine.SUPPORTED_MAX_WIRE_VERSION)
+                    .gauge("match_engine_max_wire_version",
+                            "Recorded wire ceiling (maxWireVersion) of the replicated EngineConfig; 0 when none or behaviour 1 (RC2 S2)",
+                            engineConfigStateMachine::recordedMaxWireVersion)
+                    .gauge("match_engine_me_epoch",
+                            "Recorded ME epoch (the genesisId bound by a FRESH at behaviour >= 2); 0 when unbound. Compare as text (identity, not magnitude) (RC2 S2)",
+                            () -> engine.meIdentity().meEpoch())
+                    .counter("match_engine_config_stale_total",
+                            "EngineConfig commands at behaviour >= 2 with configVersion <= the recorded one (RC2 S2)",
+                            engineConfigStateMachine::staleCount)
+                    .counter("match_engine_config_bumps_total",
+                            "EngineConfig BUMP decisions: recorded configVersion and wire ceiling raised (RC2 S2)",
+                            engineConfigStateMachine::bumpCount)
+                    .counter("match_ingress_above_ceiling_invalid_total",
+                            "DurableOrderCommand frames above the recorded wire ceiling, journaled as INVALID (record 3 result 8) (RC2 S2)",
+                            sbeDemuxer::aboveCeilingInvalidCount)
+                    .counter("match_ingress_above_ceiling_drops_total",
+                            "Frames of any other template above the recorded wire ceiling, dropped without mutation or journal (RC2 S2)",
+                            sbeDemuxer::aboveCeilingDropCount)
+                    .counter("match_dark_engine_config_records_total",
+                            "EngineConfig FRESH/BUMP decisions applied but not journaled because the settlement journal is off on this node (RC2 S2)",
+                            eventPublisher::getDarkEngineConfigCount)
                     .gauge("match_engine_from_config",
                             "Engine-creation mode of THIS node (1 = config mode, 0 = legacy). A launch parameter like CLUSTER_ADDRESSES: it must be uniform across members — a mixed cluster forks replicated state on any pre-config order. The operator layer verifies uniformity here before admitting genesis traffic (slice C)",
                             () -> engineFromConfigMode ? 1L : 0L)
@@ -716,10 +750,10 @@ public class AppClusteredService implements ClusteredService {
                             "EngineConfig commands identical to the recorded config — idempotent no-op ACKs (slice C)",
                             engineConfigStateMachine::duplicateCount)
                     .counter("match_engine_config_rejects_total",
-                            "EngineConfig commands rejected: differ from the recorded config (runtime reconfig is a later slice) or structurally invalid (slice C)",
+                            "EngineConfig commands rejected: every REJECTED_* decision of the decision table, structurally invalid included (slice C, RC2 S2)",
                             engineConfigStateMachine::rejectCount)
                     .counter("match_preconfig_order_rejects_total",
-                            "Order commands rejected by the fresh-cluster guard — arrived before any EngineConfig, no engine existed; always 0 in legacy mode (slice C)",
+                            "Order commands (CreateOrder, CancelOrder, UpdateOrder, DurableOrderCommand) rejected by the fresh-cluster guard — arrived before any EngineConfig, no engine existed, nothing applied or journaled; always 0 in legacy mode (slice C, RC2 S2)",
                             sbeDemuxer::preConfigOrderRejectCount)
                     .counter("match_orders_terminal_total", "Terminal order statuses published", eventPublisher::terminalStatusCount)
                     .counter("match_egress_disruptor_exceptions_total",
@@ -1193,7 +1227,8 @@ public class AppClusteredService implements ClusteredService {
      * Separated from loadSnapshot for clarity — this expects the FULL snapshot
      * data, not individual fragments.
      */
-    private void processSnapshotPayload(final DirectBuffer buf, final int offset, final int length) {
+    // Package-private for the RC2 S2 restore tests (SnapshotIdentityBlockTest, EngineConfigCrossCheckTest).
+    void processSnapshotPayload(final DirectBuffer buf, final int offset, final int length) {
         // Decode via the shared codec (same class that wrote the bytes in onTakeSnapshot).
         // The codec restores the engine's order books + order-id generator in place and hands
         // back the scalars we own externally.
@@ -1222,11 +1257,14 @@ public class AppClusteredService implements ClusteredService {
         // same node-local cross-check as the adopt path: a node restarted with env or a build
         // that diverges from the cluster's declared truth must exit here (fail-fast), never
         // serve — HEALTHY is not the same as running the right config.
+        //
+        // RC2 S2: the node-local check runs after every restore that brought a recorded config,
+        // in BOTH launch modes: (a) supported behaviour, (b) wire ceiling within this jar, (c)
+        // legacy-mode creation values, (d) behaviour >= 2 on a legacy-mode node.
         if (decoded.engineConfigPresent) {
-            System.out.println("[SNAPSHOT] Restored engineConfig: " + engine.getEngineConfig());
-            if (!engineFromConfigMode) {
-                engineConfigStateMachine.crossCheckOrExit(engine.getEngineConfig(), "snapshot-restore");
-            }
+            System.out.println("[SNAPSHOT] Restored engineConfig: " + engine.getEngineConfig().describe()
+                    + (decoded.identityPresent ? " identity=" + engine.meIdentity() : ""));
+            engineConfigStateMachine.checkAfterRestore();
         }
 
         if (decoded.rejectedOrders > 0) {
@@ -1410,15 +1448,7 @@ public class AppClusteredService implements ClusteredService {
      * Egress-only side effect — does not touch replicated state.
      */
     private void sendEgressKeepWarm() {
-        keepWarmEncoder.wrapAndApplyHeader(keepWarmBuffer, 0, keepWarmHeaderEncoder);
-        keepWarmEncoder
-            // v8: nodeId is uint8 on the wire (member ids are 0-2); SBE's Java codec
-            // takes uint8 as short.
-            .nodeId((short) cluster.memberId())
-            .timestamp(System.currentTimeMillis())
-            // v12: the recorded genesisId from S2; RC2 S1 encodes 0.
-            .meEpoch(KEEP_WARM_ME_EPOCH);
-        int length = MessageHeaderEncoder.ENCODED_LENGTH + keepWarmEncoder.encodedLength();
+        final int length = encodeKeepWarm(keepWarmBuffer, cluster.memberId(), System.currentTimeMillis());
 
         for (ClientSession session : clientSessions.getAllSessions()) {
             // Best-effort send - don't block or retry. Behavior UNCHANGED; match#140 only observes
@@ -1434,6 +1464,22 @@ public class AppClusteredService implements ClusteredService {
                 recordEgressSkip(session.id(), result);
             }
         }
+    }
+
+    /**
+     * Encode the ClusterHeartbeat keep-warm into {@code dst} and return its length. Package-private
+     * for MeEpochIdentityTest. {@code meEpoch} (v12) is the recorded epoch from the engine's bound
+     * identity, 0 while unbound (RC2 S2 section 5).
+     */
+    int encodeKeepWarm(final org.agrona.MutableDirectBuffer dst, final int memberId, final long nowMs) {
+        keepWarmEncoder.wrapAndApplyHeader(dst, 0, keepWarmHeaderEncoder);
+        keepWarmEncoder
+            // v8: nodeId is uint8 on the wire (member ids are 0-2); SBE's Java codec
+            // takes uint8 as short.
+            .nodeId((short) memberId)
+            .timestamp(nowMs)
+            .meEpoch(engine.meIdentity().meEpoch());
+        return MessageHeaderEncoder.ENCODED_LENGTH + keepWarmEncoder.encodedLength();
     }
 
     @Override

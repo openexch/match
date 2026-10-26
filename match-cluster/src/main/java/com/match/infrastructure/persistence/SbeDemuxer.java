@@ -64,6 +64,11 @@ public class SbeDemuxer {
     // (order-schema v12 ReleaseCommandIds 10, served from S4). Counted, never applied. Same
     // discipline as the reject counters: service thread only, not replicated, not snapshotted.
     private long unservedTemplateCount;
+    // RC2 S2 section 6 (W10): frames above the RECORDED wire ceiling (behaviour >= 2 only). A
+    // template 9 whose v12 prefix is a valid intent is journaled INVALID (record 3 result 8);
+    // every other template is a counted drop. Same discipline as the reject counters.
+    private long aboveCeilingInvalidCount;
+    private long aboveCeilingDropCount;
     // Service-thread only. Once a command may have partially applied, this instance cannot
     // establish another applied prefix. Decode-only poison never enters this state.
     private boolean applying;
@@ -178,8 +183,19 @@ public class SbeDemuxer {
         this.preConfigOrderRejectHandler = handler;
     }
 
+    // The highest header version this jar accepts: EXPECTED_SCHEMA_VERSION in production. A
+    // field, not the constant, only so a test can stand in for a later jar (RC2 S2 review FIX-1:
+    // the ceiling rule must not depend on it).
+    private final int maxSupportedVersion;
+
     public SbeDemuxer(Engine engine) {
+        this(engine, EXPECTED_SCHEMA_VERSION);
+    }
+
+    /** Test seam: a demuxer that accepts header versions up to {@code maxSupportedVersion}. */
+    SbeDemuxer(Engine engine, int maxSupportedVersion) {
         this.engine = engine;
+        this.maxSupportedVersion = maxSupportedVersion;
     }
 
     /**
@@ -207,15 +223,36 @@ public class SbeDemuxer {
         // above this build's ceiling (fields this build cannot decode) is still dropped here.
         final int schemaId = headerDecoder.schemaId();
         final int version = headerDecoder.version();
-        if (schemaId != EXPECTED_SCHEMA_ID
+        // RC2 S2 section 6: with a recorded behaviour >= 2 config, a frame above the RECORDED
+        // ceiling is decided from the header and the replicated ceiling only, never by this
+        // jar's supported version, so every member journals the same record at the same
+        // position whatever its jar. It runs ahead of the version drop below: a later jar whose
+        // supported version exceeds the recorded ceiling must still journal INVALID, exactly
+        // like the members still at the ceiling (review FIX-1). Cost on the hot path: one field
+        // read and a null check (no config recorded) or a behaviour compare.
+        boolean aboveCeiling = false;
+        if (schemaId == EXPECTED_SCHEMA_ID && aboveRecordedCeiling(version)) {
+            if (headerDecoder.templateId()
+                    != com.match.infrastructure.generated.DurableOrderCommandDecoder.TEMPLATE_ID) {
+                final long n = ++aboveCeilingDropCount;
+                if (shouldLogReject(n)) {
+                    System.err.println("INGRESS DROP (above ceiling): templateId=" + headerDecoder.templateId()
+                            + " version=" + version + " is above the recorded maxWireVersion="
+                            + engine.getEngineConfig().maxWireVersion + "; aboveCeilingDrops=" + n);
+                }
+                return;
+            }
+            aboveCeiling = true;
+        }
+        if (!aboveCeiling && (schemaId != EXPECTED_SCHEMA_ID
                 || version < MIN_SUPPORTED_SCHEMA_VERSION
-                || version > EXPECTED_SCHEMA_VERSION) {
+                || version > maxSupportedVersion)) {
             final long n = ++schemaRejectCount;
             if (shouldLogReject(n)) {
                 System.err.println("INGRESS DROP (schema): dropping frame schemaId=" + schemaId
                         + " version=" + version + " templateId=" + headerDecoder.templateId()
                         + " — this build speaks schemaId=" + EXPECTED_SCHEMA_ID + " versions "
-                        + MIN_SUPPORTED_SCHEMA_VERSION + ".." + EXPECTED_SCHEMA_VERSION
+                        + MIN_SUPPORTED_SCHEMA_VERSION + ".." + maxSupportedVersion
                         + "; schemaRejects=" + n);
             }
             return;
@@ -227,7 +264,9 @@ public class SbeDemuxer {
         // 9 and 8 grew in v12, every other known prefix is identical across versions 9..12
         // (minimumBlockLength, RC2 S1 contract section 3 frame-bounds rule).
         final int block = headerDecoder.blockLength();
-        final int minimum = minimumBlockLength(headerDecoder.templateId(), version);
+        // An above-ceiling template 9 is held to the v12 minimum (80): SBE is append-only, so the
+        // first 80 root bytes keep their v12 meaning in every later version.
+        final int minimum = minimumBlockLength(headerDecoder.templateId(), aboveCeiling ? V12 : version);
         if (block < minimum || block > length - MessageHeaderDecoder.ENCODED_LENGTH) {
             rejectFrameBounds();
             return;
@@ -268,6 +307,18 @@ public class SbeDemuxer {
             switch (headerDecoder.templateId()) {
                 case com.match.infrastructure.generated.DurableOrderCommandDecoder.TEMPLATE_ID:
                     if (version < 11) { rejectFrameBounds(); break; }
+                    // RC2 S2 section 13 addition: the fresh-cluster guard covers template 9 like
+                    // the other order commands. Before any EngineConfig (config mode, no engines)
+                    // there is no epoch and no publisher: counted drop on every replica, nothing
+                    // journaled, nothing applied, never an apply failure.
+                    if (!engine.hasEngines()) {
+                        handlePreConfigDrop("DurableOrderCommand",
+                                "no epoch is bound yet, so nothing is journaled; the core command stays pending");
+                        break;
+                    }
+                    // The generated decoder reads with the frame's own blockLength and version;
+                    // an above-ceiling frame (version > 12) decodes its v12 prefix exactly like a
+                    // v12 frame, with the same identity and range checks (F1 included).
                     var d = new com.match.infrastructure.generated.DurableOrderCommandDecoder()
                         .wrapAndApplyHeader(frame,0,headerDecoder);
                     // Null before range (RC2 S1 contract section 3): a pre-12 header maps the two v12
@@ -292,6 +343,18 @@ public class SbeDemuxer {
                         d.userId(),d.omsOrderId(),d.oldOrderId(),d.price(),d.quantity(),d.budget(),d.marketId(),
                         d.commandKind(),d.orderType(),d.orderSide(),timeInForce,expectedOldRemaining);
                     applying = true;
+                    if (aboveCeiling) {
+                        // Record 3 result 8: no capacity, no ledger, no apply (contract 6).
+                        engine.journalInvalid(intent, timestamp);
+                        final long n = ++aboveCeilingInvalidCount;
+                        if (shouldLogReject(n)) {
+                            System.err.println("INGRESS INVALID (above ceiling): DurableOrderCommand version="
+                                    + version + " above the recorded maxWireVersion="
+                                    + engine.getEngineConfig().maxWireVersion
+                                    + " journaled as INVALID; aboveCeilingInvalid=" + n);
+                        }
+                        break;
+                    }
                     engine.acceptDurable(intent,timestamp);
                     break;
                 case CreateOrderDecoder.TEMPLATE_ID:
@@ -379,6 +442,24 @@ public class SbeDemuxer {
         return createOrderCount;
     }
 
+    /** RC2 S2: a recorded behaviour >= 2 config exists and {@code version} is above its ceiling. */
+    private boolean aboveRecordedCeiling(final int version) {
+        final com.match.application.engine.EngineConfigState recorded = engine.getEngineConfig();
+        return recorded != null && recorded.behaviorVersion >= 2 && version > recorded.maxWireVersion;
+    }
+
+    /** Scrapeable (match_ingress_above_ceiling_invalid_total): template-9 frames above the
+     *  recorded ceiling journaled as INVALID (RC2 S2 section 6). */
+    public long aboveCeilingInvalidCount() {
+        return aboveCeilingInvalidCount;
+    }
+
+    /** Scrapeable (match_ingress_above_ceiling_drops_total): frames of any other template above
+     *  the recorded ceiling, dropped without mutation or journal (RC2 S2 section 6). */
+    public long aboveCeilingDropCount() {
+        return aboveCeilingDropCount;
+    }
+
     private void countUnserved() {
         final long n = ++unservedTemplateCount;
         if (shouldLogReject(n)) {
@@ -458,11 +539,16 @@ public class SbeDemuxer {
      * release and no meaningful status to address. Count + loud log; deterministic drop.
      */
     private void handlePreConfigCancelOrUpdate(String what) {
+        handlePreConfigDrop(what, "nothing to cancel/amend (the wire carries no omsOrderId"
+                + " for this template, so no status egress is addressable)");
+    }
+
+    /** The fresh-cluster guard's counted, logged, deterministic drop (no egress, no journal). */
+    private void handlePreConfigDrop(String what, String why) {
         final long n = ++preConfigOrderRejectCount;
         if (shouldLogReject(n)) {
             System.err.println("INGRESS REJECT (pre-config): " + what + " before any EngineConfig —"
-                    + " no engine exists yet, nothing to cancel/amend (the wire carries no omsOrderId"
-                    + " for this template, so no status egress is addressable); preConfigOrderRejects=" + n);
+                    + " no engine exists yet, " + why + "; preConfigOrderRejects=" + n);
         }
     }
 

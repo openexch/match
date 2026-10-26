@@ -5,8 +5,9 @@ package com.match.domain.commands;
  * Immutable command identity and full payload binding, independent of transport retries.
  *
  * <p>Order-schema v12 adds {@code timeInForce} (0 GTC, 1 IOC, 2 FOK) and
- * {@code expectedOldRemaining} (UPDATE only; 0 for CREATE and CANCEL). A v9..v11 frame carries
- * neither and maps to 0/0. In behaviour 1 the ledger's equal-intent comparison is
+ * {@code expectedOldRemaining} (UPDATE only; a non-zero value on CREATE or CANCEL is refused here,
+ * RC2 S2 F1, so the demuxer counts it as decode poison). A v9..v11 frame carries neither and maps
+ * to 0/0. In behaviour 1 the ledger's equal-intent comparison is
  * {@link #sameCommandBehaviour1} (the original 12 fields): the ledger snapshot does not carry the
  * two new fields, so comparing them would make a retry's DUPLICATE/CONFLICT depend on whether the
  * node restored from a snapshot.</p>
@@ -18,7 +19,9 @@ public record DurableOrderIntent(long idHigh, long idLow, long userId, long omsO
         if ((idHigh == 0 && idLow == 0) || userId <= 0 || omsOrderId <= 0 || marketId <= 0
                 || kind < 0 || kind > 2 || type < 0 || type > 2 || side < 0 || side > 1
                 || (kind == 0 ? oldOrderId != 0 : oldOrderId <= 0)
-                || timeInForce < 0 || timeInForce > 2 || expectedOldRemaining < 0)
+                || timeInForce < 0 || timeInForce > 2 || expectedOldRemaining < 0
+                // F1 (RC2 S2 6.1): expectedOldRemaining is an UPDATE-only field.
+                || (kind != 2 && expectedOldRemaining != 0))
             throw new IllegalArgumentException("Invalid durable command identity");
     }
 

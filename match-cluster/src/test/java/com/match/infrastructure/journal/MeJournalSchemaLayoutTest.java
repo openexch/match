@@ -170,7 +170,7 @@ public class MeJournalSchemaLayoutTest {
         final int n = SettlementJournal.MAX_RELEASE_ENTRIES;
         journal.appendCommandRelease(1L, 2L, 0, 100_000, 0, n,
                 new long[n], new long[n], new int[n], new int[n], new int[n]);
-        journal.appendEngineConfig(1L, 1L, 1L, 100_000L, 12, 0);
+        journal.appendEngineConfig(0L, 1L, 1L, 1L, 100_000L, 12, 0);
 
         final List<byte[]> frames = new ArrayList<>();
         journal.ringBuffer().read((t, b, i, l) -> {

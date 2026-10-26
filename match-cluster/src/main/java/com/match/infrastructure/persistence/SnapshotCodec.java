@@ -45,9 +45,23 @@ import java.util.Arrays;
  *       [minPrice : long][maxPrice : long][tickSize : long]
  * </pre>
  *
- * <p><b>Slice C note for future tails:</b> because the engineConfig block is written only when
- * present, any FUTURE trailing block must begin with a marker distinguishable from this block's
- * present byte (1) or make the config block unconditional first.</p>
+ *   [identity marker      : byte = 3]  // RC2 S2: ONLY when the recorded behaviorVersion >= 2,
+ *     [identityBlockVersion : int = 1]  // immediately after the config block and BEFORE the
+ *     [behaviorVersion      : int]      // ledger block (the ledger read consumes to the payload
+ *     [commandLedgerCapacity: int]      // end). uint32 values: low 32 bits written, read
+ *     [maxWireVersion       : int]      // unsigned. 41 bytes. An image carrying it is ALWAYS
+ *     [genesisId            : long]     // wrapped in the durable envelope; with an empty ledger
+ *     [meEpoch              : long]     // no marker-2 block follows (the payload ends here).
+ *     [nextJournalSeq       : long]
+ *   [ledger marker : byte = 2] ...     // DurableCommandLedger, only when the ledger is non-empty
+ * </pre>
+ *
+ * <p><b>Note for future tails:</b> every optional block starts with a distinct marker byte:
+ * 1 config, 3 identity, 2 ledger; 4 is reserved for the S4 ledger v2 block.</p>
+ *
+ * <pre>
+ *   Durable envelope (whenever the ledger is non-empty or the identity block is present):
+ *   [DURABLE_MAGIC : long][envelope version : int = 1][payload length : int][CRC32C : int][payload]</pre>
  *
  * <p>All scalars use the buffer's native byte order (Agrona default), identical to the
  * historical inline encode/decode.</p>
@@ -57,6 +71,13 @@ public final class SnapshotCodec {
     // Negative magic cannot be a valid historical order-id generator. Whole-frame length + CRC
     // prevents a truncated ledger suffix being mistaken for a valid legacy snapshot.
     private static final long DURABLE_MAGIC = -0x434d444c45444745L;
+
+    /** RC2 S2: marker byte of the identity block (contract 2.2). */
+    static final byte IDENTITY_MARKER = 3;
+    /** RC2 S2: the only identity block version. */
+    static final int IDENTITY_BLOCK_VERSION = 1;
+    /** RC2 S2: marker + version + 3 ints + 3 longs. */
+    static final int IDENTITY_BLOCK_LENGTH = 1 + 4 + 4 + 4 + 4 + 8 + 8 + 8;
     private SnapshotCodec() {
     }
 
@@ -82,10 +103,14 @@ public final class SnapshotCodec {
         /** Slice C: true when the snapshot carried an engineConfig block (already restored into
          *  the engine — {@code engine.getEngineConfig()}). False for legacy/config-less snapshots. */
         public final boolean engineConfigPresent;
+        /** RC2 S2: true when the image carried the identity block (recorded behaviour >= 2); the
+         *  identity is then already bound on {@code engine.meIdentity()}. */
+        public final boolean identityPresent;
 
         Decoded(long orderIdGenerator, long tradeIdGenerator, long timerCorrelationId,
                 boolean timerCorrelationIdPresent, int rejectedOrders, int bytesConsumed,
-                boolean engineConfigPresent) {
+                boolean engineConfigPresent, boolean identityPresent) {
+            this.identityPresent = identityPresent;
             this.orderIdGenerator = orderIdGenerator;
             this.tradeIdGenerator = tradeIdGenerator;
             this.timerCorrelationId = timerCorrelationId;
@@ -217,8 +242,34 @@ public final class SnapshotCodec {
             }
         }
 
+        // RC2 S2: the identity block, only at a recorded behaviour >= 2 (a behaviour-1 image is
+        // byte-identical to the S1 serializer). It forces the envelope, so an S1 jar meets byte 3
+        // where it expects the ledger marker and fails closed ("Durable snapshot ledger missing").
+        final boolean identityBlock = config != null && config.behaviorVersion >= 2;
+        if (identityBlock) {
+            final com.match.application.engine.MeIdentity identity = engine.meIdentity();
+            dst.putByte(pos, IDENTITY_MARKER);
+            pos += 1;
+            dst.putInt(pos, IDENTITY_BLOCK_VERSION);
+            pos += 4;
+            dst.putInt(pos, (int) config.behaviorVersion); // low 32 bits of the uint32
+            pos += 4;
+            dst.putInt(pos, (int) config.commandLedgerCapacity);
+            pos += 4;
+            dst.putInt(pos, (int) config.maxWireVersion);
+            pos += 4;
+            dst.putLong(pos, config.genesisId);
+            pos += 8;
+            dst.putLong(pos, identity.meEpoch());
+            pos += 8;
+            dst.putLong(pos, identity.nextJournalSeq());
+            pos += 8;
+        }
+
         if (engine.commandLedger().size() > 0) {
             pos = engine.commandLedger().write(dst, pos);
+        }
+        if (engine.commandLedger().size() > 0 || identityBlock) {
             byte[] payload = new byte[pos]; dst.getBytes(0,payload);
             var crc = new java.util.zip.CRC32C(); crc.update(payload,0,payload.length);
             dst.putLong(0,DURABLE_MAGIC); dst.putInt(8,1); dst.putInt(12,pos);
@@ -359,6 +410,11 @@ public final class SnapshotCodec {
         // block; a truncated block then fails loudly (buffer bounds), which is correct for a
         // corrupt snapshot.
         boolean engineConfigPresent = false;
+        boolean identityPresent = false;
+        if (pos + 1 <= end && src.getByte(pos) == IDENTITY_MARKER) {
+            throw new IllegalStateException("[SNAPSHOT] identity block without a preceding engineConfig"
+                    + " block (corrupt snapshot)");
+        }
         if (pos + 1 <= end && src.getByte(pos) == 1) {
             pos += 1;
             final long configVersion = src.getLong(pos);
@@ -389,24 +445,81 @@ public final class SnapshotCodec {
                 defs[i] = new com.match.application.engine.EngineConfigState.MarketDef(
                         marketId, symbol, minPrice, maxPrice, tickSize);
             }
+            // RC2 S2 reader order (contract 2.2): the identity block directly follows the config
+            // block and is parsed BEFORE the config is built, so the engines are created from the
+            // 10-field config and the identity is bound only after them.
+            long behaviorVersion = com.match.application.engine.EngineConfigState.DEFAULT_BEHAVIOR_VERSION;
+            long commandLedgerCapacity =
+                    com.match.application.engine.EngineConfigState.DEFAULT_COMMAND_LEDGER_CAPACITY;
+            long genesisId = com.match.application.engine.EngineConfigState.DEFAULT_GENESIS_ID;
+            long maxWireVersion = com.match.application.engine.EngineConfigState.DEFAULT_MAX_WIRE_VERSION;
+            long meEpoch = 0;
+            long nextJournalSeq = 0;
+            if (pos + 1 <= end && src.getByte(pos) == IDENTITY_MARKER) {
+                if (!durableEnvelope) {
+                    throw new IllegalStateException("[SNAPSHOT] identity block in an image without the"
+                            + " durable envelope (no CRC, no end check): corrupt snapshot");
+                }
+                if (end - pos < IDENTITY_BLOCK_LENGTH) {
+                    throw new IllegalStateException("[SNAPSHOT] truncated identity block: "
+                            + (end - pos) + " of " + IDENTITY_BLOCK_LENGTH + " bytes");
+                }
+                pos += 1;
+                final int blockVersion = src.getInt(pos);
+                pos += 4;
+                behaviorVersion = src.getInt(pos) & 0xFFFFFFFFL;
+                pos += 4;
+                commandLedgerCapacity = src.getInt(pos) & 0xFFFFFFFFL;
+                pos += 4;
+                maxWireVersion = src.getInt(pos) & 0xFFFFFFFFL;
+                pos += 4;
+                genesisId = src.getLong(pos);
+                pos += 8;
+                meEpoch = src.getLong(pos);
+                pos += 8;
+                nextJournalSeq = src.getLong(pos);
+                pos += 8;
+                if (blockVersion != IDENTITY_BLOCK_VERSION) {
+                    throw new IllegalStateException("[SNAPSHOT] unsupported identity block version "
+                            + blockVersion);
+                }
+                if (behaviorVersion < 2) {
+                    throw new IllegalStateException("[SNAPSHOT] identity block with behaviorVersion "
+                            + behaviorVersion + " < 2 (corrupt snapshot)");
+                }
+                if (meEpoch != genesisId) {
+                    throw new IllegalStateException("[SNAPSHOT] identity block meEpoch " + meEpoch
+                            + " != genesisId " + genesisId + " (corrupt snapshot)");
+                }
+                if (nextJournalSeq < 2) {
+                    throw new IllegalStateException("[SNAPSHOT] identity block nextJournalSeq "
+                            + nextJournalSeq + " < 2 (corrupt snapshot)");
+                }
+                identityPresent = true;
+            }
+
             final com.match.application.engine.EngineConfigState config =
                     com.match.application.engine.EngineConfigState.of(configVersion,
                             implByte == 1 ? com.match.application.engine.EngineConfigState.IMPL_DIRECT
                                           : com.match.application.engine.EngineConfigState.IMPL_ARRAY,
-                            bookCapacity, maxMatchesPerOrder, maxOrdersPerLevel, defs);
+                            bookCapacity, maxMatchesPerOrder, maxOrdersPerLevel, defs,
+                            behaviorVersion, commandLedgerCapacity, genesisId, maxWireVersion);
             engineConfigPresent = true;
+
+            // A recorded config was validated at accept time (S-a..S-c), so an invalid one here
+            // means snapshot corruption: fail the boot loudly in both launch modes rather than
+            // build or record a half-wrong engine. A structurally valid but unsupported value
+            // (behaviour 3, ceiling 13) is restored; the node-local check then halts the node.
+            final String invalid = config.invalidReason();
+            if (invalid != null) {
+                throw new IllegalStateException(
+                        "[SNAPSHOT] engineConfig block is invalid (corrupt snapshot?): " + invalid);
+            }
 
             if (enginesWereEmpty) {
                 // Config-mode fresh-from-snapshot: rebuild the engines from the recorded config —
                 // identically to the original creation (same normalized market order) — then
-                // restore the parked books. A recorded config was validated at accept time, so an
-                // invalid one here means snapshot corruption: fail the boot loudly rather than
-                // build a half-wrong engine.
-                final String invalid = config.invalidReason();
-                if (invalid != null) {
-                    throw new IllegalStateException(
-                            "[SNAPSHOT] engineConfig block is invalid (corrupt snapshot?): " + invalid);
-                }
+                // restore the parked books.
                 engine.createEnginesFromConfig(config);
                 for (int i = 0; i < parkedMarketIds.size(); i++) {
                     final int marketId = parkedMarketIds.get(i);
@@ -430,6 +543,10 @@ public final class SnapshotCodec {
                 // matches it is the caller's cross-check (AppClusteredService fail-fast).
                 engine.setEngineConfig(config);
             }
+            // Only now bind the identity, in both branches.
+            if (identityPresent) {
+                engine.meIdentity().restore(meEpoch, nextJournalSeq, behaviorVersion);
+            }
         } else if (enginesWereEmpty && !parkedMarketIds.isEmpty()) {
             // Config-mode node restoring a snapshot that has market books but NO config block:
             // nothing to build engines from — this is state loss and must be loud, never silent.
@@ -447,12 +564,13 @@ public final class SnapshotCodec {
 
         if (pos < end && src.getByte(pos) == 2) pos = engine.commandLedger().read(src,pos,end);
         else {
-            if (durableEnvelope) throw new IllegalStateException("Durable snapshot ledger missing");
+            // Inside the envelope a missing ledger is legal only when the identity block forced it.
+            if (durableEnvelope && !identityPresent) throw new IllegalStateException("Durable snapshot ledger missing");
             engine.commandLedger().clear();
         }
         if (durableEnvelope && pos!=end) throw new IllegalStateException("Durable snapshot has trailing bytes");
         return new Decoded(orderIdGen, tradeIdGen, timerCorrelationId, timerPresent,
-                rejected, pos - originalOffset, engineConfigPresent);
+                rejected, pos - originalOffset, engineConfigPresent, identityPresent);
     }
 
     /** Slice C: read the fixed 16-byte NUL-padded ASCII symbol written by {@link #putPaddedSymbol}. */

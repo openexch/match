@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.match.infrastructure.journal;
 
+import com.match.application.engine.MeIdentity;
 import com.match.domain.commands.DurableCommandOutcome;
 import com.match.domain.commands.DurableOrderIntent;
 import com.match.infrastructure.Logger;
@@ -40,8 +41,10 @@ import java.nio.ByteBuffer;
  * message, which the writer agent offers as ONE unfragmented frame; the largest legal frame is
  * {@link #MAX_FRAME_LENGTH} (a 48-entry {@code CommandRelease}), below the 1376 B payload of the
  * {@code aeron:ipc} default MTU. Schema 3 and the schema 1 template 28 are never written again.
- * Until S2/S3 mint them, {@code journalSeq} and {@code meEpoch} are written as 0 on every record
- * (this intermediate ME is never deployed).
+ * {@code meEpoch} is read on every append from the bound {@link MeIdentity} (RC2 S2 section 5):
+ * 0 until a FRESH at behaviour >= 2 binds it, then the recorded genesisId. {@code journalSeq} is
+ * the state machine's allocation on record 5 and 0 on records 1-4 until S3 makes it dense (this
+ * intermediate ME is never deployed).
  *
  * Single-writer: all methods are called only from the cluster service thread. The counters
  * are volatile so a metrics/diagnostics thread can read them without tearing.
@@ -65,13 +68,21 @@ public final class SettlementJournal {
             + CommandReleaseEncoder.BLOCK_LENGTH + 4
             + MAX_RELEASE_ENTRIES * CommandReleaseEncoder.ReleasesEncoder.sbeBlockLength();
 
-    /** S1 placeholders: journalSeq is minted from S3, meEpoch (the recorded genesisId) from S2. */
+    /** Placeholder journalSeq of records 1-4 until S3 makes allocation dense (S1 section 0). */
     static final long S1_JOURNAL_SEQ = 0L;
-    static final long S1_ME_EPOCH = 0L;
 
-    /** S1 record 3 tail constants: the behaviour-1 ledger capacity and behaviour version. */
+    /**
+     * Record 3 {@code ledgerCapacity}: the cap the behaviour-1 ledger actually enforces. Stays
+     * 100000 in S2 (contract section 5); S4 switches it to the recorded capacity.
+     */
     static final int S1_LEDGER_CAPACITY = 100_000;
-    static final long S1_BEHAVIOR_VERSION = 1L;
+
+    /**
+     * RC2 S2: the engine-owned identity (one reference, never a copy, so a later bind is seen).
+     * Defaults to an unbound identity for a journal that is never bound (meEpoch 0, behaviour 1).
+     * Volatile: bound at bootstrap, read on the service thread.
+     */
+    private volatile MeIdentity identity = new MeIdentity();
 
     /** Spin count between escalating "journal stalled" logs while blocked on a full ring. */
     private static final long SPINS_PER_STALL_LOG = 50_000_000L;
@@ -98,6 +109,17 @@ public final class SettlementJournal {
         this.ringBuffer = new OneToOneRingBuffer(new UnsafeBuffer(byteBuffer));
     }
 
+    /**
+     * RC2 S2: bind the engine's {@link MeIdentity}; every later append stamps its meEpoch (and
+     * record 3 its behaviour). Called once at bootstrap (AppClusteredService.setSettlementJournal).
+     */
+    public void bindIdentity(final MeIdentity engineIdentity) {
+        if (engineIdentity == null) {
+            throw new IllegalArgumentException("MeIdentity must not be null");
+        }
+        this.identity = engineIdentity;
+    }
+
     /** The ring the {@link JournalWriterAgent} drains. */
     public OneToOneRingBuffer ringBuffer() {
         return ringBuffer;
@@ -112,9 +134,10 @@ public final class SettlementJournal {
     public void appendCommandOutcome(final long egressSeq, final DurableCommandOutcome o,
                                      final int ledgerSizeAfter) {
         final DurableOrderIntent c = o.intent();
+        final MeIdentity id = identity;
         outcomeEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
                 .journalSeq(S1_JOURNAL_SEQ)
-                .meEpoch(S1_ME_EPOCH)
+                .meEpoch(id.meEpoch())
                 .egressSeq(egressSeq)
                 .commandIdHigh(c.idHigh())
                 .commandIdLow(c.idLow())
@@ -139,7 +162,7 @@ public final class SettlementJournal {
                 .expectedOldRemaining(c.expectedOldRemaining())
                 .ledgerSize(ledgerSizeAfter)
                 .ledgerCapacity(S1_LEDGER_CAPACITY)
-                .behaviorVersion(S1_BEHAVIOR_VERSION);
+                .behaviorVersion(id.behaviorVersion());
         blockingWrite(MSG_TYPE_OUTCOME,
                 MessageHeaderEncoder.ENCODED_LENGTH + outcomeEncoder.encodedLength(), c.idLow());
     }
@@ -162,7 +185,7 @@ public final class SettlementJournal {
         final CommandReleaseEncoder.ReleasesEncoder group = releaseEncoder
                 .wrapAndApplyHeader(scratch, 0, headerEncoder)
                 .journalSeq(S1_JOURNAL_SEQ)
-                .meEpoch(S1_ME_EPOCH)
+                .meEpoch(identity.meEpoch())
                 .egressSeq(egressSeq)
                 .releaseSeq(releaseSeq)
                 .ledgerSize(ledgerSize)
@@ -182,15 +205,16 @@ public final class SettlementJournal {
     }
 
     /**
-     * Record 5 ({@code EngineConfig}): the journaled state-machine decision. Written by the
-     * {@code EngineConfigStateMachine} apply from S2; exists from S1 for the round trip.
+     * Record 5 ({@code EngineConfig}): the journaled state-machine decision (FRESH or BUMP at
+     * behaviour >= 2, RC2 S2). {@code journalSeq} is the state machine's allocation; meEpoch is
+     * stamped from the bound identity.
      */
-    public void appendEngineConfig(final long egressSeq, final long configVersion,
+    public void appendEngineConfig(final long journalSeq, final long egressSeq, final long configVersion,
                                    final long behaviorVersion, final long ledgerCapacity,
                                    final int maxWireVersion, final int decision) {
         configEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
-                .journalSeq(S1_JOURNAL_SEQ)
-                .meEpoch(S1_ME_EPOCH)
+                .journalSeq(journalSeq)
+                .meEpoch(identity.meEpoch())
                 .egressSeq(egressSeq)
                 .configVersion(configVersion)
                 .behaviorVersion(behaviorVersion)
@@ -245,7 +269,7 @@ public final class SettlementJournal {
 
         tradeEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
                 .journalSeq(S1_JOURNAL_SEQ)
-                .meEpoch(S1_ME_EPOCH)
+                .meEpoch(identity.meEpoch())
                 .egressSeq(egressSeq)
                 .tradeId(tradeId)
                 .marketId(marketId)
@@ -282,7 +306,7 @@ public final class SettlementJournal {
         }
         terminalEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
                 .journalSeq(S1_JOURNAL_SEQ)
-                .meEpoch(S1_ME_EPOCH)
+                .meEpoch(identity.meEpoch())
                 .egressSeq(egressSeq)
                 .orderId(orderId)
                 .userId(userId)

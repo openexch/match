@@ -71,7 +71,7 @@ public final class MeJournalFixtureDump {
                 new int[] {1, 0})));
 
         out.put(CONFIG, single(j -> j.appendEngineConfig(
-                64L, 1L, 1L, 100_000L, 12, 0 /* FRESH */)));
+                0L /* journalSeq: no identity bound in the dump */, 64L, 1L, 1L, 100_000L, 12, 0 /* FRESH */)));
         return out;
     }
 
