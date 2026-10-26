@@ -450,10 +450,16 @@ public class SbeDemuxerTest {
 
     /** A v12 DurableOrderCommand CREATE (block 80) through the generated encoder. */
     private int encodeDurableV12(final long idLow, final int tif, final long expectedOldRemaining) {
+        return encodeDurableV12(idLow, 0 /* CREATE */, 0L, tif, expectedOldRemaining);
+    }
+
+    /** A v12 DurableOrderCommand of any kind (0 CREATE, 1 CANCEL, 2 UPDATE) for user 100 / oms 9001. */
+    private int encodeDurableV12(final long idLow, final int kind, final long oldOrderId, final int tif,
+                                 final long expectedOldRemaining) {
         new DurableOrderCommandEncoder().wrapAndApplyHeader(buffer, 0, headerEncoder)
-                .commandIdHigh(17).commandIdLow(idLow).userId(100).omsOrderId(9001).oldOrderId(0)
+                .commandIdHigh(17).commandIdLow(idLow).userId(100).omsOrderId(9001).oldOrderId(oldOrderId)
                 .price(V12_PRICE).quantity(V12_QTY).budget(0).marketId(1)
-                .commandKind((short) 0).orderType((short) 0).orderSide((short) 0)
+                .commandKind((short) kind).orderType((short) 0).orderSide((short) 0)
                 .timeInForce((short) tif).expectedOldRemaining(expectedOldRemaining);
         return MessageHeaderEncoder.ENCODED_LENGTH + DurableOrderCommandEncoder.BLOCK_LENGTH;
     }
@@ -490,17 +496,66 @@ public class SbeDemuxerTest {
         }
     }
 
+    // RC2 S2 split (F1): the CREATE keeps tif 2 with expectedOldRemaining 0 and stays applied;
+    // the value 5 moved to an UPDATE against a resting leg (v12UpdateWithExpectedOldRemainingIsApplied).
     @Test
     public void v12DurableCommandCarriesTimeInForceAndExpectedOldRemaining() {
         try (Durable d = new Durable()) {
-            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 2, 5), 1000L);
+            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 2, 0), 1000L);
             assertEquals(0, d.demuxer.decodeRejectCount());
             final java.util.List<byte[]> records = d.drain();
             assertEquals(1, records.size());
             final var o = outcome(records.get(0));
             assertEquals(2, o.timeInForce());
-            assertEquals(5L, o.expectedOldRemaining());
+            assertEquals(0L, o.expectedOldRemaining());
             assertEquals(1, d.engine.commandLedger().size());
+        }
+    }
+
+    @Test
+    public void v12CreateWithExpectedOldRemainingIsDecodePoison() {
+        try (Durable d = new Durable()) {
+            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 0, 5), 1000L);
+            assertEquals("F1: expectedOldRemaining on a CREATE is decode poison", 1, d.demuxer.decodeRejectCount());
+            assertEquals(0, d.demuxer.applyErrorCount());
+            assertEquals(0, d.engine.commandLedger().size());
+            assertTrue(d.drain().isEmpty());
+        }
+    }
+
+    @Test
+    public void v12CancelWithExpectedOldRemainingIsDecodePoison() {
+        try (Durable d = new Durable()) {
+            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 0, 0), 1000L);
+            final long resting = outcome(d.drain().get(0)).orderId();
+            assertTrue("the CREATE rests", resting > 0);
+            d.demuxer.dispatch(buffer, 0, encodeDurableV12(2, 1 /* CANCEL */, resting, 0, 5), 1001L);
+            assertEquals("F1: expectedOldRemaining on a CANCEL is decode poison", 1, d.demuxer.decodeRejectCount());
+            assertEquals(0, d.demuxer.applyErrorCount());
+            assertEquals("only the CREATE is in the ledger", 1, d.engine.commandLedger().size());
+            assertTrue("no record for the refused CANCEL", d.drain().isEmpty());
+            assertFalse("the leg still rests", d.engine.getEngine(1).isBidEmpty());
+        }
+    }
+
+    @Test
+    public void v12UpdateWithExpectedOldRemainingIsApplied() {
+        try (Durable d = new Durable()) {
+            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 0, 0), 1000L);
+            final long resting = outcome(d.drain().get(0)).orderId();
+            assertTrue("the CREATE rests", resting > 0);
+            d.demuxer.dispatch(buffer, 0, encodeDurableV12(2, 2 /* UPDATE */, resting, 0, 5), 1001L);
+            assertEquals(0, d.demuxer.decodeRejectCount());
+            final java.util.List<byte[]> records = d.drain().stream()
+                    .filter(r -> new UnsafeBuffer(r).getShort(2, java.nio.ByteOrder.LITTLE_ENDIAN)
+                            == com.match.infrastructure.mejournal.generated.CommandOutcomeDecoder.TEMPLATE_ID)
+                    .collect(java.util.stream.Collectors.toList());
+            assertEquals(1, records.size());
+            final var o = outcome(records.get(0));
+            assertEquals(2, o.commandKind());
+            assertEquals("echoed into record 3", 5L, o.expectedOldRemaining());
+            assertEquals(com.match.domain.commands.DurableCommandOutcome.APPLIED, o.result());
+            assertEquals(2, d.engine.commandLedger().size());
         }
     }
 

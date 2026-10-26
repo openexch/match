@@ -60,7 +60,9 @@ public class EngineConfigReplayDeterminismTest {
                 .impl(EngineImpl.ARRAY)
                 .bookCapacity(bookCapacity)
                 .maxMatchesPerOrder(100)
-                .maxOrdersPerLevel(0);
+                .maxOrdersPerLevel(0)
+                // v12: an unset behaviorVersion is 0, which RC2 S2 refuses (S-b).
+                .behaviorVersion(1);
         EngineConfigEncoder.MarketsEncoder group = encoder.marketsCount(2);
         group.next().marketId(1)
                 .symbol("BTC-USD")
@@ -129,5 +131,34 @@ public class EngineConfigReplayDeterminismTest {
         // byte-identical across the two replicas.
         assertArrayEquals("replicas processing the same log must snapshot byte-identically",
                 a.snapshot(), b.snapshot());
+    }
+    /**
+     * RC2 S2: two replicas on a behaviour-2 log (FRESH at 2, trades, BUMP, DUPLICATE, STALE, an
+     * above-ceiling frame, a second BUMP) emit byte-equal journal frames and snapshot
+     * byte-identically, the identity block included.
+     */
+    @Test
+    public void twoReplicasBehaviourTwo() {
+        final List<BehaviourTwoLog.Entry> log = EngineConfigSpliceDeterminismTest.log();
+        try (BehaviourTwoLog.Replica a = new BehaviourTwoLog.Replica();
+             BehaviourTwoLog.Replica b = new BehaviourTwoLog.Replica()) {
+            final List<byte[]> framesA = a.apply(log, 0, log.size());
+            final List<byte[]> framesB = b.apply(log, 0, log.size());
+            assertFalse(framesA.isEmpty());
+            assertEquals(framesA.size(), framesB.size());
+            for (int i = 0; i < framesA.size(); i++) {
+                assertArrayEquals("journal frame " + i, framesA.get(i), framesB.get(i));
+            }
+            assertEquals(a.h.decisions, b.h.decisions);
+            final byte[] snapA = a.snapshot();
+            assertArrayEquals("behaviour-2 snapshots byte-identical", snapA, b.snapshot());
+            // The image carries the identity block: enveloped, and restoring it binds the epoch.
+            try (BehaviourTwoLog.Replica r = BehaviourTwoLog.Replica.restoredFrom(snapA)) {
+                assertTrue(r.h.engine.meIdentity().isBound());
+                assertEquals(com.match.application.engine.BehaviourTwoHarness.G, r.h.engine.meIdentity().meEpoch());
+                assertEquals(a.h.engine.meIdentity().nextJournalSeq(), r.h.engine.meIdentity().nextJournalSeq());
+            }
+            assertEquals(0, a.h.failFast.get());
+        }
     }
 }

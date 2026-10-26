@@ -132,6 +132,21 @@ public class Engine {
         commandLedger.record(result);
         return result;
     }
+    /**
+     * RC2 S2 (contract section 6): a template-9 frame above the recorded wire ceiling whose v12
+     * prefix decoded to a valid intent. Journals record 3 with {@code result 8} (INVALID) and
+     * every other field pinned by {@link #commandRejection}: appliedPosition = egressSeq = the
+     * entry's log position, the cluster timestamp, orderId 0, status -1, reason 0, oldCancelled
+     * false, the frame's intent echoed, ledgerSize unchanged. Never records in the ledger (ledger
+     * restore refuses result > 6, and a recorded INVALID would become a canonical outcome); no
+     * capacity check, no apply, no trade or terminal.
+     */
+    public void journalInvalid(com.match.domain.commands.DurableOrderIntent c, long timestamp) {
+        eventPublisher.publishCommandOutcome(currentLogPosition,
+                commandRejection(c, timestamp, com.match.domain.commands.DurableCommandOutcome.INVALID),
+                commandLedger.size());
+    }
+
     private com.match.domain.commands.DurableCommandOutcome commandRejection(
             com.match.domain.commands.DurableOrderIntent c,long timestamp,int result) {
         return new com.match.domain.commands.DurableCommandOutcome(c,currentLogPosition,timestamp,0,-1,0,false,result);
@@ -169,6 +184,15 @@ public class Engine {
     // into every snapshot (SnapshotCodec trailing block).
     private EngineConfigState engineConfig;
 
+    // RC2 S2: the genesis identity (engine-owned, contract 2.1). Unbound at construction; bound by
+    // a FRESH at behaviour >= 2 or filled by a snapshot restore. The journal and the heartbeat
+    // hold this reference.
+    private final MeIdentity meIdentity = new MeIdentity();
+
+    // RC2 S2: the LAUNCH mode — true only for deferredUntilConfig(). Node-local, never replicated:
+    // read by the node-local check (d) only, never by a decision.
+    private final boolean configMode;
+
     // Node-EFFECTIVE creation values, kept for the adopt-path cross-check: what THIS node actually
     // built its engines from. Legacy mode: env-resolved impl + env-resolved capacity (array only).
     // Config mode: copied from the accepted config (cross-check then holds by construction).
@@ -187,6 +211,7 @@ public class Engine {
      */
     public Engine(String impl) {
         this.engines = new Int2ObjectHashMap<>();
+        this.configMode = false;
 
         logger.info("Engine matching implementation: {}", impl);
 
@@ -211,6 +236,7 @@ public class Engine {
     // boolean is just a disambiguator from Engine(String).
     private Engine(boolean deferred) {
         this.engines = new Int2ObjectHashMap<>();
+        this.configMode = true;
         logger.info("Engine deferred: config mode — no engines until an EngineConfig is logged"
                 + " (orders before that are loudly REJECTED, never silently dropped)");
     }
@@ -223,6 +249,16 @@ public class Engine {
      */
     public static Engine deferredUntilConfig() {
         return new Engine(true);
+    }
+
+    /** RC2 S2: the engine-owned genesis identity (one instance for the engine's lifetime). */
+    public MeIdentity meIdentity() {
+        return meIdentity;
+    }
+
+    /** RC2 S2: true when launched in config mode ({@link #deferredUntilConfig()}); node-local. */
+    public boolean isConfigMode() {
+        return configMode;
     }
 
     /** True once matching engines exist (legacy: always from boot; config mode: after accept). */

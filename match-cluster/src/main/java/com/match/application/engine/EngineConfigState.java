@@ -42,11 +42,13 @@ public final class EngineConfigState {
     /** Sorted ascending by marketId (normalized in {@link #of}). Never null; may be empty (invalid). */
     public final MarketDef[] markets;
 
-    // ---- order-schema v12 (RC2 S1 contract 3.3) ----
-    // Carried as decoded (pre-12 frames map to the defaults below). In S1 these four are EXCLUDED
-    // from equalsConfig, equalsIgnoringVersion, canonicalString/canonicalHash, toString and the
-    // snapshot block, and no structural rule applies to them; S2 moves them into the decision
-    // table and a trailing snapshot block.
+    // ---- order-schema v12 (RC2 S1 contract 3.3, RC2 S2 contract 2.1 and 3.1) ----
+    // Carried as decoded (pre-12 frames map to the defaults below). They stay EXCLUDED from
+    // equalsConfig, equalsIgnoringVersion, canonicalString/canonicalHash and toString (the five S1
+    // methods are unchanged, so the #224 canonical hash is unchanged by construction). S2 adds:
+    // the structural rules S-b/S-c in invalidReason, the behaviour-1 normalization
+    // (normalizedForBehaviourOne), the behaviour-2 equality sameBehaviourTwoConfig (row 8 only),
+    // describe() for log lines, and the snapshot identity block (SnapshotCodec marker 3).
     /** Pre-12 default of {@link #behaviorVersion}. */
     public static final long DEFAULT_BEHAVIOR_VERSION = 1L;
     /** Pre-12 default of {@link #commandLedgerCapacity}. */
@@ -60,6 +62,13 @@ public final class EngineConfigState {
     public final long commandLedgerCapacity; // uint32 on the wire
     public final long genesisId;             // int64 on the wire
     public final long maxWireVersion;        // uint16 on the wire
+
+    /** Largest legal uint32 value (4294967295 is the SBE uint32 null). */
+    public static final long UINT32_MAX_VALUE = 4_294_967_294L;
+    /** Smallest recordable wire ceiling at behaviour >= 2: template 9 needs order-schema v12. */
+    public static final long MIN_MAX_WIRE_VERSION = 12L;
+    /** Largest legal uint16 value (65535 is the SBE uint16 null). */
+    public static final long UINT16_MAX_VALUE = 65_534L;
 
     /** One market's engine-creation values. Immutable. */
     public static final class MarketDef {
@@ -167,6 +176,31 @@ public final class EngineConfigState {
                         + "] for impl=direct";
             }
         }
+        // S-b (RC2 S2 3.1): 0 is a v12 producer that did not set the field; 4294967295 the null.
+        if (behaviorVersion < 1 || behaviorVersion > UINT32_MAX_VALUE) {
+            return "behaviorVersion=" + behaviorVersion + " must be in [1, " + UINT32_MAX_VALUE + "]";
+        }
+        // S-c: behaviour >= 2 only. S-d: at behaviour 1 the three v12 values are not checked (the
+        // state machine normalizes them) and configVersion keeps today's acceptance, so every
+        // behaviour-1 log replays unchanged.
+        if (behaviorVersion >= 2) {
+            if (configVersion < 1 || configVersion > UINT32_MAX_VALUE) {
+                return "configVersion=" + configVersion + " must be in [1, " + UINT32_MAX_VALUE
+                        + "] at behaviorVersion " + behaviorVersion + " (journal record 5 carries it)";
+            }
+            if (genesisId < 1) {
+                return "genesisId=" + genesisId + " must be in [1, " + Long.MAX_VALUE
+                        + "] at behaviorVersion " + behaviorVersion + " (it becomes meEpoch)";
+            }
+            if (maxWireVersion < MIN_MAX_WIRE_VERSION || maxWireVersion > UINT16_MAX_VALUE) {
+                return "maxWireVersion=" + maxWireVersion + " must be in [" + MIN_MAX_WIRE_VERSION + ", "
+                        + UINT16_MAX_VALUE + "] at behaviorVersion " + behaviorVersion;
+            }
+            if (commandLedgerCapacity < 1 || commandLedgerCapacity > Integer.MAX_VALUE) {
+                return "commandLedgerCapacity=" + commandLedgerCapacity + " must be in [1, "
+                        + Integer.MAX_VALUE + "] at behaviorVersion " + behaviorVersion;
+            }
+        }
         if (markets.length == 0) {
             return "markets is empty — a cluster with no markets cannot create engines";
         }
@@ -236,6 +270,52 @@ public final class EngineConfigState {
             }
         }
         return true;
+    }
+
+    /**
+     * RC2 S2 row 8: {@link #equalsConfig} AND the four v12 values equal. Used only by the
+     * behaviour >= 2 DUPLICATE row; the five S1 comparison/format methods stay as they are.
+     */
+    public boolean sameBehaviourTwoConfig(EngineConfigState o) {
+        return equalsConfig(o)
+                && behaviorVersion == o.behaviorVersion
+                && commandLedgerCapacity == o.commandLedgerCapacity
+                && genesisId == o.genesisId
+                && maxWireVersion == o.maxWireVersion;
+    }
+
+    /**
+     * RC2 S2 2.1: the form a behaviour-1 decision records. The four v12 values are replaced by
+     * the pre-12 defaults whatever a v12 frame carried, so replay and restore of a behaviour-1
+     * cluster give the same object (a behaviour-1 snapshot has no identity block).
+     */
+    public EngineConfigState normalizedForBehaviourOne() {
+        if (behaviorVersion == DEFAULT_BEHAVIOR_VERSION
+                && commandLedgerCapacity == DEFAULT_COMMAND_LEDGER_CAPACITY
+                && genesisId == DEFAULT_GENESIS_ID
+                && maxWireVersion == DEFAULT_MAX_WIRE_VERSION) {
+            return this;
+        }
+        return new EngineConfigState(configVersion, impl, bookCapacity, maxMatchesPerOrder,
+                maxOrdersPerLevel, markets, DEFAULT_BEHAVIOR_VERSION, DEFAULT_COMMAND_LEDGER_CAPACITY,
+                DEFAULT_GENESIS_ID, DEFAULT_MAX_WIRE_VERSION);
+    }
+
+    /**
+     * RC2 S2 row 15 (BUMP): this config with {@code configVersion} and {@code maxWireVersion}
+     * replaced; every other field (the other two v12 values and the markets) is kept.
+     */
+    public EngineConfigState withConfigVersionAndCeiling(long newConfigVersion, long newMaxWireVersion) {
+        return new EngineConfigState(newConfigVersion, impl, bookCapacity, maxMatchesPerOrder,
+                maxOrdersPerLevel, markets, behaviorVersion, commandLedgerCapacity, genesisId,
+                newMaxWireVersion);
+    }
+
+    /** {@link #toString} plus the four v12 values, for decision log lines (RC2 S2). */
+    public String describe() {
+        return toString() + "{behaviorVersion=" + behaviorVersion
+                + " commandLedgerCapacity=" + commandLedgerCapacity + " genesisId=" + genesisId
+                + " maxWireVersion=" + maxWireVersion + "}";
     }
 
     @Override

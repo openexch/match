@@ -24,6 +24,17 @@ public interface MatchEventSink {
                                        int ledgerSizeAfter) {
     }
 
+    /**
+     * RC2 S2: journal-only side output of a FRESH or BUMP EngineConfig decision (ME journal
+     * record 5). Node configuration decides whether it is journaled, never replicated state.
+     *
+     * @param egressSeq  the entry's log position
+     * @param journalSeq the journalSeq the state machine allocated for this record
+     * @param decision   ConfigDecision wire value: FRESH 0 or BUMP 3
+     */
+    default void publishEngineConfig(long egressSeq, long journalSeq,
+                                     com.match.application.engine.EngineConfigState recorded, int decision) {
+    }
 
     /**
      * Publish a single trade execution. Called once per match, in match order.

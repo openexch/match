@@ -285,7 +285,7 @@ public class SettlementJournalTest {
     @Test
     public void engineConfigRecordFiveRoundTrips() {
         final SettlementJournal journal = new SettlementJournal(1 << 16);
-        journal.appendEngineConfig(64L, 3L, 1L, 100_000L, 12, 1 /* ADOPT */);
+        journal.appendEngineConfig(0L, 64L, 3L, 1L, 100_000L, 12, 1 /* ADOPT */);
         final Drained drained = drainAll(journal);
         assertEquals(SettlementJournal.MSG_TYPE_CONFIG, (int) drained.msgTypes.get(0));
         final byte[] frame = drained.payloads.get(0);

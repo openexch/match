@@ -32,7 +32,9 @@ public class SbeDemuxerEngineConfigTest {
                 .impl(impl)
                 .bookCapacity(bookCapacity)
                 .maxMatchesPerOrder(maxMatchesPerOrder)
-                .maxOrdersPerLevel(maxOrdersPerLevel);
+                .maxOrdersPerLevel(maxOrdersPerLevel)
+                // v12: an unset behaviorVersion is 0, which RC2 S2 refuses (S-b).
+                .behaviorVersion(1);
         EngineConfigEncoder.MarketsEncoder group = encoder.marketsCount(marketNums.length);
         for (int i = 0; i < marketNums.length; i++) {
             group.next()

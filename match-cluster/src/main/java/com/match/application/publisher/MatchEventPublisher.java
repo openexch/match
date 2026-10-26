@@ -124,6 +124,27 @@ public class MatchEventPublisher implements MatchEventSink {
 
     public long getDarkCommandOutcomeCount() { return darkCommandOutcomeCount.get(); }
 
+    // RC2 S2: EngineConfig record 5 decisions this node could not journal because journaling is
+    // off here. The decision itself applied like on every other replica.
+    private final AtomicLong darkEngineConfigCount = new AtomicLong();
+
+    @Override public void publishEngineConfig(long egressSeq, long journalSeq,
+                                              com.match.application.engine.EngineConfigState recorded,
+                                              int decision) {
+        final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
+        if (journal == null) {
+            if (darkEngineConfigCount.getAndIncrement() == 0) {
+                logger.error("ENGINE CONFIG DECISION NOT JOURNALED: settlement journal is off on this node;"
+                        + " counted as match_dark_engine_config_records_total");
+            }
+            return;
+        }
+        journal.appendEngineConfig(journalSeq, egressSeq, recorded.configVersion, recorded.behaviorVersion,
+                recorded.commandLedgerCapacity, (int) recorded.maxWireVersion, decision);
+    }
+
+    public long getDarkEngineConfigCount() { return darkEngineConfigCount.get(); }
+
     public void setSettlementJournal(final com.match.infrastructure.journal.SettlementJournal journal) {
         this.settlementJournal = journal;
     }

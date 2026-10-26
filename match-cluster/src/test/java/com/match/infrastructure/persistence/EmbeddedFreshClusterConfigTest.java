@@ -180,6 +180,110 @@ public class EmbeddedFreshClusterConfigTest {
                 + findOrderId(MARKET, USER, OrderStatus.NEW));
     }
 
+    /**
+     * RC2 S2 (W4 sink wiring): a journal-enabled config-mode node — a SettlementJournal armed
+     * through setSettlementJournal before start, its ring drained here — journals exactly one
+     * record 5 with journalSeq 1 for a FRESH at behaviour 2. Runs its OWN single-node cluster
+     * (own aeron dir, ports and state dir): the class cluster above is already FRESH at 1.
+     */
+    @Test
+    public void freshAtTwoJournalsOneRecordFive() throws Exception {
+        final int portBase = PORT_BASE + 2_000;
+        final File dir = new File(System.getProperty("java.io.tmpdir"),
+                "aeron-cluster-configmode-b2-test-" + System.nanoTime());
+        final AppClusteredService b2Service = new AppClusteredService();
+        final com.match.infrastructure.journal.SettlementJournal journal =
+                new com.match.infrastructure.journal.SettlementJournal(1 << 16);
+        b2Service.setSettlementJournal(journal);
+        final List<String> hosts = List.of("localhost");
+        final ClusterConfig config = ClusterConfig.create(0, 0, hosts, hosts, portBase, dir, b2Service);
+        config.aeronDirectoryName(new File(dir, "aeron").getAbsolutePath());
+        config.errorHandler(t -> System.err.println("Cluster error (b2): " + t.getMessage()));
+        ClusteredMediaDriver driver = null;
+        ClusteredServiceContainer container = null;
+        MediaDriver clientDriver = null;
+        AeronCluster b2Client = null;
+        try {
+            driver = ClusteredMediaDriver.launch(
+                    config.mediaDriverContext()
+                            .dirDeleteOnStart(true)
+                            .dirDeleteOnShutdown(true)
+                            .threadingMode(ThreadingMode.SHARED)
+                            .termBufferSparseFile(true)
+                            .publicationTermBufferLength(1024 * 1024)
+                            .ipcTermBufferLength(1024 * 1024)
+                            .sharedIdleStrategy(new org.agrona.concurrent.SleepingMillisIdleStrategy(1)),
+                    config.archiveContext()
+                            .threadingMode(io.aeron.archive.ArchiveThreadingMode.SHARED)
+                            .segmentFileLength(1024 * 1024),
+                    config.consensusModuleContext()
+                            .idleStrategySupplier(org.agrona.concurrent.SleepingMillisIdleStrategy::new)
+                            .ingressChannel("aeron:udp?term-length=64k")
+                            .egressChannel("aeron:udp?term-length=64k")
+                            .electionTimeoutNs(TimeUnit.SECONDS.toNanos(3))
+                            .leaderHeartbeatIntervalNs(TimeUnit.MILLISECONDS.toNanos(200))
+                            .leaderHeartbeatTimeoutNs(TimeUnit.SECONDS.toNanos(1))
+                            .startupCanvassTimeoutNs(TimeUnit.SECONDS.toNanos(3))
+                            .sessionTimeoutNs(TimeUnit.SECONDS.toNanos(30)));
+            container = ClusteredServiceContainer.launch(config.clusteredServiceContext()
+                    .idleStrategySupplier(org.agrona.concurrent.SleepingMillisIdleStrategy::new));
+            Thread.sleep(5000);
+            clientDriver = MediaDriver.launchEmbedded(new MediaDriver.Context()
+                    .dirDeleteOnStart(true)
+                    .dirDeleteOnShutdown(true)
+                    .threadingMode(ThreadingMode.SHARED));
+            b2Client = AeronCluster.connect(new AeronCluster.Context()
+                    .egressListener((sessionId, ts, buffer, offset, length, header) -> { })
+                    .egressChannel("aeron:udp?endpoint=localhost:0")
+                    .ingressChannel("aeron:udp")
+                    .ingressEndpoints(ClusterConfig.ingressEndpoints(
+                            hosts, portBase, ClusterConfig.CLIENT_FACING_PORT_OFFSET))
+                    .aeronDirectoryName(clientDriver.aeronDirectoryName()));
+
+            final byte[] fresh = BehaviourTwoLog.engineConfig(1, 2,
+                    com.match.application.engine.BehaviourTwoHarness.G, 12, 50_000);
+            final long deadline = System.currentTimeMillis() + 5000;
+            while (b2Client.offer(new UnsafeBuffer(fresh), 0, fresh.length) < 0) {
+                b2Client.pollEgress();
+                if (System.currentTimeMillis() > deadline) {
+                    fail("Timed out offering the FRESH at 2");
+                }
+                Thread.yield();
+            }
+
+            final List<byte[]> frames = new java.util.ArrayList<>();
+            final long until = System.currentTimeMillis() + 10_000;
+            while (frames.isEmpty() && System.currentTimeMillis() < until) {
+                journal.ringBuffer().read((t, b, i, n) -> {
+                    final byte[] v = new byte[n];
+                    b.getBytes(i, v);
+                    frames.add(v);
+                }, 64);
+                b2Client.pollEgress();
+                Thread.sleep(10);
+            }
+            Thread.sleep(500); // nothing else may follow
+            journal.ringBuffer().read((t, b, i, n) -> {
+                final byte[] v = new byte[n];
+                b.getBytes(i, v);
+                frames.add(v);
+            }, 64);
+
+            assertEquals("exactly one journal frame: record 5", 1, frames.size());
+            final var r5 = com.match.application.engine.BehaviourTwoHarness.record5(frames.get(0));
+            assertEquals(1L, r5.journalSeq());
+            assertEquals(com.match.application.engine.BehaviourTwoHarness.G, r5.meEpoch());
+            assertEquals(2L, r5.behaviorVersion());
+            assertEquals(com.match.infrastructure.mejournal.generated.ConfigDecision.FRESH, r5.decision());
+            assertTrue("egressSeq is the entry's log position", r5.egressSeq() > 0);
+        } finally {
+            CloseHelper.closeAll(b2Client, container, driver, clientDriver);
+            if (dir.exists()) {
+                IoUtil.delete(dir, true);
+            }
+        }
+    }
+
     // ==================== Helpers ====================
 
     /** An encoded ingress frame: the buffer plus its true encoded length. */
@@ -216,7 +320,9 @@ public class EmbeddedFreshClusterConfigTest {
                 .impl(EngineImpl.ARRAY)
                 .bookCapacity(4096)
                 .maxMatchesPerOrder(100)
-                .maxOrdersPerLevel(0);
+                .maxOrdersPerLevel(0)
+                // v12: an unset behaviorVersion is 0, which RC2 S2 refuses (S-b).
+                .behaviorVersion(1);
         encoder.marketsCount(1).next()
                 .marketId(MARKET)
                 .symbol("BTC-USD")
