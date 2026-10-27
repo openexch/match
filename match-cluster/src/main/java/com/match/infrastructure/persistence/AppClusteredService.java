@@ -193,6 +193,43 @@ public class AppClusteredService implements ClusteredService {
         consensusReadiness = new com.openexchange.cluster.ConsensusReadiness(context, readiness);
     }
 
+    // RC2 S6 (contract 3.5): the consensus module's authenticator and authorisation service, the same
+    // instances ClusterConfig hands Aeron, read here for the gauges only. Null when the service runs
+    // without ClusterConfig (in-process tests); the gauges then read 0.
+    private volatile com.openexchange.cluster.auth.ClusterAuthenticator sessionAuthenticator;
+    private volatile com.openexchange.cluster.auth.ClassAuthorisationService sessionAuthorisation;
+
+    /** Wired before launch by ClusterConfig with the instances its suppliers return. */
+    public void sessionAuthority(final com.openexchange.cluster.auth.ClusterAuthenticator authenticator,
+                                 final com.openexchange.cluster.auth.ClassAuthorisationService authorisation) {
+        this.sessionAuthenticator = authenticator;
+        this.sessionAuthorisation = authorisation;
+    }
+
+    /**
+     * RC2 S6 R0 (contract 3.2, 3.4): a session without a valid principal reached the log, a restored
+     * container session or a message. Authentication is always on, so only a pre-S6 log or snapshot (or a
+     * session id Aeron does not know) can produce one. The decision reads replicated bytes only, so every
+     * member halts at the same log position instead of replaying a divergent, engine-less state.
+     */
+    static final class PrincipalLessSessionException extends IllegalStateException {
+        PrincipalLessSessionException(final String message) {
+            super(message);
+        }
+    }
+
+    static final String PRINCIPAL_LESS_MESSAGE =
+            "principal-less session in log: pre-S6 history, clean genesis required";
+
+    private void haltPrincipalLess(final String where, final long sessionId, final long logPosition) {
+        final String critical = "CRITICAL: " + PRINCIPAL_LESS_MESSAGE + " (" + where + ", clusterSessionId="
+                + sessionId + ", logPosition=" + logPosition + ")";
+        System.err.println(critical);
+        failApplicationCallback();
+        failFast.run();
+        throw new PrincipalLessSessionException(critical); // test hooks may return; production halt does not
+    }
+
     // What makes this cluster snapshot itself with no admin gateway running.
     // Aeron calls onTakeSnapshot but nothing calls Aeron; the rhythm used to
     // live in the gateway's Go scheduler, so an engine run on its own never
@@ -586,8 +623,14 @@ public class AppClusteredService implements ClusteredService {
 
         // Load snapshot if available
         if (snapshotImage != null) {
-            loadSnapshot(snapshotImage);
+            loadSnapshot(com.openexchange.cluster.SnapshotImageReader.of(snapshotImage), cluster.idleStrategy());
         }
+
+        // RC2 S6 (contract 5.4): the container restored the sessions open at the snapshot before onStart,
+        // and they never see onSessionOpen. Register them for egress, or a leader restored from a snapshot
+        // taken after a client's SessionOpen sends that client nothing (keep-warm included) until it
+        // reconnects. Egress only, no replicated state. R0 applies to each restored principal.
+        registerRestoredSessions(cluster);
 
         // Initialize event publishing for all markets
         initializeEventPublishing();
@@ -876,7 +919,23 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_publisher_dropped_trade_total", "Reliable OMS trade-egress dropped by market publishers (buffer-full or flush error; should stay 0)", eventPublisher::droppedTradeEgressTotal)
                     .counter("match_publisher_dropped_status_total", "Reliable OMS status-egress dropped by market publishers (buffer-full or flush error; should stay 0)", eventPublisher::droppedStatusEgressTotal)
                     .counter("match_unknown_timers_total", "Fired cluster timers with no runnable", timerManager::getUnknownTimerCount)
-                    .counter("match_flush_timer_fires_total", "Egress flush timer fires", () -> flushTimerFireCount)
+                    .counter("match_flush_timer_fires_total", "Egress flush timer fires while leading (RC2 S6: per-term id)", () -> flushTimerFireCount)
+                    .gauge("match_flush_timer_term",
+                            "Leadership term of the last armed flush timer id (base + term * 1e6); -1 before any (RC2 S6)",
+                            () -> flushTimerTerm)
+                    .counter("match_ingress_unauthorized_total",
+                            "Ingress frames refused by the session-class rows: no mutation, journal, journalSeq or egress (RC2 S6)",
+                            sbeDemuxer::unauthorizedRejectCount)
+                    .counter("match_auth_sessions_accepted_total",
+                            "Sessions the consensus module authenticated against ME_AUTH_KEYS on this node (RC2 S6)",
+                            () -> { final var a = sessionAuthenticator; return a == null ? 0L : a.acceptedCount(); })
+                    .counter("match_auth_sessions_rejected_total",
+                            "Sessions rejected at connect on this node: no, wrong or mismatched credentials, or an empty table (RC2 S6)",
+                            () -> { final var a = sessionAuthenticator; return a == null ? 0L : a.rejectedCount(); })
+                    .counter("match_backup_queries_denied_total",
+                            "BackupQuery requests denied by the class table on this node: only REPLICA may query (RC2 S6, A14)",
+                            () -> { final var z = sessionAuthorisation; return z == null ? 0L
+                                    : z.deniedCount(com.openexchange.cluster.auth.ClassAuthorisationService.BACKUP_QUERY); })
                     .counter("match_aeron_errors_total", "Aeron error handler invocations", AeronCluster.AERON_ERROR_COUNT::get)
                     // Durability, scrapeable. With no admin gateway to ask, these four
                     // are the whole answer to "is this cluster still writing restore
@@ -1055,16 +1114,92 @@ public class AppClusteredService implements ClusteredService {
     // the cross-node correlationId desync that made a freshly-armed timer fire as "unknown" and
     // silently killed the chain (the egress wedge). 1e12 is far above any value the counter could
     // ever reach (~4/s) so it can never collide, even across a mixed-version rolling deploy.
-    private static final long FLUSH_TIMER_CORRELATION_ID = 1_000_000_000_000L;
+    //
+    // RC2 S6 (contract 5.1, F-3, critic K3): the id is now PER LEADERSHIP TERM, base + term * 1e6
+    // (TermTimerId, the AE arithmetic). The consensus module counts every TimerEvent it consumes while no
+    // timer with that id is pending and swallows that many later schedules of the id; a fixed id re-armed
+    // by the leader only would therefore die on the first failover (RC1 S5 rule 16). A member can lead
+    // only a later term, whose id no follower count has ever seen. Any id >= the base is the flush timer.
+    static final long FLUSH_TIMER_BASE = 1_000_000_000_000L;
+
+    // RC2 S6 (5.2): the leadership term of the last NewLeadershipTermEvent, live or replayed, in log order.
+    private long leadershipTermId = -1;
+    // RC2 S6 (5.3 item 5): the last armed flush id and its term (gauge), and the fires on this member.
+    private volatile long lastArmedFlushTimerId = -1;
+    private volatile long flushTimerTerm = -1;
+
+    /** The id {@link #scheduleMarketDataFlush} arms in the current term. */
+    long currentFlushTimerId() {
+        return com.openexchange.cluster.TermTimerId.of(FLUSH_TIMER_BASE, leadershipTermId);
+    }
+
+    /** Test seam (5.3 item 5): the id of the last flush timer this service scheduled, -1 before any. */
+    long lastArmedFlushTimerId() {
+        return lastArmedFlushTimerId;
+    }
+
+    long flushTimerTerm() {
+        return flushTimerTerm;
+    }
+
+    long flushTimerFireCount() {
+        return flushTimerFireCount;
+    }
 
     private void scheduleMarketDataFlush() {
-        final long deadline = System.currentTimeMillis() + MARKET_DATA_FLUSH_INTERVAL_MS;
-        // Schedule the fixed-id flush timer DIRECTLY (not via the TimerManager counter/runnable map,
-        // whose un-snapshotted runnable map is exactly what desynced across switchovers). Rescheduling
-        // the same id is idempotent — at most one pending flush timer cluster-wide. No-op on followers.
+        // Cluster time, not wall clock (5.3 item 3): the deadline is a replicated input of the timer.
+        final long deadline = cluster.time()
+                + cluster.timeUnit().convert(MARKET_DATA_FLUSH_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        final long id = currentFlushTimerId();
+        // Schedule the flush timer DIRECTLY (not via the TimerManager counter/runnable map, whose
+        // un-snapshotted runnable map is exactly what desynced across switchovers). Rescheduling the same
+        // id replaces it: at most one pending flush timer per term, never a second chain.
         cluster.idleStrategy().reset();
-        while (!cluster.scheduleTimer(FLUSH_TIMER_CORRELATION_ID, deadline)) {
+        while (!cluster.scheduleTimer(id, deadline)) {
             cluster.idleStrategy().idle();
+        }
+        lastArmedFlushTimerId = id;
+        flushTimerTerm = leadershipTermId;
+    }
+
+    @Override
+    public void onNewLeadershipTermEvent(
+            final long leadershipTermId,
+            final long logPosition,
+            final long timestamp,
+            final long termBaseLogPosition,
+            final int leaderMemberId,
+            final int logSessionId,
+            final java.util.concurrent.TimeUnit timeUnit,
+            final int appVersion) {
+        ensureApplicationHealthy();
+        applicationCallbackDepth++;
+        try {
+            applyOnNewLeadershipTermEvent(leadershipTermId, timestamp);
+        } catch (RuntimeException | Error failure) {
+            failApplicationCallback();
+            throw failure;
+        } finally {
+            applicationCallbackDepth--;
+        }
+    }
+
+    /**
+     * RC2 S6 (5.2, 5.3 item 1): record the term and arm its flush id on EVERY member, live and on replay.
+     * The leader's timer fires and its TimerEvent cancels the followers' pending copy; afterwards only the
+     * leader re-arms. This replaces the inherited fixed-id copy a promoted member used to depend on, so a
+     * new leader on an idle market keeps its flush, keep-warm and resnapshot without any ingress. The
+     * service's role is set before the term's first entry is polled, so the role-change flag reset comes
+     * first and this arm sets it.
+     */
+    private void applyOnNewLeadershipTermEvent(final long leadershipTermId, final long timestamp) {
+        this.leadershipTermId = leadershipTermId;
+        context.setClusterTime(timestamp);
+        if (cluster != null) {
+            scheduleMarketDataFlush();
+            flushTimerScheduled = true;
+            System.out.println("SERVICE: flush timer armed for leadership term " + leadershipTermId
+                    + " (id=" + lastArmedFlushTimerId + ", role=" + cluster.role() + ")");
         }
     }
 
@@ -1109,11 +1244,14 @@ public class AppClusteredService implements ClusteredService {
                         + " lastEgressAgeMs=" + (now - lastEgressSendMs)
                         + " flushTimerScheduled=" + flushTimerScheduled);
             }
+            // RC2 S6 (5.3 item 2): only the leader re-arms, always the CURRENT term's id (a reschedule,
+            // never a second chain). A stale-term timer (item 4) lands here once and moves the chain to
+            // the current id. A follower schedules nothing: the leader's TimerEvents drive its copy.
+            scheduleMarketDataFlush();
+            flushTimerScheduled = true;
         }
         // match#33: publish plain-long metric writes to the scraper thread.
         nodeMetrics.publish();
-        // Reschedule
-        scheduleMarketDataFlush();
     }
 
     /**
@@ -1289,7 +1427,40 @@ public class AppClusteredService implements ClusteredService {
         aeronBroadcaster.broadcastReliable(preConfigRejectBuffer, 0, length);
     }
 
-    private void loadSnapshot(final Image snapshotImage) {
+    /** RC2 S6 (5.4): the sessions the container restored before onStart; package-private for tests. */
+    void registerRestoredSessions(final Cluster cluster) {
+        final int[] restored = {0};
+        cluster.forEachClientSession(session -> {
+            if (com.openexchange.cluster.auth.ClusterPrincipal.classCodeOf(session.encodedPrincipal()) == 0) {
+                haltPrincipalLess("restored session", session.id(), cluster.logPosition());
+            }
+            clientSessions.addSession(session);
+            restored[0]++;
+        });
+        restoredSessionCount = restored[0];
+        if (restored[0] > 0) {
+            System.out.println("SERVICE: registered " + restored[0] + " restored client session(s) for egress");
+        }
+    }
+
+    // Sessions registered from the container snapshot at the last onStart (tests: review NOTE-4). A restored
+    // session gets no resnapshot request of its own; it receives the next periodic one (10 s) or one triggered by
+    // another session open (review NOTE-9; S13's resnapshot on LEADER builds on this).
+    private volatile int restoredSessionCount;
+
+    int restoredSessionCount() {
+        return restoredSessionCount;
+    }
+
+    /**
+     * RC2 S6 (contract 6, M Q12): read the snapshot image to END OF STREAM through the kit reader (an empty
+     * first poll or a pause between chunks is not the end), then hand even a zero-byte payload to the codec,
+     * which refuses it: an image without a snapshot is not an empty state. Every refusal (image closed before
+     * end of stream, zero bytes, codec reject, the restore cross-check) fences the service, logs CRITICAL,
+     * runs failFast and rethrows, as the AE does. Package-private with a source seam for the loader tests.
+     */
+    void loadSnapshot(final com.openexchange.cluster.SnapshotImageReader.Source snapshotImage,
+                      final org.agrona.concurrent.IdleStrategy idleStrategy) {
         System.out.println("[SNAPSHOT] loadSnapshot called, image position: " + snapshotImage.position());
 
         // A-2 fix: the snapshot is offered as one OR MORE Aeron messages (chunked on the way out to
@@ -1308,17 +1479,24 @@ public class AppClusteredService implements ClusteredService {
             }
         );
 
-        // Higher fragment limit shortens replay time on restart. Snapshots are one-shot at
-        // startup so spending more time inside one poll() call is fine.
-        int fragmentBatches = 0;
-        while (snapshotImage.poll(assembler, 64) > 0) {
-            fragmentBatches++;
-        }
-        System.out.println("[SNAPSHOT] Reassembled " + accumLen[0] + " byte(s) in "
-                + fragmentBatches + " poll batch(es)");
-
-        if (accumLen[0] > 0) {
-            processSnapshotPayload(accum, 0, accumLen[0]);
+        boolean crossCheckFailedFast = false;
+        try {
+            final com.openexchange.cluster.SnapshotImageReader.Result read =
+                    com.openexchange.cluster.SnapshotImageReader.readFully(snapshotImage, assembler, idleStrategy);
+            System.out.println("[SNAPSHOT] Reassembled " + accumLen[0] + " byte(s) in " + read.polls()
+                    + " poll(s), image position " + read.position());
+            if (!processSnapshotPayload(accum, 0, accumLen[0])) {
+                crossCheckFailedFast = true; // the state machine already ran failFast once
+                throw new IllegalStateException("restore cross-check failed (see the CRITICAL lines above)");
+            }
+        } catch (final RuntimeException refused) {
+            failApplicationCallback();
+            System.err.println("CRITICAL: snapshot refused: " + refused.getMessage() + " (" + accumLen[0]
+                    + " byte(s) reassembled); this node will not serve an unverified state");
+            if (!crossCheckFailedFast) {
+                failFast.run();
+            }
+            throw refused;
         }
     }
 
@@ -1328,7 +1506,7 @@ public class AppClusteredService implements ClusteredService {
      * data, not individual fragments.
      */
     // Package-private for the RC2 S2 restore tests (SnapshotIdentityBlockTest, EngineConfigCrossCheckTest).
-    void processSnapshotPayload(final DirectBuffer buf, final int offset, final int length) {
+    boolean processSnapshotPayload(final DirectBuffer buf, final int offset, final int length) {
         // Decode via the shared codec (same class that wrote the bytes in onTakeSnapshot).
         // The codec restores the engine's order books + order-id generator in place and hands
         // back the scalars we own externally.
@@ -1339,13 +1517,11 @@ public class AppClusteredService implements ClusteredService {
                 + " TradeIdGenerator=" + decoded.tradeIdGenerator);
 
         if (decoded.timerCorrelationIdPresent) {
-            // Legacy counter only — the egress flush timer uses a FIXED reserved correlationId
-            // (FLUSH_TIMER_CORRELATION_ID) recognized by value in onTimerEvent, so it re-arms
-            // deterministically (onRoleChange flag reset → onSessionOpen/onSessionMessage arm;
-            // the inherited pending fixed-id timer also continues the chain) and survives
-            // recover-into-leader WITHOUT the cross-node counter desync that used to silently
-            // kill it. A stray old-id timer re-delivered after recovery just routes to
-            // TimerManager and logs one harmless "unknown timer".
+            // Legacy counter only — the egress flush timer uses its own reserved id range
+            // (FLUSH_TIMER_BASE + term * 1e6, RC2 S6) recognized by range in onTimerEvent and armed
+            // at every NewLeadershipTermEvent, so it never depends on this counter. A stray old
+            // counter-id timer re-delivered after recovery just routes to TimerManager and logs one
+            // harmless "unknown timer".
             timerManager.setCorrelationId(decoded.timerCorrelationId);
             System.out.println("[SNAPSHOT] Restored TimerCorrelationId (counter only): "
                     + decoded.timerCorrelationId);
@@ -1364,7 +1540,9 @@ public class AppClusteredService implements ClusteredService {
         if (decoded.engineConfigPresent) {
             System.out.println("[SNAPSHOT] Restored engineConfig: " + engine.getEngineConfig().describe()
                     + (decoded.identityPresent ? " identity=" + engine.meIdentity() : ""));
-            engineConfigStateMachine.checkAfterRestore();
+            if (!engineConfigStateMachine.checkAfterRestore()) {
+                return false; // logged and failed fast by the state machine
+            }
         }
 
         if (decoded.rejectedOrders > 0) {
@@ -1374,6 +1552,7 @@ public class AppClusteredService implements ClusteredService {
 
         System.out.println("[SNAPSHOT] Snapshot load complete. Consumed "
                 + decoded.bytesConsumed + " bytes of " + length);
+        return true;
     }
 
     private void ensureApplicationHealthy() {
@@ -1403,6 +1582,10 @@ public class AppClusteredService implements ClusteredService {
 
     private void applyOnSessionOpen(final ClientSession session, final long timestamp) {
         context.setClusterTime(timestamp);
+        // RC2 S6 R0: a SessionOpen without a valid principal is pre-S6 history (authentication is always on).
+        if (com.openexchange.cluster.auth.ClusterPrincipal.classCodeOf(session.encodedPrincipal()) == 0) {
+            haltPrincipalLess("session open", session.id(), cluster == null ? -1L : cluster.logPosition());
+        }
         clientSessions.addSession(session);
         System.out.println("New client session connected: " + session.id()
                 + " (total sessions=" + clientSessions.getAllSessions().size() + ")");   // match#25 diag: track session count
@@ -1415,7 +1598,8 @@ public class AppClusteredService implements ClusteredService {
         // Arm the market data flush timer chain. Same lazy pattern as
         // onSessionMessage: timers scheduled during replay are no-ops and the
         // flag is reset in onRoleChange, so live events must (re-)arm it.
-        if (!flushTimerScheduled) {
+        // RC2 S6 (5.3 item 2): leader only; the term event already armed every member.
+        if (!flushTimerScheduled && cluster != null && cluster.role() == Cluster.Role.LEADER) {
             scheduleMarketDataFlush();
             flushTimerScheduled = true;
             System.out.println("SERVICE: Market data flush timer scheduled (session open)");
@@ -1458,6 +1642,8 @@ public class AppClusteredService implements ClusteredService {
         applicationCallbackDepth++;
         try {
             applyOnSessionMessage(session, timestamp, buffer, offset, length, header);
+        } catch (final PrincipalLessSessionException halted) {
+            throw halted; // R0 already logged, fenced and ran failFast
         } catch (RuntimeException | Error failure) {
             failApplicationCallback();
             System.err.println("FATAL command application failure: logPosition="
@@ -1490,16 +1676,26 @@ public class AppClusteredService implements ClusteredService {
         // sampled messages; recording is plain-long writes on this thread.
         final boolean sampled = nodeMetrics.shouldSample();
         final long t0 = sampled ? System.nanoTime() : 0;
+        // RC2 S6 (contract 3.1): the class from the replicated principal Aeron hands with the session
+        // (SessionOpen on every member, the container snapshot on a restored one), read in place with no
+        // allocation. A null session (an id Aeron does not know) reads as class 0: R0 halts.
+        final int classCode = com.openexchange.cluster.auth.ClusterPrincipal.classCodeOf(
+                session == null ? null : session.encodedPrincipal());
+        if (classCode == 0) {
+            haltPrincipalLess("ingress frame", session == null ? -1L : session.id(), header.position());
+        }
+
         // Demuxer drops malformed wire input before application. Every escaping failure
         // is unexpected and must reach onSessionMessage's readiness/exit fence.
-        sbeDemuxer.dispatch(buffer, offset, length, timestamp);
+        sbeDemuxer.dispatch(classCode, session.id(), buffer, offset, length, timestamp);
         if (sampled) {
             nodeMetrics.recordOrderLatency(System.nanoTime() - t0);
         }
 
         // Schedule the idle/keep-warm flush timer lazily (can't schedule from onStart —
         // cluster not ready).
-        if (!flushTimerScheduled) {
+        // cluster not ready). RC2 S6 (5.3 item 2): leader only.
+        if (!flushTimerScheduled && cluster != null && cluster.role() == Cluster.Role.LEADER) {
             scheduleMarketDataFlush();
             flushTimerScheduled = true;
             System.out.println("SERVICE: Market data flush timer scheduled (" + MARKET_DATA_FLUSH_INTERVAL_MS + "ms)");
@@ -1602,7 +1798,8 @@ public class AppClusteredService implements ClusteredService {
         // TimerManager runnable map (which isn't restored on recovery — the desync source). This makes
         // onFlushTimer fire deterministically on EVERY node after any recover/replay, so the chain
         // cannot silently die. Any other timer id still routes through TimerManager.
-        if (correlationId == FLUSH_TIMER_CORRELATION_ID) {
+        // RC2 S6 (5.1): every id at or above the base is the flush timer, whatever its term.
+        if (com.openexchange.cluster.TermTimerId.isKind(correlationId, FLUSH_TIMER_BASE)) {
             onFlushTimer();
             return;
         }
@@ -1793,13 +1990,10 @@ public class AppClusteredService implements ClusteredService {
         // waiting on: the consensus module reads that toggle only while leading,
         // so a request left in flight would block this node's cadence forever.
         snapshotCadence.roleChanged(isLeader);
-        // Always re-arm the flush timer chain on a role change. The chain is a
-        // self-rescheduling cluster timer that only the LEADER schedules (a follower's
-        // scheduleTimer is a no-op) and that does NOT survive a snapshot recover-into-leader
-        // transition. Resetting the flag guarantees the next live onSessionOpen/
-        // onSessionMessage arms exactly ONE fresh chain. Since loadSnapshot no longer
-        // restores a timer, there is no duplicate-chain risk. If this is missed, the leader
-        // sends no idle egress keep-warm and clients fall into stale-egress reconnect loops.
+        // Reset the flush-chain flag on every role change. RC2 S6 (5.3): the role is set before the
+        // new term's first entry is polled, so the NewLeadershipTermEvent that follows arms the term's
+        // id on every member and sets the flag again; the leader-only lazy arm in onSessionOpen/
+        // onSessionMessage is a reschedule of that same id, never a second chain.
         flushTimerScheduled = false;
     }
 

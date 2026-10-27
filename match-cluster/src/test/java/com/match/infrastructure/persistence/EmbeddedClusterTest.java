@@ -86,6 +86,8 @@ public class EmbeddedClusterTest {
 
         // Create cluster config with real AppClusteredService
         service = new AppClusteredService();
+        TestAuth.install(); // RC2 S6: the real authenticator over the test key table
+
         ClusterConfig config = ClusterConfig.create(
                 0,       // startingMemberId
                 0,       // memberId
@@ -175,6 +177,7 @@ public class EmbeddedClusterTest {
         // Connect client to cluster
         client = AeronCluster.connect(
                 new AeronCluster.Context()
+                        .credentialsSupplier(TestAuth.credentials(com.openexchange.cluster.auth.ClusterSessionClass.ADMIN))
                         .egressListener(egressListener)
                         .egressChannel("aeron:udp?endpoint=localhost:0")
                         .ingressChannel("aeron:udp")
@@ -488,6 +491,7 @@ public class EmbeddedClusterTest {
 
         try (AeronCluster client2 = AeronCluster.connect(
                 new AeronCluster.Context()
+                        .credentialsSupplier(TestAuth.credentials(com.openexchange.cluster.auth.ClusterSessionClass.ADMIN))
                         .egressListener(listener2)
                         .egressChannel("aeron:udp?endpoint=localhost:0")
                         .ingressChannel("aeron:udp")

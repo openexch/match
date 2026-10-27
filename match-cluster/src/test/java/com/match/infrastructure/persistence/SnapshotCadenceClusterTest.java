@@ -76,6 +76,8 @@ public class SnapshotCadenceClusterTest {
                 "aeron-cadence-test-" + System.nanoTime());
         final List<String> hostnames = List.of("localhost");
 
+        TestAuth.install(); // RC2 S6: the real authenticator over the test key table
+
         final ClusterConfig config = ClusterConfig.create(
                 0, 0, hostnames, hostnames, PORT_BASE, baseDir, new AppClusteredService());
         config.errorHandler(t -> System.err.println("Cluster error: " + t.getMessage()));
@@ -126,6 +128,7 @@ public class SnapshotCadenceClusterTest {
 
         client = AeronCluster.connect(
                 new AeronCluster.Context()
+                        .credentialsSupplier(TestAuth.credentials(com.openexchange.cluster.auth.ClusterSessionClass.ADMIN))
                         .egressListener((sessionId, timestamp, buffer, offset, length, header) -> { })
                         .egressChannel("aeron:udp?endpoint=localhost:0")
                         .ingressChannel("aeron:udp?term-length=64k")

@@ -59,6 +59,8 @@ final class MeClusterHarness implements AutoCloseable {
 
     final int portBase;
     final File root;
+    /** Consensus-module session timeout of every member (set before {@link #startAll}). */
+    volatile long sessionTimeoutMs = 30_000;
     final Member[] members = new Member[MEMBERS];
     private final MediaDriver clientDriver;
     private final Thread drainer;
@@ -147,7 +149,7 @@ final class MeClusterHarness implements AutoCloseable {
                     .electionTimeoutNs(TimeUnit.SECONDS.toNanos(1))
                     .startupCanvassTimeoutNs(TimeUnit.SECONDS.toNanos(2))
                     .terminationTimeoutNs(TimeUnit.SECONDS.toNanos(2))
-                    .sessionTimeoutNs(TimeUnit.SECONDS.toNanos(30));
+                    .sessionTimeoutNs(TimeUnit.MILLISECONDS.toNanos(sessionTimeoutMs));
             driver = ClusteredMediaDriver.launch(
                     cfg.mediaDriverContext().dirDeleteOnStart(true).dirDeleteOnShutdown(true)
                             .threadingMode(ThreadingMode.SHARED)
@@ -185,6 +187,67 @@ final class MeClusterHarness implements AutoCloseable {
                 final java.lang.reflect.Field f = AppClusteredService.class.getDeclaredField("engine");
                 f.setAccessible(true);
                 return (Engine) f.get(service);
+            } catch (ReflectiveOperationException e) {
+                throw new AssertionError(e);
+            }
+        }
+
+        /** RC2 S6: this member's election is CLOSED (it has joined the current term, not mid-startup election). */
+        boolean electionClosed() {
+            final Counter c = cfg.consensusModuleContext().electionStateCounter();
+            return c != null && !c.isClosed() && io.aeron.cluster.ElectionState.get(c) == io.aeron.cluster.ElectionState.CLOSED;
+        }
+
+        /** RC2 S6: frames this member refused by the session-class rows. */
+        long unauthorized() {
+            return demuxer().unauthorizedRejectCount();
+        }
+
+        SbeDemuxer demuxer() {
+            try {
+                final java.lang.reflect.Field f = AppClusteredService.class.getDeclaredField("sbeDemuxer");
+                f.setAccessible(true);
+                return (SbeDemuxer) f.get(service);
+            } catch (ReflectiveOperationException e) {
+                throw new AssertionError(e);
+            }
+        }
+
+        /** RC2 S6: the authenticator ClusterConfig installed on this member's consensus module. */
+        com.openexchange.cluster.auth.ClusterAuthenticator authenticator() {
+            return (com.openexchange.cluster.auth.ClusterAuthenticator) field("sessionAuthenticator");
+        }
+
+        /** Authenticator and class-table counters of this member; 0 where none is installed (a pre-S6 build). */
+        long authAccepted() {
+            final var a = authenticator();
+            return a == null ? 0 : a.acceptedCount();
+        }
+
+        long authRejected() {
+            final var a = authenticator();
+            return a == null ? 0 : a.rejectedCount();
+        }
+
+        long backupQueriesDenied() {
+            final var z = authorisation();
+            return z == null ? 0 : z.deniedCount(com.openexchange.cluster.auth.ClassAuthorisationService.BACKUP_QUERY);
+        }
+
+        long authorisationsGranted() {
+            final var z = authorisation();
+            return z == null ? 0 : z.grantedCount();
+        }
+
+        com.openexchange.cluster.auth.ClassAuthorisationService authorisation() {
+            return (com.openexchange.cluster.auth.ClassAuthorisationService) field("sessionAuthorisation");
+        }
+
+        private Object field(final String name) {
+            try {
+                final java.lang.reflect.Field f = AppClusteredService.class.getDeclaredField(name);
+                f.setAccessible(true);
+                return f.get(service);
             } catch (ReflectiveOperationException e) {
                 throw new AssertionError(e);
             }
@@ -263,6 +326,7 @@ final class MeClusterHarness implements AutoCloseable {
         System.setProperty("snapshot.log.bytes", "0");
         System.setProperty("snapshot.interval.minutes", "0");
         System.setProperty("snapshot.prune.enabled", "false");
+        TestAuth.install(); // RC2 S6: every member authenticates against the test key table
         this.root = new File(System.getProperty("java.io.tmpdir"), "me3-" + name + "-" + portBase);
         IoUtil.delete(root, true);
         for (int i = 0; i < MEMBERS; i++) {
@@ -403,19 +467,34 @@ final class MeClusterHarness implements AutoCloseable {
         return sb.toString();
     }
 
-    /** A client through the live members' ingress endpoints, on the harness's own driver. */
+    /** A FORWARDER client (the durable lane's class at behaviour 2) through the live members' ingress endpoints. */
     AeronCluster connect() throws InterruptedException {
-        final long deadline = System.currentTimeMillis() + 60_000;
+        return connect(com.openexchange.cluster.auth.ClusterSessionClass.FORWARDER);
+    }
+
+    /** A client of {@code sessionClass} presenting the test key of that class (RC2 S6). */
+    AeronCluster connect(com.openexchange.cluster.auth.ClusterSessionClass sessionClass) throws InterruptedException {
+        return connect(TestAuth.credentials(sessionClass), (sessionId, ts, buffer, offset, length, h) -> { }, 60_000);
+    }
+
+    /** A client with explicit credentials and egress listener, on the harness's own driver. */
+    AeronCluster connect(final io.aeron.security.CredentialsSupplier credentials,
+                         final io.aeron.cluster.client.EgressListener listener,
+                         final long timeoutMs) throws InterruptedException {
+        final long deadline = System.currentTimeMillis() + timeoutMs;
         RuntimeException last = null;
         while (System.currentTimeMillis() < deadline) {
             try {
                 return AeronCluster.connect(new AeronCluster.Context()
-                        .egressListener((sessionId, ts, buffer, offset, length, h) -> { })
+                        .credentialsSupplier(credentials)
+                        .egressListener(listener)
                         .egressChannel("aeron:udp?endpoint=localhost:0")
                         .ingressChannel(INGRESS)
                         .aeronDirectoryName(clientDriver.aeronDirectoryName())
                         .ingressEndpoints(liveIngressEndpoints())
-                        .messageTimeoutNs(TimeUnit.SECONDS.toNanos(5)));
+                        .messageTimeoutNs(TimeUnit.SECONDS.toNanos(5))
+                        // RC2 S6: a client may wait out a whole-cluster restart (MeRestoredEgressTest)
+                        .newLeaderTimeoutNs(TimeUnit.SECONDS.toNanos(60)));
             } catch (RuntimeException e) {
                 last = e;
                 Thread.sleep(250);
@@ -459,6 +538,32 @@ final class MeClusterHarness implements AutoCloseable {
             idle.idle();
         }
         return done.getAsBoolean();
+    }
+
+    /**
+     * RC2 S6: wait until {@code m} has finished its (startup) election and its commit position equals the
+     * leader's for 500 ms. A leader killed while a restarted member is still inside its startup election makes
+     * that election a leader startup, and Aeron then closes every open session with TIMEOUT
+     * ({@code SessionManager.prepareSessionsForNewTerm(isStartup)}); tests that fail over after a restart wait
+     * here first.
+     */
+    boolean awaitJoined(final Member m, final Member leader, final AeronCluster client, final long timeoutMs) {
+        final long deadline = System.currentTimeMillis() + timeoutMs;
+        long since = -1;
+        while (System.currentTimeMillis() < deadline) {
+            final long[] p = m.livePositions();
+            if (m.electionClosed() && p[1] > 0 && p[1] == leader.livePositions()[1]) {
+                if (since < 0) {
+                    since = System.currentTimeMillis();
+                } else if (System.currentTimeMillis() - since >= 500) {
+                    return true;
+                }
+            } else {
+                since = -1;
+            }
+            await(client, () -> false, 50);
+        }
+        return false;
     }
 
     /** Toggle a snapshot on the leader and wait until the toggle returns to NEUTRAL. */
@@ -522,6 +627,7 @@ final class MeClusterHarness implements AutoCloseable {
         }
         CloseHelper.quietClose(clientDriver);
         IoUtil.delete(root, true);
+        TestAuth.clear();
         for (String p : new String[]{"cluster.port.stride", "match.engine.from.config", "transport.idle.mode",
                 "transport.driver.threading", "transport.snapshot.term.length", "snapshot.log.bytes",
                 "snapshot.interval.minutes", "snapshot.prune.enabled"}) {

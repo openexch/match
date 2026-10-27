@@ -73,7 +73,7 @@ public class SbeDemuxerEngineConfigTest {
                         {42, 1_000_000_000L, 2_000_000_000L, 1_000_000L},
                         {7, 500_000_000L, 1_500_000_000L, 500_000L}},
                 new String[]{"ZZZ-USD", "AAA-USD"});
-        demuxer.dispatch(buffer, 0, len, 1000L);
+        demuxer.dispatchTrusted(buffer, 0, len, 1000L);
 
         assertEquals(1, received.size());
         EngineConfigState config = received.get(0);
@@ -106,7 +106,7 @@ public class SbeDemuxerEngineConfigTest {
         buffer.putByte(MessageHeaderEncoder.ENCODED_LENGTH + EngineConfigEncoder.implEncodingOffset(),
                 (byte) 9);
 
-        demuxer.dispatch(buffer, 0, len, 1000L);   // must not throw (the #202 pattern)
+        demuxer.dispatchTrusted(buffer, 0, len, 1000L);   // must not throw (the #202 pattern)
 
         assertEquals("poison byte counted as a decode reject", 1, demuxer.decodeRejectCount());
         assertTrue("handler never sees a frame that failed to decode", received.isEmpty());
@@ -124,7 +124,7 @@ public class SbeDemuxerEngineConfigTest {
 
         int len = encodeCreateOrder(1001L, 1, 555_001L,
                 FixedPoint.fromDouble(60_000.0), FixedPoint.fromDouble(1.0));
-        demuxer.dispatch(buffer, 0, len, 1000L);
+        demuxer.dispatchTrusted(buffer, 0, len, 1000L);
 
         assertEquals("guard counted", 1, demuxer.preConfigOrderRejectCount());
         assertEquals("service reject handler invoked exactly once", 1, rejects.size());
@@ -148,11 +148,11 @@ public class SbeDemuxerEngineConfigTest {
                 new long[][]{{1, FixedPoint.fromDouble(50_000.0), FixedPoint.fromDouble(150_000.0),
                         FixedPoint.fromDouble(1.0)}},
                 new String[]{"BTC-USD"});
-        demuxer.dispatch(buffer, 0, lenCfg, 1000L);
+        demuxer.dispatchTrusted(buffer, 0, lenCfg, 1000L);
 
         int lenOrder = encodeCreateOrder(1001L, 1, 555_002L,
                 FixedPoint.fromDouble(60_000.0), FixedPoint.fromDouble(1.0));
-        demuxer.dispatch(buffer, 0, lenOrder, 1001L);
+        demuxer.dispatchTrusted(buffer, 0, lenOrder, 1001L);
 
         assertEquals("order admitted", 1, demuxer.createOrderCount());
         assertEquals("guard silent once engines exist", 0, demuxer.preConfigOrderRejectCount());
@@ -168,7 +168,7 @@ public class SbeDemuxerEngineConfigTest {
 
         int len = encodeCreateOrder(1001L, 1, 555_003L,
                 FixedPoint.fromDouble(60_000.0), FixedPoint.fromDouble(1.0));
-        demuxer.dispatch(buffer, 0, len, 1000L);
+        demuxer.dispatchTrusted(buffer, 0, len, 1000L);
 
         assertEquals(0, demuxer.preConfigOrderRejectCount());
         assertEquals(1, demuxer.createOrderCount());
@@ -207,7 +207,7 @@ public class SbeDemuxerEngineConfigTest {
         int v12Len = MessageHeaderEncoder.ENCODED_LENGTH + EngineConfigEncoder.BLOCK_LENGTH + 4
                 + EngineConfigEncoder.MarketsEncoder.sbeBlockLength();
         int len = reshapeToV11(v12Len);
-        demuxer.dispatch(buffer, 0, len, 1000L);
+        demuxer.dispatchTrusted(buffer, 0, len, 1000L);
 
         assertEquals("a v11 block-17 frame is not a bounds reject", 0, demuxer.decodeRejectCount());
         assertEquals(1, received.size());
@@ -234,7 +234,7 @@ public class SbeDemuxerEngineConfigTest {
         new EngineConfigEncoder().wrap(buffer, MessageHeaderEncoder.ENCODED_LENGTH)
                 .behaviorVersion(2).commandLedgerCapacity(4_294_967_294L)
                 .genesisId(-0x1234_5678_9ABC_DEF0L).maxWireVersion(12);
-        demuxer.dispatch(buffer, 0, len, 1000L);
+        demuxer.dispatchTrusted(buffer, 0, len, 1000L);
 
         assertEquals(0, demuxer.decodeRejectCount());
         EngineConfigState config = received.get(0);
@@ -255,7 +255,7 @@ public class SbeDemuxerEngineConfigTest {
         int v12Len = encodeEngineConfig(4L, EngineImpl.ARRAY, 4096, 100, 0, ONE_MARKET, ONE_SYMBOL);
         int len = reshapeToV11(v12Len);
         headerEncoder.wrap(buffer, 0).version(12); // block 17 under a v12 header
-        demuxer.dispatch(buffer, 0, len, 1000L);
+        demuxer.dispatchTrusted(buffer, 0, len, 1000L);
 
         assertEquals(1, demuxer.decodeRejectCount());
         assertTrue(received.isEmpty());

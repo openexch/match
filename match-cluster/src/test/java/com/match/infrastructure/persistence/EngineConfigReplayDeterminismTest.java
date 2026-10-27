@@ -40,7 +40,7 @@ public class EngineConfigReplayDeterminismTest {
         void apply(List<byte[]> frames) {
             long timestamp = 1_000L;
             for (byte[] frame : frames) {
-                demuxer.dispatch(new UnsafeBuffer(frame), 0, frame.length, timestamp++);
+                demuxer.dispatchTrusted(new UnsafeBuffer(frame), 0, frame.length, timestamp++);
             }
         }
 

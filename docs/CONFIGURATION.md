@@ -109,6 +109,8 @@ Gateway knobs are **env only**.
 | `GATEWAY_TYPE` | `gateway` | Names the gateway's `/dev/shm/aeron-<type>-<pid>` driver dir |
 | `BACKUP_HOST` / `-Dbackup.host` | `localhost` | Backup agent host |
 | `BACKUP_INTERVAL_SEC` / `-Dbackup.interval.sec` | `60` | Backup query interval |
+| `ME_AUTH_KEYS` / `-Dmatch.auth.keys` (each ME node) | unset = every session rejected | Node-local key table, `keyId:CLASS:secretHex::users=*` joined by `;` (RC2 S6); malformed = the node refuses to start |
+| `ME_AUTH_CREDENTIAL` / `-Dmatch.auth.credential` (every ME client) | unset = the client refuses to start | `keyId:CLASS:secretHex`: `REPLICA` for the backup agent, `GATEWAY` for the market gateway, `GATEWAY`/`FORWARDER`/`ADMIN` for the load generator (RC2 S6) |
 | `BACKUP_STALL_EXIT_SEC` / `-Dbackup.stall.exit.sec` | `300` | Exit (for supervisor restart) after this long without progress |
 | `BASE_DIR` (backup, env only) | `<cwd>/backup` | Backup storage directory |
 

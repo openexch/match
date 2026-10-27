@@ -107,7 +107,9 @@ public class FollowerReadinessTest {
                 service.doBackgroundWork(System.nanoTime());
                 assertFalse("unfinished callback was advertised as applied: " + readiness.describe(), readiness.ready());
             };
-            service.onTimerEvent(1_000_000_000_000L, 0);
+            // RC2 S6 (5.3): a follower no longer re-arms from its flush timer; the callback that still schedules
+            // (and so idles inside itself on a back-pressured scheduleTimer) on every member is the term event.
+            service.onNewLeadershipTermEvent(1, 100, 0, 0, 0, 7, TimeUnit.MILLISECONDS, 0);
             assertTrue("actual idle reentry is required", reentries[0] > 0);
             service.doBackgroundWork(System.nanoTime() + 20_000_000);
             assertTrue("completed callback may establish evidence: " + readiness.describe(), readiness.ready());

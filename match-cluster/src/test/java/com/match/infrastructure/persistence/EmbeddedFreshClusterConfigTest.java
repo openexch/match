@@ -65,6 +65,8 @@ public class EmbeddedFreshClusterConfigTest {
         List<String> hostnames = List.of("localhost");
 
         service = new AppClusteredService();
+        TestAuth.install(); // RC2 S6: the real authenticator over the test key table
+
         ClusterConfig config = ClusterConfig.create(0, 0, hostnames, hostnames, PORT_BASE, baseDir, service);
         config.errorHandler(t -> System.err.println("Cluster error: " + t.getMessage()));
 
@@ -113,6 +115,7 @@ public class EmbeddedFreshClusterConfigTest {
 
         client = AeronCluster.connect(
                 new AeronCluster.Context()
+                        .credentialsSupplier(TestAuth.credentials(com.openexchange.cluster.auth.ClusterSessionClass.ADMIN))
                         .egressListener(egressListener)
                         .egressChannel("aeron:udp?endpoint=localhost:0")
                         .ingressChannel("aeron:udp")
@@ -196,6 +199,8 @@ public class EmbeddedFreshClusterConfigTest {
                 new com.match.infrastructure.journal.SettlementJournal(1 << 16);
         b2Service.setSettlementJournal(journal);
         final List<String> hosts = List.of("localhost");
+        TestAuth.install(); // RC2 S6: the real authenticator over the test key table
+
         final ClusterConfig config = ClusterConfig.create(0, 0, hosts, hosts, portBase, dir, b2Service);
         config.aeronDirectoryName(new File(dir, "aeron").getAbsolutePath());
         config.errorHandler(t -> System.err.println("Cluster error (b2): " + t.getMessage()));
@@ -233,6 +238,7 @@ public class EmbeddedFreshClusterConfigTest {
                     .dirDeleteOnShutdown(true)
                     .threadingMode(ThreadingMode.SHARED));
             b2Client = AeronCluster.connect(new AeronCluster.Context()
+                    .credentialsSupplier(TestAuth.credentials(com.openexchange.cluster.auth.ClusterSessionClass.ADMIN))
                     .egressListener((sessionId, ts, buffer, offset, length, header) -> { })
                     .egressChannel("aeron:udp?endpoint=localhost:0")
                     .ingressChannel("aeron:udp")

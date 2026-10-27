@@ -163,6 +163,10 @@ public final class Bug9Observer implements EgressListener {
         long lastKeepAlive = System.currentTimeMillis();
 
         Runtime.getRuntime().addShutdownHook(new Thread(observer::flushAll));
+        // RC2 S6: refuse to start without ME_AUTH_CREDENTIAL; any ME class may observe.
+        final com.openexchange.cluster.auth.ClusterCredentials credentials =
+                com.openexchange.cluster.auth.ClusterCredentials.requireFromEnvironment(
+                        com.match.infrastructure.auth.MatchAuth.POLICY);
 
         try {
             while (System.currentTimeMillis() < deadline && !stopFile.exists()) {
@@ -170,6 +174,8 @@ public final class Bug9Observer implements EgressListener {
                     if (cluster != null) { observer.event("disconnected", "cluster closed; reconnecting"); }
                     try {
                         cluster = AeronCluster.connect(new AeronCluster.Context()
+                                // RC2 S6: ME_AUTH_CREDENTIAL, any ME class (read-only observer)
+                                .credentialsSupplier(credentials.supplier())
                                 .egressListener(observer)
                                 .egressChannel("aeron:udp?endpoint=127.0.0.1:0")
                                 .ingressChannel("aeron:udp?term-length=16m|mtu=8k")

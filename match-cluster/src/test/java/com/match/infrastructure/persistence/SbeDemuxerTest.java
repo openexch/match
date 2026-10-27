@@ -79,7 +79,7 @@ public class SbeDemuxerTest {
         long qty = FixedPoint.fromDouble(1.0);
         int len = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, price, qty);
 
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
 
         MatchingEngine dme = engine.getEngine(1);
         assertFalse("Bid side should have the order", dme.isBidEmpty());
@@ -91,7 +91,7 @@ public class SbeDemuxerTest {
         long qty = FixedPoint.fromDouble(2.0);
         int len = encodeCreateOrder(200L, 1, OrderSide.ASK, OrderType.LIMIT, price, qty);
 
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
 
         MatchingEngine dme = engine.getEngine(1);
         assertFalse("Ask side should have the order", dme.isAskEmpty());
@@ -104,7 +104,7 @@ public class SbeDemuxerTest {
         long qty = FixedPoint.fromDouble(0.5);
         int len = encodeCreateOrder(300L, 1, OrderSide.BID, OrderType.LIMIT_MAKER, price, qty);
 
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
 
         MatchingEngine dme = engine.getEngine(1);
         assertFalse("LIMIT_MAKER bid should appear when no ask to cross", dme.isBidEmpty());
@@ -116,7 +116,7 @@ public class SbeDemuxerTest {
         long qty = FixedPoint.fromDouble(0.5);
         int len = encodeCreateOrder(400L, 1, OrderSide.ASK, OrderType.LIMIT_MAKER, price, qty);
 
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
 
         MatchingEngine dme = engine.getEngine(1);
         assertFalse("LIMIT_MAKER ask should appear when no bid to cross", dme.isAskEmpty());
@@ -128,7 +128,7 @@ public class SbeDemuxerTest {
         long bidPrice = FixedPoint.fromDouble(60000.0);
         long bidQty = FixedPoint.fromDouble(1.0);
         int len1 = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, bidPrice, bidQty);
-        demuxer.dispatch(buffer, 0, len1, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len1, System.nanoTime());
 
         MatchingEngine dme = engine.getEngine(1);
         assertFalse(dme.isBidEmpty());
@@ -136,7 +136,7 @@ public class SbeDemuxerTest {
         // Market sell should match the bid
         long sellQty = FixedPoint.fromDouble(1.0);
         int len2 = encodeCreateOrder(200L, 1, OrderSide.ASK, OrderType.MARKET, 0L, sellQty);
-        demuxer.dispatch(buffer, 0, len2, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len2, System.nanoTime());
 
         assertTrue("Bid should be consumed by market sell", dme.isBidEmpty());
     }
@@ -147,13 +147,13 @@ public class SbeDemuxerTest {
         long p1 = FixedPoint.fromDouble(60000.0);
         long q1 = FixedPoint.fromDouble(1.0);
         int len1 = encodeCreateOrder(1L, 1, OrderSide.BID, OrderType.LIMIT, p1, q1);
-        demuxer.dispatch(buffer, 0, len1, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len1, System.nanoTime());
 
         // ETH-USD (market 2)
         long p2 = FixedPoint.fromDouble(3000.0);
         long q2 = FixedPoint.fromDouble(10.0);
         int len2 = encodeCreateOrder(2L, 2, OrderSide.ASK, OrderType.LIMIT, p2, q2);
-        demuxer.dispatch(buffer, 0, len2, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len2, System.nanoTime());
 
         assertFalse(engine.getEngine(1).isBidEmpty());
         assertFalse(engine.getEngine(2).isAskEmpty());
@@ -169,7 +169,7 @@ public class SbeDemuxerTest {
         long price = FixedPoint.fromDouble(60000.0);
         long qty = FixedPoint.fromDouble(1.0);
         int len1 = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, price, qty);
-        demuxer.dispatch(buffer, 0, len1, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len1, System.nanoTime());
 
         MatchingEngine dme = engine.getEngine(1);
         assertFalse(dme.isBidEmpty());
@@ -177,7 +177,7 @@ public class SbeDemuxerTest {
         // Cancel it — the engine assigns orderId starting from 1
         long orderId = engine.getOrderIdGenerator() - 1;
         int len2 = encodeCancelOrder(100L, orderId, 1);
-        demuxer.dispatch(buffer, 0, len2, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len2, System.nanoTime());
 
         assertTrue("Order should be cancelled", dme.isBidEmpty());
     }
@@ -187,14 +187,14 @@ public class SbeDemuxerTest {
         long price = FixedPoint.fromDouble(70000.0);
         long qty = FixedPoint.fromDouble(2.0);
         int len1 = encodeCreateOrder(200L, 1, OrderSide.ASK, OrderType.LIMIT, price, qty);
-        demuxer.dispatch(buffer, 0, len1, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len1, System.nanoTime());
 
         MatchingEngine dme = engine.getEngine(1);
         assertFalse(dme.isAskEmpty());
 
         long orderId = engine.getOrderIdGenerator() - 1;
         int len2 = encodeCancelOrder(200L, orderId, 1);
-        demuxer.dispatch(buffer, 0, len2, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len2, System.nanoTime());
 
         assertTrue("Ask order should be cancelled", dme.isAskEmpty());
     }
@@ -210,7 +210,7 @@ public class SbeDemuxerTest {
         int len = encodeUpdateOrder(100L, 42L, 1, OrderSide.BID, OrderType.LIMIT, price, qty);
 
         // Should not throw
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
     }
 
     // ==================== Edge Cases ====================
@@ -224,19 +224,19 @@ public class SbeDemuxerTest {
             .schemaId(1)
             .version(2);
         // Should not throw or crash
-        demuxer.dispatch(buffer, 0, MessageHeaderEncoder.ENCODED_LENGTH + 20, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, MessageHeaderEncoder.ENCODED_LENGTH + 20, System.nanoTime());
     }
 
     @Test
     public void messageTooShortSilentlyIgnored() {
         // Length less than header size (8 bytes)
-        demuxer.dispatch(buffer, 0, 4, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, 4, System.nanoTime());
         // Should not throw
     }
 
     @Test
     public void zeroLengthMessageSilentlyIgnored() {
-        demuxer.dispatch(buffer, 0, 0, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, 0, System.nanoTime());
     }
 
     @Test
@@ -247,7 +247,7 @@ public class SbeDemuxerTest {
             .templateId(12345)
             .schemaId(1)
             .version(2);
-        demuxer.dispatch(buffer, 0, MessageHeaderEncoder.ENCODED_LENGTH, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, MessageHeaderEncoder.ENCODED_LENGTH, System.nanoTime());
     }
 
     // ==================== All Order Types / Sides ====================
@@ -260,13 +260,13 @@ public class SbeDemuxerTest {
         long p = FixedPoint.fromDouble(55000.0);
         long q = FixedPoint.fromDouble(0.1);
         int len = encodeCreateOrder(1L, 1, OrderSide.BID, OrderType.LIMIT, p, q);
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
         assertFalse(dme.isBidEmpty());
 
         // LIMIT_MAKER bid (lower price, won't cross)
         long p2 = FixedPoint.fromDouble(54000.0);
         len = encodeCreateOrder(2L, 1, OrderSide.BID, OrderType.LIMIT_MAKER, p2, q);
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
         // Still has bids
         assertFalse(dme.isBidEmpty());
     }
@@ -279,13 +279,13 @@ public class SbeDemuxerTest {
         long p = FixedPoint.fromDouble(70000.0);
         long q = FixedPoint.fromDouble(0.1);
         int len = encodeCreateOrder(1L, 1, OrderSide.ASK, OrderType.LIMIT, p, q);
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
         assertFalse(dme.isAskEmpty());
 
         // LIMIT_MAKER ask (higher price, won't cross)
         long p2 = FixedPoint.fromDouble(75000.0);
         len = encodeCreateOrder(2L, 1, OrderSide.ASK, OrderType.LIMIT_MAKER, p2, q);
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
         assertFalse(dme.isAskEmpty());
     }
 
@@ -321,7 +321,7 @@ public class SbeDemuxerTest {
         long qty = FixedPoint.fromDouble(1.0);
         int len = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, price, qty);
 
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
 
         assertEquals("Current-version frame must not count as a schema reject",
                 0L, demuxer.schemaRejectCount());
@@ -338,7 +338,7 @@ public class SbeDemuxerTest {
         int len = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, price, qty);
         overwriteHeaderVersion(SbeDemuxer.MIN_SUPPORTED_SCHEMA_VERSION);
 
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
 
         assertEquals("Floor-version frame must not count as a schema reject",
                 0L, demuxer.schemaRejectCount());
@@ -353,7 +353,7 @@ public class SbeDemuxerTest {
         int len = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, price, qty);
         overwriteHeaderVersion(SbeDemuxer.MIN_SUPPORTED_SCHEMA_VERSION - 1);
 
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
 
         assertEquals("Below-floor frame must count as a schema reject",
                 1L, demuxer.schemaRejectCount());
@@ -369,7 +369,7 @@ public class SbeDemuxerTest {
         int len = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, price, qty);
         overwriteHeaderVersion(MessageHeaderDecoder.SCHEMA_VERSION + 1);
 
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
 
         assertEquals("Above-ceiling frame must count as a schema reject",
                 1L, demuxer.schemaRejectCount());
@@ -384,7 +384,7 @@ public class SbeDemuxerTest {
         int len = encodeCreateOrder(100L, 1, OrderSide.BID, OrderType.LIMIT, price, qty);
         overwriteHeaderSchemaId(MessageHeaderDecoder.SCHEMA_ID + 1);
 
-        demuxer.dispatch(buffer, 0, len, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len, System.nanoTime());
 
         assertEquals("Foreign-schema frame must count as a schema reject",
                 1L, demuxer.schemaRejectCount());
@@ -400,14 +400,14 @@ public class SbeDemuxerTest {
         long askPrice = FixedPoint.fromDouble(60000.0);
         long askQty = FixedPoint.fromDouble(1.0);
         int len1 = encodeCreateOrder(100L, 1, OrderSide.ASK, OrderType.LIMIT, askPrice, askQty);
-        demuxer.dispatch(buffer, 0, len1, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len1, System.nanoTime());
         assertFalse(dme.isAskEmpty());
 
         // Market buy with enough budget to buy 1 BTC at 60000 — since v8 the
         // budget rides in the price field on the wire.
         long budget = FixedPoint.fromDouble(60000.0);
         int len2 = encodeCreateOrder(200L, 1, OrderSide.BID, OrderType.MARKET, budget, 0L);
-        demuxer.dispatch(buffer, 0, len2, System.nanoTime());
+        demuxer.dispatchTrusted(buffer, 0, len2, System.nanoTime());
 
         assertTrue("Ask should be consumed by market buy", dme.isAskEmpty());
     }
@@ -501,7 +501,7 @@ public class SbeDemuxerTest {
     @Test
     public void v12DurableCommandCarriesTimeInForceAndExpectedOldRemaining() {
         try (Durable d = new Durable()) {
-            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 2, 0), 1000L);
+            d.demuxer.dispatchTrusted(buffer, 0, encodeDurableV12(1, 2, 0), 1000L);
             assertEquals(0, d.demuxer.decodeRejectCount());
             final java.util.List<byte[]> records = d.drain();
             assertEquals(1, records.size());
@@ -515,7 +515,7 @@ public class SbeDemuxerTest {
     @Test
     public void v12CreateWithExpectedOldRemainingIsDecodePoison() {
         try (Durable d = new Durable()) {
-            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 0, 5), 1000L);
+            d.demuxer.dispatchTrusted(buffer, 0, encodeDurableV12(1, 0, 5), 1000L);
             assertEquals("F1: expectedOldRemaining on a CREATE is decode poison", 1, d.demuxer.decodeRejectCount());
             assertEquals(0, d.demuxer.applyErrorCount());
             assertEquals(0, d.engine.commandLedger().size());
@@ -526,10 +526,10 @@ public class SbeDemuxerTest {
     @Test
     public void v12CancelWithExpectedOldRemainingIsDecodePoison() {
         try (Durable d = new Durable()) {
-            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 0, 0), 1000L);
+            d.demuxer.dispatchTrusted(buffer, 0, encodeDurableV12(1, 0, 0), 1000L);
             final long resting = outcome(d.drain().get(0)).orderId();
             assertTrue("the CREATE rests", resting > 0);
-            d.demuxer.dispatch(buffer, 0, encodeDurableV12(2, 1 /* CANCEL */, resting, 0, 5), 1001L);
+            d.demuxer.dispatchTrusted(buffer, 0, encodeDurableV12(2, 1 /* CANCEL */, resting, 0, 5), 1001L);
             assertEquals("F1: expectedOldRemaining on a CANCEL is decode poison", 1, d.demuxer.decodeRejectCount());
             assertEquals(0, d.demuxer.applyErrorCount());
             assertEquals("only the CREATE is in the ledger", 1, d.engine.commandLedger().size());
@@ -541,10 +541,10 @@ public class SbeDemuxerTest {
     @Test
     public void v12UpdateWithExpectedOldRemainingIsApplied() {
         try (Durable d = new Durable()) {
-            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 0, 0), 1000L);
+            d.demuxer.dispatchTrusted(buffer, 0, encodeDurableV12(1, 0, 0), 1000L);
             final long resting = outcome(d.drain().get(0)).orderId();
             assertTrue("the CREATE rests", resting > 0);
-            d.demuxer.dispatch(buffer, 0, encodeDurableV12(2, 2 /* UPDATE */, resting, 0, 5), 1001L);
+            d.demuxer.dispatchTrusted(buffer, 0, encodeDurableV12(2, 2 /* UPDATE */, resting, 0, 5), 1001L);
             assertEquals(0, d.demuxer.decodeRejectCount());
             final java.util.List<byte[]> records = d.drain().stream()
                     .filter(r -> new UnsafeBuffer(r).getShort(2, java.nio.ByteOrder.LITTLE_ENDIAN)
@@ -562,7 +562,7 @@ public class SbeDemuxerTest {
     @Test
     public void v12TimeInForceThreeIsDecodePoison() {
         try (Durable d = new Durable()) {
-            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 3, 0), 1000L);
+            d.demuxer.dispatchTrusted(buffer, 0, encodeDurableV12(1, 3, 0), 1000L);
             assertEquals(1, d.demuxer.decodeRejectCount());
             assertEquals(0, d.demuxer.applyErrorCount());
             assertEquals(0, d.engine.commandLedger().size());
@@ -573,7 +573,7 @@ public class SbeDemuxerTest {
     @Test
     public void v12NegativeExpectedOldRemainingIsDecodePoison() {
         try (Durable d = new Durable()) {
-            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 0, -1), 1000L);
+            d.demuxer.dispatchTrusted(buffer, 0, encodeDurableV12(1, 0, -1), 1000L);
             assertEquals(1, d.demuxer.decodeRejectCount());
             assertEquals(0, d.demuxer.applyErrorCount());
             assertEquals(0, d.engine.commandLedger().size());
@@ -585,7 +585,7 @@ public class SbeDemuxerTest {
     public void v11DurableCommandMapsToZeroZeroAndJournalsLikeAV12ZeroZeroFrame() {
         final byte[] v11Record;
         try (Durable d = new Durable()) {
-            d.demuxer.dispatch(buffer, 0, encodeDurableV11(1), 1000L);
+            d.demuxer.dispatchTrusted(buffer, 0, encodeDurableV11(1), 1000L);
             assertEquals("a v11 block-71 frame is not a poison or bounds reject", 0, d.demuxer.decodeRejectCount());
             assertEquals(0, d.demuxer.schemaRejectCount());
             assertEquals(1, d.engine.commandLedger().size());
@@ -596,7 +596,7 @@ public class SbeDemuxerTest {
             assertEquals(0L, outcome(v11Record).expectedOldRemaining());
         }
         try (Durable d = new Durable()) {
-            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 0, 0), 1000L);
+            d.demuxer.dispatchTrusted(buffer, 0, encodeDurableV12(1, 0, 0), 1000L);
             assertArrayEquals("v11 and v12 0/0 frames journal identical records",
                     v11Record, d.drain().get(0));
         }
@@ -607,7 +607,7 @@ public class SbeDemuxerTest {
         try (Durable d = new Durable()) {
             encodeDurableV12(1, 0, 0);
             headerEncoder.wrap(buffer, 0).blockLength(71);
-            d.demuxer.dispatch(buffer, 0, MessageHeaderEncoder.ENCODED_LENGTH + 71, 1000L);
+            d.demuxer.dispatchTrusted(buffer, 0, MessageHeaderEncoder.ENCODED_LENGTH + 71, 1000L);
             assertEquals(1, d.demuxer.decodeRejectCount());
             assertEquals(0, d.engine.commandLedger().size());
             assertTrue(d.drain().isEmpty());
@@ -627,10 +627,10 @@ public class SbeDemuxerTest {
     @Test
     public void releaseCommandIdsIsCountedUnservedAndLeavesTheLedgerAlone() {
         try (Durable d = new Durable()) {
-            d.demuxer.dispatch(buffer, 0, encodeDurableV12(1, 0, 0), 1000L);
+            d.demuxer.dispatchTrusted(buffer, 0, encodeDurableV12(1, 0, 0), 1000L);
             d.drain();
             final int before = d.engine.commandLedger().size();
-            d.demuxer.dispatch(buffer, 0, encodeRelease(2), 1001L);
+            d.demuxer.dispatchTrusted(buffer, 0, encodeRelease(2), 1001L);
             assertEquals(1, d.demuxer.unservedTemplateCount());
             assertEquals(0, d.demuxer.decodeRejectCount());
             assertEquals(before, d.engine.commandLedger().size());
@@ -644,7 +644,7 @@ public class SbeDemuxerTest {
             final int len = encodeRelease(2);
             // group header after the 8-byte root: numInGroup at 8 + 8 + 2
             buffer.putShort(8 + 8 + 2, (short) 3, java.nio.ByteOrder.LITTLE_ENDIAN);
-            d.demuxer.dispatch(buffer, 0, len, 1000L);
+            d.demuxer.dispatchTrusted(buffer, 0, len, 1000L);
             assertEquals(1, d.demuxer.decodeRejectCount());
             assertEquals(0, d.demuxer.unservedTemplateCount());
         }
@@ -654,7 +654,7 @@ public class SbeDemuxerTest {
     public void releaseCommandIdsWithATruncatedGroupHeaderIsAFrameBoundsReject() {
         try (Durable d = new Durable()) {
             encodeRelease(0);
-            d.demuxer.dispatch(buffer, 0, MessageHeaderEncoder.ENCODED_LENGTH + 8 + 2, 1000L);
+            d.demuxer.dispatchTrusted(buffer, 0, MessageHeaderEncoder.ENCODED_LENGTH + 8 + 2, 1000L);
             assertEquals(1, d.demuxer.decodeRejectCount());
             assertEquals(0, d.demuxer.unservedTemplateCount());
         }

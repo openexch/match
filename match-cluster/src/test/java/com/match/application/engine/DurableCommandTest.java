@@ -42,7 +42,7 @@ public class DurableCommandTest {
         b.putLong(64, 0, ByteOrder.LITTLE_ENDIAN);
         b.putInt(72, 1, ByteOrder.LITTLE_ENDIAN);
         b.putByte(76, (byte)kind); b.putByte(77, (byte)0); b.putByte(78, (byte)0);
-        demux.dispatch(b, 0, 79, 1000 + id);
+        demux.dispatchTrusted(b, 0, 79, 1000 + id);
     }
     @Test public void lostAckRetryCreatesOneOrder() {
         long before=engine.getOrderIdGenerator(); send(1,0,0,PRICE); send(1,0,0,PRICE);
@@ -111,7 +111,7 @@ public class DurableCommandTest {
         b.putInt(72, 1, ByteOrder.LITTLE_ENDIAN);
         b.putByte(76, (byte)kind); b.putByte(77, (byte)0); b.putByte(78, (byte)0);
         b.putByte(79, (byte)tif); b.putLong(80, expectedOldRemaining, ByteOrder.LITTLE_ENDIAN);
-        demux.dispatch(b, 0, 88, 1000 + id);
+        demux.dispatchTrusted(b, 0, 88, 1000 + id);
     }
     @Test public void retryWithDifferentTifIsStillADuplicateInBehaviour1() {
         long before=engine.getOrderIdGenerator();

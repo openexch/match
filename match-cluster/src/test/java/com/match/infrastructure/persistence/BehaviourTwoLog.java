@@ -280,7 +280,7 @@ final class BehaviourTwoLog {
         /** Dispatch one entry; return the journal frames it produced. */
         List<byte[]> apply(Entry e) {
             h.engine.setCurrentLogPosition(e.position);
-            demuxer.dispatch(new UnsafeBuffer(e.frame), 0, e.frame.length, e.timestamp);
+            demuxer.dispatchTrusted(new UnsafeBuffer(e.frame), 0, e.frame.length, e.timestamp);
             return h.drain();
         }
 

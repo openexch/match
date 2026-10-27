@@ -105,14 +105,11 @@ public class MeJournalHoleAfterSnapshotDrillTest {
         for (int i = 0; i < NODES; i++) {
             ingress.append(i).append("=localhost:").append(port(i, CLIENT_FACING_OFFSET)).append(i + 1 < NODES ? "," : "");
         }
-        client = io.aeron.cluster.client.AeronCluster.connect(new io.aeron.cluster.client.AeronCluster.Context()
-                .aeronDirectoryName(clientDriver.aeronDirectoryName())
-                .egressListener((sessionId, ts, buffer, offset, length, header) -> { })
-                .egressChannel("aeron:udp?endpoint=localhost:0")
-                .ingressChannel("aeron:udp")
-                .ingressEndpoints(ingress.toString())
-                .messageTimeoutNs(TimeUnit.SECONDS.toNanos(10)));
+        // RC2 S6: the FRESH is ADMIN's (R2); the durable load is the FORWARDER's (R3).
+        client = connectAs(com.openexchange.cluster.auth.ClusterSessionClass.ADMIN, ingress.toString());
         send(engineConfigFresh());
+        CloseHelper.quietClose(client);
+        client = connectAs(com.openexchange.cluster.auth.ClusterSessionClass.FORWARDER, ingress.toString());
         awaitDrained(allNodes());
         note("cluster up: portBase=" + portBase + " root=" + root);
     }
@@ -354,6 +351,8 @@ public class MeJournalHoleAfterSnapshotDrillTest {
                 || k.startsWith("TRANSPORT_") || k.startsWith("CLUSTER_") || k.startsWith("MATCH_")
                 || k.equals("BASE_DIR") || k.equals("METRICS_PORT") || k.equals("AERON_DIR"));
         env.put("CLUSTER_NODE", Integer.toString(node));
+        env.remove("ME_AUTH_CREDENTIAL");
+        env.put("ME_AUTH_KEYS", com.match.infrastructure.persistence.TestAuth.KEYS); // RC2 S6: every node authenticates
         env.put("CLUSTER_ADDRESSES", "localhost,localhost,localhost");
         env.put("CLUSTER_PORT_BASE", Integer.toString(portBase));
         env.put("CLUSTER_PORT_STRIDE", Integer.toString(STRIDE));
@@ -543,6 +542,18 @@ public class MeJournalHoleAfterSnapshotDrillTest {
     }
 
     // ---------------------------------------------------------------- the client load
+
+    private io.aeron.cluster.client.AeronCluster connectAs(final com.openexchange.cluster.auth.ClusterSessionClass c,
+                                                         final String ingress) {
+        return io.aeron.cluster.client.AeronCluster.connect(new io.aeron.cluster.client.AeronCluster.Context()
+                .credentialsSupplier(com.match.infrastructure.persistence.TestAuth.credentials(c))
+                .aeronDirectoryName(clientDriver.aeronDirectoryName())
+                .egressListener((sessionId, ts, buffer, offset, length, header) -> { })
+                .egressChannel("aeron:udp?endpoint=localhost:0")
+                .ingressChannel("aeron:udp")
+                .ingressEndpoints(ingress)
+                .messageTimeoutNs(TimeUnit.SECONDS.toNanos(10)));
+    }
 
     private void send(final byte[] frame) {
         final UnsafeBuffer buffer = new UnsafeBuffer(frame);
