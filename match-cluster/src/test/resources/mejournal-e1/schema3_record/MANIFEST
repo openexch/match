@@ -1,0 +1,16 @@
+scenario=schema3_record
+match_commit=421226c (capture tool uncommitted on this base)
+boundary_rule=RECORDING at every member start, STOP at every member close (MeClusterHarness drains rings, not archives; review N-6)
+epochs=0x123456789abcdef1
+epoch_0x123456789abcdef1_seqs=1-6
+member0.recordings=1
+member0.refused=6 SCHEMA schemaId 3
+member0.recording0=7 frames seqs 1-6 epoch 0x123456789abcdef1
+member0.templates=1:1,2:2,3:2,4:0,5:1
+member1.recordings=1
+member1.recording0=6 frames seqs 1-6 epoch 0x123456789abcdef1
+member1.templates=1:1,2:2,3:2,4:0,5:1
+member2.recordings=1
+member2.recording0=6 frames seqs 1-6 epoch 0x123456789abcdef1
+member2.templates=1:1,2:2,3:2,4:0,5:1
+note=member 0: one schema 3 v1 JournalTrade appended after the ME's frames (synthetic, not ME-produced)
