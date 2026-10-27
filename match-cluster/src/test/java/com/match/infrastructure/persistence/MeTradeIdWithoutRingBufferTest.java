@@ -38,7 +38,7 @@ public class MeTradeIdWithoutRingBufferTest {
         f.add(durableCreate(1, 100, 9001, 0, 59_000, 3));               // order 1 rests
         f.add(durableCreate(2, 200, 9002, 1, 59_000, 1));               // order 2: trade
         f.add(durableCreate(3, 201, 9003, 1, 59_000, 1));               // order 3: trade
-        f.add(durable(4, 2, 100, 9001, 1, 0, 58_000, 1, 0, 0));         // replace 1 -> order 4
+        f.add(durable(4, 2, 100, 9001, 1, 0, 58_000, 1, 0, com.match.domain.FixedPoint.fromDouble(1))); // replace 1 -> order 4 (1 left)
         f.add(durableCreate(5, 202, 9005, 1, 58_000, 2));               // order 5: trade, maker 4 FILLED, rests
         f.add(durable(6, 1, 202, 9005, 5, 1, 0, 0, 0, 0));              // cancel 5
         f.add(cancelOrder(100, 99));                                    // legacy cancel ack

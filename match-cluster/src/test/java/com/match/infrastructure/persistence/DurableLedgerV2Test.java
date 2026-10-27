@@ -111,8 +111,15 @@ public class DurableLedgerV2Test {
         return durableRaw(h, (attempt << 2) | CANCEL, CANCEL, user, h, leg, 0, 0L, 0L, 0L, LIMIT, 0, 0L, marketId);
     }
 
-    static byte[] amend(long h, long attempt, long user, long leg, int side, double price, double qty, int type) {
-        return durableRaw(h, (attempt << 2) | UPDATE, UPDATE, user, h, leg, side, fp(price), fp(qty), 0L, type, 0, 0L);
+    /**
+     * RC2 S5 (9.1): an UPDATE carries the core-shaped amend reference {@code expectedOldRemaining}, the
+     * named leg's remaining at that point of the script (fixed-point raw). With {@code expected ==
+     * actual} the placed quantity is the wire quantity, as before S5.
+     */
+    static byte[] amend(long h, long attempt, long user, long leg, int side, double price, double qty, int type,
+                        long expectedOldRemaining) {
+        return durableRaw(h, (attempt << 2) | UPDATE, UPDATE, user, h, leg, side, fp(price), fp(qty), 0L, type, 0,
+                expectedOldRemaining);
     }
 
     static long[] upTo(long h, long floor) {
@@ -230,7 +237,7 @@ public class DurableLedgerV2Test {
         final long h = 502;
         try (Run r = fresh(1_000)) {
             final long leg = appliedOrderId(r.send(create(h, 0, 100, 0, 59_000, 1)));
-            final List<byte[]> replaced = r.send(amend(h, 1, 100, leg, 0, 58_000, 1, LIMIT));
+            final List<byte[]> replaced = r.send(amend(h, 1, 100, leg, 0, 58_000, 1, LIMIT, fp(1)));
             final CommandOutcomeDecoder a = only3(replaced);
             assertEquals(DurableCommandOutcome.APPLIED, a.result());
             assertEquals("the old leg was cancelled", 1, a.oldCancelled());
@@ -242,7 +249,7 @@ public class DurableLedgerV2Test {
             assertEquals(1, S4Probe.floorCount(r.engine()));
 
             final long gen = r.engine().getOrderIdGenerator();
-            final List<byte[]> dup = r.send(amend(h, 1, 100, leg, 0, 58_000, 1, LIMIT));
+            final List<byte[]> dup = r.send(amend(h, 1, 100, leg, 0, 58_000, 1, LIMIT, fp(1)));
             assertEquals("the late amend duplicate is RELEASED", RELEASED, only3(dup).result());
             assertEquals("one replace only: no new order", gen, r.engine().getOrderIdGenerator());
             final long[] bids = r.engine().getEngine(BehaviourTwoHarness.MARKET).getBidOrders();
@@ -341,7 +348,7 @@ public class DurableLedgerV2Test {
         try (Run r = fresh(1_000)) {
             final long h = 506;
             final long leg = appliedOrderId(r.send(create(h, 0, 100, 0, 59_000, 1)));
-            final long replacement = appliedOrderId(r.send(amend(h, 1, 100, leg, 0, 58_000, 1, LIMIT)));
+            final long replacement = appliedOrderId(r.send(amend(h, 1, 100, leg, 0, 58_000, 1, LIMIT, fp(1))));
             assertEquals("the replacement is keyed under h", 1, S4Probe.legCount(r.engine(), h));
             assertArrayEquals(new int[]{R_LEG_LIVE, 0}, entries(only4(r.send(releaseFrame(1, order(h))))).get(0));
             appliedOrderId(r.send(cancel(h, 2, 100, replacement)));
@@ -353,7 +360,7 @@ public class DurableLedgerV2Test {
             appliedOrderId(r.send(create(602, 0, 300, 0, 58_000, 1)));
             final long h = 603;
             final long leg = appliedOrderId(r.send(createOfType(h, 0, 100, 0, 57_000, 1, LIMIT_MAKER)));
-            final CommandOutcomeDecoder a = only3(r.send(amend(h, 1, 100, leg, 0, 58_000, 1, LIMIT_MAKER)));
+            final CommandOutcomeDecoder a = only3(r.send(amend(h, 1, 100, leg, 0, 58_000, 1, LIMIT_MAKER, fp(1))));
             assertEquals("the replacement could not rest: REJECTED", DurableCommandOutcome.REJECTED, a.result());
             assertEquals("the old leg is gone", 1, a.oldCancelled());
             assertEquals("no leg names h", 0, S4Probe.legCount(r.engine(), h));
@@ -411,7 +418,7 @@ public class DurableLedgerV2Test {
             assertEquals("other market", DurableCommandOutcome.WRONG_OWNER,
                     only3(r.send(cancelOn(2, 801, 2, 100, a))).result());
             assertEquals("UPDATE on the wrong side", DurableCommandOutcome.WRONG_OWNER,
-                    only3(r.send(amend(801, 3, 100, a, 1, 60_000, 1, LIMIT))).result());
+                    only3(r.send(amend(801, 3, 100, a, 1, 60_000, 1, LIMIT, fp(1)))).result());
 
             final long c = appliedOrderId(r.send(create(804, 0, 300, 0, 59_500, 1)));
             appliedOrderId(r.send(create(805, 0, 400, 1, 59_500, 1))); // fills c (the best bid)

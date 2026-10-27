@@ -64,6 +64,40 @@ public record DurableOrderIntent(long idHigh, long idLow, long userId, long omsO
         return B2_OK;
     }
 
+    /**
+     * RC2 S5 D-a: a TIF outside the allow-list (CREATE LIMIT {GTC, IOC, FOK}, CREATE MARKET {GTC,
+     * IOC}, CREATE LIMIT_MAKER {GTC}, CANCEL and UPDATE {GTC}).
+     */
+    public static final int B2_INVALID_TIF = 4;
+    /** RC2 S5 D-a: an UPDATE with {@code expectedOldRemaining == 0}. */
+    public static final int B2_INVALID_AMEND_REFERENCE = 5;
+    /** RC2 S5 D-e: an UPDATE with {@code orderType MARKET}. */
+    public static final int B2_INVALID_AMEND_TYPE = 6;
+
+    /**
+     * RC2 S5 (contract 3.1): the S4 causes of {@link #behaviourTwoCause(long, long, long, int)}, then
+     * the three S5 causes in this order: TIF, amend reference, amend type. Behaviour-2 rules only:
+     * {@link #isValid} (the reader rule of both behaviours) is unchanged, so a behaviour-1 frame
+     * carrying any of these combinations still decodes and applies as before.
+     */
+    public static int behaviourTwoCause(long idHigh, long idLow, long omsOrderId, int kind, int type,
+                                        int timeInForce, long expectedOldRemaining) {
+        final int s4 = behaviourTwoCause(idHigh, idLow, omsOrderId, kind);
+        if (s4 != B2_OK) {
+            return s4;
+        }
+        if ((timeInForce != 0 && kind != 0) || (type == 2 && timeInForce != 0) || (type == 1 && timeInForce == 2)) {
+            return B2_INVALID_TIF;
+        }
+        if (kind == 2 && expectedOldRemaining == 0) {
+            return B2_INVALID_AMEND_REFERENCE;
+        }
+        if (kind == 2 && type == 1) {
+            return B2_INVALID_AMEND_TYPE;
+        }
+        return B2_OK;
+    }
+
     /** A pre-v12 intent: {@code timeInForce} GTC (0), {@code expectedOldRemaining} 0. */
     public DurableOrderIntent(long idHigh, long idLow, long userId, long omsOrderId,
             long oldOrderId, long price, long quantity, long budget, int marketId,

@@ -221,6 +221,35 @@ public final class ArrayOrderBook {
         return sUserId[slot];
     }
 
+    /**
+     * RC2 S5 (contract 5.4): the remaining quantity of a resting order, or -1. The guards of
+     * {@link #restingUserId}. Read-only.
+     */
+    public long restingRemaining(long orderId) {
+        final long slotL = orderLocations.get(orderId);
+        if (slotL == NO_SLOT) return -1L;
+        final int slot = (int) slotL;
+        if (sOrderId[slot] != orderId) return -1L; // stale / collision guard
+        return sQty[slot];
+    }
+
+    // RC2 S5 (contract 3.3): pure accessors of the FOK pre-walk. They read, never write.
+
+    /** First order slot of level {@code node} (-1 = none). */
+    int levelHeadSlot(int node) {
+        return node == NIL ? -1 : nHead[node];
+    }
+
+    /** Next slot in the level's FIFO (-1 = tail). */
+    int slotNext(int slot) {
+        return sNext[slot];
+    }
+
+    /** Remaining quantity in {@code slot}. */
+    long slotQuantity(int slot) {
+        return sQty[slot];
+    }
+
     public boolean cancelOrder(long orderId) {
         long slotL = orderLocations.get(orderId);
         if (slotL == NO_SLOT) return false;

@@ -90,6 +90,26 @@ public class Engine {
     private long outcomeOrder, expectedNewOrder;
     private int outcomeStatus, outcomeReason;
     private boolean outcomeOldCancelled;
+    // RC2 S5 (contract 3.2): the behaviour-2 apply context. Armed only by acceptDurableV2 (the
+    // demuxer's behaviour-2 entry) immediately before applyDurable, reset in applyDurable's finally.
+    // Sections 3-5 of the S5 contract are gated by applyBehaviourTwo, never by `dense`.
+    private boolean applyBehaviourTwo;
+    private int applyTif;
+    private long applyExpectedOldRemaining;
+    /** RC2 S5: order-schema v12 timeInForce values. */
+    public static final int TIF_GTC = 0, TIF_IOC = 1, TIF_FOK = 2;
+    // RC2 S5 section 8 counters. Node-local, single writer (service thread), volatile for the scraper.
+    private volatile long invalidTifCount;
+    private volatile long invalidAmendReferenceCount;
+    private volatile long invalidAmendTypeCount;
+    private volatile long iocCount;
+    private volatile long iocRemainderCount;
+    private volatile long fokCount;
+    private volatile long fokUnfillableCount;
+    private volatile long marketBudgetExhaustedCount;
+    private volatile long amendReducedCount;
+    private volatile long amendNoRemainderCount;
+    private volatile long amendRemainingMismatchCount;
     // RC2 S4 section 8: pooled command objects of the durable apply (both behaviours; identical outputs).
     private final CreateOrderCommand durableCreate = new CreateOrderCommand();
     private final CancelOrderCommand durableCancel = new CancelOrderCommand();
@@ -134,7 +154,9 @@ public class Engine {
     public com.match.domain.commands.DurableCommandOutcome acceptDurable(
             com.match.domain.commands.DurableOrderIntent c, long timestamp) {
         if (dense) {
-            acceptDurableV2(c, timestamp);
+            // RC2 S5 (contract 3.2, FIX-1): this test entry never arms the behaviour-2 apply context
+            // and runs only the S4 B1 causes, so it keeps the S4 (pre-S5) semantics on any engine.
+            acceptDurableV2(c, timestamp, false);
             return lastSuppressedSlot >= 0 ? ledgerV2.outcomeAt(lastSuppressedSlot) : outcome.toRecord();
         }
         var prior = commandLedger.get(c);
@@ -231,6 +253,9 @@ public class Engine {
             if (outcomeStatus < 0) throw new IllegalStateException("Command applied without an outcome");
         } finally {
             applyingDurable = false;
+            applyBehaviourTwo = false;
+            applyTif = TIF_GTC;
+            applyExpectedOldRemaining = 0L;
         }
     }
 
@@ -244,19 +269,36 @@ public class Engine {
      * @throws IllegalStateException when no behaviour-2 ledger is installed (programming error)
      */
     public int acceptDurableV2(com.match.domain.commands.DurableIntentView c, long timestamp) {
+        return acceptDurableV2(c, timestamp, true);
+    }
+
+    /**
+     * {@code s5}: the demuxer's entry (true) runs the S5 B1 causes and arms the behaviour-2 apply
+     * context (contract 3.1, 3.2); the {@link #acceptDurable} test entry (false) does neither.
+     */
+    private int acceptDurableV2(com.match.domain.commands.DurableIntentView c, long timestamp, boolean s5) {
         final DurableCommandLedgerV2 ledger = ledgerV2;
         if (ledger == null) {
             throw new IllegalStateException("behaviour-2 durable command before the ledger v2 is installed");
         }
         lastSuppressedSlot = -1;
         // B1: behaviour-2 identity rules.
-        final int cause = com.match.domain.commands.DurableOrderIntent.behaviourTwoCause(
-                c.idHigh(), c.idLow(), c.omsOrderId(), c.kind());
+        final int cause = s5
+                ? com.match.domain.commands.DurableOrderIntent.behaviourTwoCause(c.idHigh(), c.idLow(),
+                        c.omsOrderId(), c.kind(), c.type(), c.timeInForce(), c.expectedOldRemaining())
+                : com.match.domain.commands.DurableOrderIntent.behaviourTwoCause(
+                        c.idHigh(), c.idLow(), c.omsOrderId(), c.kind());
         if (cause != com.match.domain.commands.DurableOrderIntent.B2_OK) {
             if (cause == com.match.domain.commands.DurableOrderIntent.B2_INVALID_SIGN) {
                 invalidSignCount = invalidSignCount + 1;
             } else if (cause == com.match.domain.commands.DurableOrderIntent.B2_INVALID_KIND_BITS) {
                 invalidKindBitsCount = invalidKindBitsCount + 1;
+            } else if (cause == com.match.domain.commands.DurableOrderIntent.B2_INVALID_TIF) {
+                invalidTifCount = invalidTifCount + 1;
+            } else if (cause == com.match.domain.commands.DurableOrderIntent.B2_INVALID_AMEND_REFERENCE) {
+                invalidAmendReferenceCount = invalidAmendReferenceCount + 1;
+            } else if (cause == com.match.domain.commands.DurableOrderIntent.B2_INVALID_AMEND_TYPE) {
+                invalidAmendTypeCount = invalidAmendTypeCount + 1;
             } else {
                 invalidOwnerIdCount = invalidOwnerIdCount + 1;
             }
@@ -295,6 +337,12 @@ public class Engine {
         if (reject != 0) {
             outcome.set(c, currentLogPosition, timestamp, 0L, -1, 0, false, reject);
         } else {
+            if (s5) {
+                // RC2 S5 (contract 3.2): armed here only; applyDurable's finally resets it.
+                applyBehaviourTwo = true;
+                applyTif = c.timeInForce();
+                applyExpectedOldRemaining = c.expectedOldRemaining();
+            }
             applyDurable(c, timestamp);
             outcome.set(c, currentLogPosition, timestamp, outcomeOrder, outcomeStatus, outcomeReason,
                     outcomeOldCancelled, outcomeStatus == OrderStatusType.REJECTED ? 1 : 0);
@@ -505,6 +553,19 @@ public class Engine {
     public long releaseNoopCount() { return releaseNoopCount; }
     public long releaseLegLiveCount() { return releaseLegLiveCount; }
     public long releaseNoopFrameCount() { return releaseNoopFrameCount; }
+
+    // RC2 S5 section 8 counters (scraper).
+    public long invalidTifCount() { return invalidTifCount; }
+    public long invalidAmendReferenceCount() { return invalidAmendReferenceCount; }
+    public long invalidAmendTypeCount() { return invalidAmendTypeCount; }
+    public long iocCount() { return iocCount; }
+    public long iocRemainderCount() { return iocRemainderCount; }
+    public long fokCount() { return fokCount; }
+    public long fokUnfillableCount() { return fokUnfillableCount; }
+    public long marketBudgetExhaustedCount() { return marketBudgetExhaustedCount; }
+    public long amendReducedCount() { return amendReducedCount; }
+    public long amendNoRemainderCount() { return amendNoRemainderCount; }
+    public long amendRemainingMismatchCount() { return amendRemainingMismatchCount; }
 
     /** RC2 S4 gauges: ledger v2 size, capacity, floors, tombstone ranges (0 without a v2 ledger). */
     public long ledgerSizeGauge() { final DurableCommandLedgerV2 l = ledgerV2; return l == null ? 0 : l.gaugeSize(); }
@@ -848,8 +909,10 @@ public class Engine {
             // sell quantity <= 0) can never match. Reject at admission with INVALID_QUANTITY and
             // skip the matching sweep entirely, rather than silently falling through to the
             // no-liquidity REJECTED branch (which would misattribute the cause).
+            // RC2 S5 (contract section 4): at behaviour 2 a BUY also needs quantity > 0 (its bound).
+            final boolean bounded = applyBehaviourTwo;
             long marketSize = isBuy ? totalPrice : quantity;
-            if (marketSize <= 0) {
+            if (marketSize <= 0 || (bounded && isBuy && quantity <= 0)) {
                 invalidQuantityRejectCount++;
                 if (logger.isWarn()) logger.warn("Market order rejected: market={} userId={} isBuy={} reason={}",
                     marketId, userId, isBuy, OrderRejectReason.describe(OrderRejectReason.INVALID_QUANTITY));
@@ -860,16 +923,20 @@ public class Engine {
                 }
                 return;
             }
-            // Market order
+            // Market order. Behaviour 1 passes 0 as the buy quantity (budget only, NOTE-3);
+            // behaviour 2 passes the bound (> 0 by admission above).
             if (isBuy) {
-                matchCount = engine.processMarketOrder(orderId, userId, true, 0, totalPrice);
+                matchCount = engine.processMarketOrder(orderId, userId, true, bounded ? quantity : 0, totalPrice);
             } else {
                 matchCount = engine.processMarketOrder(orderId, userId, false, quantity, 0);
             }
             // Publish trades (order book published at 50ms intervals by MarketPublisher)
             publishTradeExecutions(engine, marketId, timestamp, orderId, userId, isBuy, matchCount, omsOrderId);
             long filledQty = calculateFilledQuantity(engine, matchCount);
-            if (matchCount == 0) {
+            if (bounded) {
+                publishBoundedMarketStatus(engine, marketId, timestamp, orderId, userId, isBuy, price, omsOrderId,
+                        matchCount, quantity, filledQty);
+            } else if (matchCount == 0) {
                 // Market order with no matches — reject (no liquidity)
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
                     0, 0, price, isBuy, omsOrderId, OrderRejectReason.NO_LIQUIDITY);
@@ -912,6 +979,12 @@ public class Engine {
                 if (omsOrderId != 0) {
                     legIndex.remove(orderId);
                 }
+                return;
+            }
+
+            if (applyBehaviourTwo && applyTif != TIF_GTC) {
+                // RC2 S5 (contract 3.2): native IOC / FOK; the taker never rests.
+                processImmediateLimit(engine, marketId, timestamp, orderId, userId, isBuy, price, quantity, omsOrderId);
                 return;
             }
 
@@ -1005,6 +1078,88 @@ public class Engine {
                     legIndex.remove(orderId);
                 }
             }
+        }
+    }
+
+    /**
+     * RC2 S5 (contract 3.2, 3.5, section 6): a behaviour-2 IOC or FOK LIMIT create after the price,
+     * quantity and overflow validations. One command, atomic on the service thread: the taker is
+     * never rested, so its mapping is removed on every path, and no per-order log line is written
+     * (an IOC remainder and an infeasible FOK are normal outcomes).
+     */
+    private void processImmediateLimit(MatchingEngine engine, int marketId, long timestamp, long orderId,
+                                       long userId, boolean isBuy, long price, long quantity, long omsOrderId) {
+        if (applyTif == TIF_FOK) {
+            fokCount = fokCount + 1;
+            if (!engine.canFillCompletely(isBuy, price, quantity)) {
+                // Infeasible by quantity or by the match cap: no book call that mutates.
+                fokUnfillableCount = fokUnfillableCount + 1;
+                publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
+                    0, 0, price, isBuy, omsOrderId, OrderRejectReason.FOK_UNFILLABLE);
+            } else {
+                final int matchCount = engine.processLimitOrderNoRest(orderId, userId, isBuy, price, quantity);
+                // D-d divergence fence (contract 3.2): before the first trade is published, so a
+                // diverged FOK journals no record and consumes no journalSeq or tradeId. 3.5 proves it
+                // unreachable; every replica halts here at the same log position (apply failure).
+                if (engine.getTakerRemainingQuantity() != 0 || engine.wasMatchLimitReached()) {
+                    throw new IllegalStateException("FOK feasibility diverged");
+                }
+                publishTradeExecutions(engine, marketId, timestamp, orderId, userId, isBuy, matchCount, omsOrderId);
+                publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.FILLED,
+                    0, quantity, price, isBuy, omsOrderId, OrderRejectReason.NONE);
+            }
+        } else {
+            iocCount = iocCount + 1;
+            final int matchCount = engine.processLimitOrderNoRest(orderId, userId, isBuy, price, quantity);
+            publishTradeExecutions(engine, marketId, timestamp, orderId, userId, isBuy, matchCount, omsOrderId);
+            final long filledQty = quantity - engine.getTakerRemainingQuantity();
+            final int reason = engine.getLastRestRejectReason();
+            if (reason == OrderRejectReason.NONE) {
+                publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.FILLED,
+                    0, filledQty, price, isBuy, omsOrderId, OrderRejectReason.NONE);
+            } else {
+                // MATCH_LIMIT when the cap fired, IOC_REMAINDER otherwise (also for no match: an IOC
+                // that found no liquidity at its price is CANCELLED, never REJECTED).
+                iocRemainderCount = iocRemainderCount + 1;
+                publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
+                    0, filledQty, price, isBuy, omsOrderId, reason);
+            }
+        }
+        if (omsOrderId != 0) {
+            legIndex.remove(orderId);
+        }
+    }
+
+    /**
+     * RC2 S5 (contract section 4): the behaviour-2 MARKET status map, rows top to bottom, first
+     * match wins. FILLED means the bound filled.
+     */
+    private void publishBoundedMarketStatus(MatchingEngine engine, int marketId, long timestamp, long orderId,
+                                            long userId, boolean isBuy, long price, long omsOrderId,
+                                            int matchCount, long quantity, long filledQty) {
+        final boolean makerSideEmpty = isBuy ? engine.isAskEmpty() : engine.isBidEmpty();
+        if (matchCount == 0) {
+            if (makerSideEmpty) {
+                publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
+                    0, 0, price, isBuy, omsOrderId, OrderRejectReason.NO_LIQUIDITY);                     // row 1
+            } else {
+                marketBudgetExhaustedCount = marketBudgetExhaustedCount + 1;
+                publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
+                    0, 0, price, isBuy, omsOrderId, OrderRejectReason.BUDGET_EXHAUSTED);                 // row 2
+            }
+        } else if (engine.wasMatchLimitReached()) {
+            publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
+                0, filledQty, price, isBuy, omsOrderId, OrderRejectReason.MATCH_LIMIT);                  // row 3
+        } else if (filledQty == quantity) {
+            publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.FILLED,
+                0, filledQty, price, isBuy, omsOrderId, OrderRejectReason.NONE);                         // row 4
+        } else if (isBuy && !makerSideEmpty) {
+            marketBudgetExhaustedCount = marketBudgetExhaustedCount + 1;
+            publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
+                0, filledQty, price, isBuy, omsOrderId, OrderRejectReason.BUDGET_EXHAUSTED);             // row 5
+        } else {
+            publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.CANCELLED,
+                0, filledQty, price, isBuy, omsOrderId, OrderRejectReason.IOC_REMAINDER);                // row 6
         }
     }
 
@@ -1228,6 +1383,45 @@ public class Engine {
             return;
         }
 
+        // RC2 S5 (contract 5.1): the amend correction, behaviour 2 only, after the pre-cancel
+        // validations. The core mints quantity = newQty - F0 and expected = Q - F0; the leg carries
+        // Q - F, so the replacement gets newQty - F whatever fills landed since the mint.
+        long placeQuantity = newQuantity;
+        if (applyBehaviourTwo) {
+            final long actual = engine.restingRemaining(oldOrderId, isBuy);
+            final long expected = applyExpectedOldRemaining;
+            if (actual > 0) {
+                if (actual > expected) {
+                    // D-b: a wrong reference (the core can only lag the ME); keep the leg as it is.
+                    amendRemainingMismatchCount = amendRemainingMismatchCount + 1;
+                    publishAmendRejection(marketId, timestamp, oldOrderId, userId,
+                        newPrice, isBuy, omsOrderId, OrderRejectReason.AMEND_REMAINING_MISMATCH);
+                    return;
+                }
+                // 0 <= expected - actual < 2^63 and newQuantity > 0: no overflow.
+                final long inWindowFills = expected - actual;
+                final long reduced = newQuantity - inWindowFills;
+                if (reduced <= 0) {
+                    // The in-window fills reached the new target: cancel the leg, place nothing.
+                    if (engine.cancelOrder(oldOrderId, isBuy)) {
+                        legIndex.remove(oldOrderId);
+                        publishReplaceCancelStatus(marketId, timestamp, oldOrderId, userId, isBuy, omsOrderId);
+                        amendNoRemainderCount = amendNoRemainderCount + 1;
+                        publishAmendRejection(marketId, timestamp, oldOrderId, userId,
+                            newPrice, isBuy, omsOrderId, OrderRejectReason.AMEND_NO_REMAINDER);
+                    } else {
+                        publishAmendRejection(marketId, timestamp, oldOrderId, userId,
+                            newPrice, isBuy, omsOrderId, OrderRejectReason.ORDER_NOT_FOUND);
+                    }
+                    return;
+                }
+                if (inWindowFills > 0) {
+                    amendReducedCount = amendReducedCount + 1;
+                }
+                placeQuantity = reduced;
+            }
+        }
+
         // 1. Cancel existing order
         boolean cancelled = engine.cancelOrder(oldOrderId, isBuy);
         if (!cancelled) {
@@ -1255,7 +1449,7 @@ public class Engine {
         // (pre-cancel check above), so add it via the NO-MATCH path — never processLimitOrder, which
         // would match. The engine is single-threaded, so nothing can cross between that check and here.
         if (cmd.getOrderType() == OrderType.LIMIT_MAKER) {
-            int addResult = engine.addOrderNoMatch(newOrderId, userId, isBuy, newPrice, newQuantity);
+            int addResult = engine.addOrderNoMatch(newOrderId, userId, isBuy, newPrice, placeQuantity);
             if (addResult != OrderRejectReason.NONE) {
                 // Replacement could not rest (e.g. LEVEL_FULL/BOOK_FULL). The old order is already
                 // cancelled — FIFO position is forfeit on any amend — so this is terminal: a loud
@@ -1263,7 +1457,7 @@ public class Engine {
                 if (logger.isWarn()) logger.warn("LIMIT_MAKER amend could not rest: market={} orderId={} userId={} price={} reason={}",
                     marketId, newOrderId, userId, newPrice, OrderRejectReason.describe(addResult));
                 publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.REJECTED,
-                    newQuantity, 0, newPrice, isBuy, omsOrderId, addResult);
+                    placeQuantity, 0, newPrice, isBuy, omsOrderId, addResult);
                 if (omsOrderId != 0) {
                     legIndex.remove(newOrderId);
                 }
@@ -1271,15 +1465,15 @@ public class Engine {
             }
             // Rested post-only — NEW for the full new quantity (nothing filled).
             publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.NEW,
-                newQuantity, 0, newPrice, isBuy, omsOrderId, OrderRejectReason.NONE);
+                placeQuantity, 0, newPrice, isBuy, omsOrderId, OrderRejectReason.NONE);
             return;
         }
 
-        int matchCount = engine.processLimitOrder(newOrderId, userId, isBuy, newPrice, newQuantity);
+        int matchCount = engine.processLimitOrder(newOrderId, userId, isBuy, newPrice, placeQuantity);
         publishTradeExecutions(engine, marketId, timestamp, newOrderId, userId, isBuy, matchCount, omsOrderId);
 
         long remainingQty = engine.getTakerRemainingQuantity();
-        long filledQty = newQuantity - remainingQty;
+        long filledQty = placeQuantity - remainingQty;
         int restReason = engine.getLastRestRejectReason();
 
         if (remainingQty == 0 && matchCount > 0) {

@@ -43,6 +43,16 @@ public class LedgerV2SpliceDeterminismTest {
         f.add(releaseFrame(6, upTo(3, 0)));                   // 20 room
         f.add(create(11, 0, 100, 0, 58_011, 1));              // 21 APPLIED now
         f.add(create(11, 0, 100, 0, 58_011, 1));              // 22 suppressed duplicate
+        // ---- RC2 S5 mix (orderIds continue at 12) ----
+        f.add(releaseFrame(7, upTo(4, 0), upTo(5, 0), upTo(6, 0), upTo(7, 0), upTo(8, 0), upTo(9, 0), upTo(10, 0),
+                upTo(11, 0)));                                // 23 room: ledger 0
+        f.add(S5Frames.limit(20, 0, 300, 1, 60_000, 2, S5Frames.GTC));   // 24 ask 12 rests 2
+        f.add(S5Frames.limit(21, 0, 301, 1, 60_001, 1, S5Frames.GTC));   // 25 ask 13 rests 1
+        f.add(S5Frames.limit(22, 0, 400, 0, 60_001, 5, S5Frames.FOK));   // 26 FOK infeasible (14)
+        f.add(S5Frames.limit(23, 0, 401, 0, 60_000, 1, S5Frames.IOC));   // 27 IOC fills 1 of 12 (15)
+        f.add(S5Frames.amendRaw(20, 1, 300, 12, 1, 60_000, 2, LIMIT, S5Frames.GTC, fp(2))); // 28 reduced amend -> 16 rests 1
+        f.add(S5Frames.market(24, 0, 402, 0, 1, 70_000, S5Frames.GTC));  // 29 bounded market buy fills 16 (17)
+        f.add(S5Frames.limit(25, 0, 403, 0, 60_001, 1, S5Frames.FOK));   // 30 FOK feasible fills 13 (18)
         return f;
     }
 
@@ -76,12 +86,27 @@ public class LedgerV2SpliceDeterminismTest {
         }
         assertTrue("RELEASED", results.contains(DurableCommandOutcome.RELEASED));
         assertTrue("CAPACITY", results.contains(DurableCommandOutcome.CAPACITY));
+        // RC2 S5: the mix ran as designed (infeasible FOK, reduced amend, FOK filled).
+        final List<String> s5 = new ArrayList<>();
+        for (byte[] f : BehaviourTwoHarness.ofTemplate(whole, 3)) {
+            final var o = record3(f);
+            s5.add(o.commandKind() + ":" + o.timeInForce() + ":" + o.status() + ":" + o.reason() + ":" + o.oldCancelled());
+        }
+        assertTrue("infeasible FOK " + s5, s5.contains("0:2:3:13:0"));
+        assertTrue("reduced amend " + s5, s5.contains("2:0:0:0:1"));
+        assertTrue("feasible FOK " + s5, s5.contains("0:2:2:0:0"));
+        try (Replica a = new Replica()) {
+            run(a, log, 0, log.size());
+            assertEquals("the reduced leg filled: nothing rests at 60_000", 0,
+                    a.h.engine.getEngine(BehaviourTwoHarness.MARKET).getAskOrders().length);
+        }
         BehaviourTwoLog.assertSeqEpochInvariant(whole);
         for (int i = 0; i < whole.size(); i++) {
             assertEquals("dense", i + 1L, BehaviourTwoHarness.journalSeqOf(whole.get(i)));
         }
 
-        for (int cut : new int[]{1, 5, 6}) {
+        // RC2 S5: cuts after the infeasible FOK (27) and after the reduced amend (29).
+        for (int cut : new int[]{1, 5, 6, 27, 29}) {
             for (boolean twice : new boolean[]{false, true}) {
                 final List<byte[]> spliced = new ArrayList<>();
                 try (Replica a = new Replica()) {

@@ -6,6 +6,7 @@ import com.match.application.engine.BehaviourTwoHarness.Shape;
 import com.match.application.engine.Engine;
 import com.match.application.engine.EngineConfigState;
 import com.match.application.orderbook.OrderRejectReason;
+import com.match.application.orderbook.S5Probe;
 import com.match.domain.FixedPoint;
 import com.match.domain.commands.DurableCommandOutcome;
 import com.match.infrastructure.generated.CancelOrderEncoder;
@@ -239,7 +240,7 @@ public class S3VerifierDeterminismTest {
      *                      (pre-existing, DirectBookFullLevelSnapshotVerifierTest), which a restore
      *                      on that book exposes independently of S3.
      */
-    private static void fuzz(EngineConfigState config, long seed, boolean restoreMidRun) {
+    private static int fuzz(EngineConfigState config, long seed, boolean restoreMidRun) {
         final Random rnd = new Random(seed);
         final int n = 2_500;
         final int cut = 700 + rnd.nextInt(1_100);
@@ -256,7 +257,11 @@ public class S3VerifierDeterminismTest {
             final CommandOutcomeDecoder outcome = new CommandOutcomeDecoder();
             final MessageHeaderDecoder header = new MessageHeaderDecoder();
             final int[] results = new int[9];
-            final int[] reasons = new int[12];
+            int appliedCancelsReplaces = 0;
+            final int[] kindResults = new int[9];
+            // RC2 S5: codes 12-16 (IOC_REMAINDER .. AMEND_REMAINING_MISMATCH) are journaled reasons too
+            // (the hostile mix carries tif 0..2 on creates and market buys).
+            final int[] reasons = new int[17];
             try {
                 for (int i = 0; i < n; i++) {
                     final long position = 192L + 128L * i;
@@ -273,16 +278,30 @@ public class S3VerifierDeterminismTest {
                         // so different payloads still collide on one id (CONFLICT).
                         frame = anyDurable(rnd.nextInt(4), 0, type, user, 1 + rnd.nextInt(400), 0, side,
                                 hostilePrice(rnd), hostileQty(rnd), type == 1 ? hostileQty(rnd) * 50_000 : 0,
-                                rnd.nextInt(3), 0);
+                                // RC2 S5: IOC/FOK creates never rest, so GTC keeps most of the weight
+                                // (resting makers for the trades below); tif stays hostile 0..2.
+                                rnd.nextInt(3) != 0 ? 0 : rnd.nextInt(3), 0);
                     } else if (pick < 13 && !legs.isEmpty()) {
                         final Leg leg = legs.get(rnd.nextInt(legs.size()));
                         final boolean owner = rnd.nextInt(4) != 0;
                         final int kind = 1 + rnd.nextInt(2);
+                        // RC2 S5 (review FIX-1): most CANCEL/UPDATE frames carry the behaviour-2 valid
+                        // tif (GTC) and, on UPDATE, the leg's remaining as the core-shaped reference, so
+                        // owner-correct cancels and replaces are applied as before S5. A separate,
+                        // explicit quarter stays hostile: tif 0..2 and a hostile reference (0 included).
+                        final int tif = rnd.nextInt(4) == 0 ? rnd.nextInt(3) : 0;
+                        long expected = 0;
+                        if (kind == 2) {
+                            final long remaining = S5Probe.restingRemaining(
+                                    on.h.engine.getEngine(BehaviourTwoHarness.MARKET), leg.orderId, leg.side == 0);
+                            expected = rnd.nextInt(4) == 0 ? Math.max(0, hostileQty(rnd))
+                                    : remaining > 0 ? remaining : 1;
+                        }
                         frame = anyDurable(1 + rnd.nextInt(1_500), kind, rnd.nextInt(2) == 0 ? 0 : 2,
                                 owner ? leg.userId : user, owner ? leg.omsOrderId : oms, leg.orderId,
                                 rnd.nextInt(5) == 0 ? 1 - leg.side : leg.side,
                                 kind == 2 ? hostilePrice(rnd) : 0, kind == 2 ? hostileQty(rnd) : 0, 0,
-                                rnd.nextInt(3), kind == 2 ? Math.max(0, hostileQty(rnd)) : 0);
+                                tif, expected);
                     } else if (pick < 16) {
                         frame = legacyCreate(user, rnd.nextInt(3) == 0 ? 0 : oms, rnd.nextInt(3), side,
                                 hostilePrice(rnd), hostileQty(rnd));
@@ -306,11 +325,17 @@ public class S3VerifierDeterminismTest {
                         if (t == 2) {
                             terminal.wrapAndApplyHeader(new UnsafeBuffer(fr), 0, header);
                             final int reason = terminal.rejectReason();
-                            assertTrue("journaled rejectReason " + reason, reason >= 0 && reason <= 11);
+                            assertTrue("journaled rejectReason " + reason, reason >= 0 && reason <= 16);
                             reasons[reason]++;
                         } else if (t == 3) {
                             outcome.wrapAndApplyHeader(new UnsafeBuffer(fr), 0, header);
                             results[outcome.result()]++;
+                            if (outcome.commandKind() == 1 || outcome.commandKind() == 2) {
+                                kindResults[outcome.result()]++;
+                                if (outcome.result() == 0) {
+                                    appliedCancelsReplaces++;
+                                }
+                            }
                             if (outcome.result() == 0 && outcome.orderId() > 0 && outcome.status() < 2) {
                                 final var d = record3(fr);
                                 legs.add(new Leg(d.orderId(), d.userId(), d.omsOrderId(), (int) d.orderSide()));
@@ -338,11 +363,18 @@ public class S3VerifierDeterminismTest {
                 assertTrue("suppressed duplicates", on.h.engine.suppressedDuplicateCount() > 20);
                 assertTrue("conflicts", results[DurableCommandOutcome.CONFLICT] > 20);
                 assertTrue("applied", results[0] > 100);
+                System.out.println("[S5] S3 verifier seed " + seed + ": CANCEL/UPDATE results " + Arrays.toString(kindResults));
+                // RC2 S5 review FIX-1: owner-correct cancels and replaces still apply. The generator
+                // picks legs from an unpruned list, so most name a leg that is gone (UNKNOWN_LEG) and
+                // the base itself applied only 5..22 per seed (60 and 49 per four seeds, measured on
+                // 307b48c): per-seed floor 5, four-seed floor 40 in the callers.
+                assertTrue("applied cancels/replaces " + appliedCancelsReplaces, appliedCancelsReplaces >= 5);
                 int distinct = 0;
                 for (int c : reasons) {
                     distinct += c > 0 ? 1 : 0;
                 }
                 assertTrue("distinct journaled reject reasons " + Arrays.toString(reasons), distinct >= 6);
+                return appliedCancelsReplaces;
             } finally {
                 if (restored != null) {
                     restored.close();
@@ -353,15 +385,19 @@ public class S3VerifierDeterminismTest {
 
     @Test
     public void hostileFramesNeverReachTheRejectReasonGuardOnADirectBook() {
+        int applied = 0;
         for (long seed = 1; seed <= 4; seed++) {
-            fuzz(direct(), seed, false);
+            applied += fuzz(direct(), seed, false);
         }
+        assertTrue("applied cancels/replaces over four seeds " + applied, applied > 40);
     }
 
     @Test
     public void hostileFramesNeverReachTheRejectReasonGuardOnAnArrayBook() {
+        int applied = 0;
         for (long seed = 11; seed <= 14; seed++) {
-            fuzz(array(), seed, true);
+            applied += fuzz(array(), seed, true);
         }
+        assertTrue("applied cancels/replaces over four seeds " + applied, applied > 40);
     }
 }

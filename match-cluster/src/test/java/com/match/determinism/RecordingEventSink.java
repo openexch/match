@@ -19,6 +19,14 @@ import java.util.List;
 public final class RecordingEventSink implements MatchEventSink {
 
     private final List<EngineEvent> events = new ArrayList<>();
+    // RC2 S5: record 3 outcomes are captured only once a scenario opts in (GENESIS), so every other
+    // user of this sink (legacy scenarios, egress-count tests) sees exactly the events it saw before.
+    private boolean recordOutcomes;
+
+    /** RC2 S5: also capture behaviour-2 record 3 outcomes (ScenarioRunner GENESIS). */
+    public void recordOutcomes() {
+        this.recordOutcomes = true;
+    }
 
     @Override
     public boolean publishTradeExecution(
@@ -42,6 +50,18 @@ public final class RecordingEventSink implements MatchEventSink {
         events.add(new EngineEvent.Status(marketId, timestamp, orderId, userId, orderStatus,
                 remainingQty, filledQty, orderPrice, orderIsBuy, omsOrderId, rejectReason));
         return true;
+    }
+
+    /** RC2 S5: the behaviour-2 record 3 (a view: copied, never retained). */
+    @Override
+    public void publishCommandOutcome(long egressSeq, long journalSeq,
+                                      com.match.domain.commands.DurableOutcomeView outcome,
+                                      int ledgerSizeAfter, int ledgerCapacity) {
+        if (!recordOutcomes) {
+            return;
+        }
+        events.add(new EngineEvent.Outcome(outcome.idHigh(), outcome.idLow(), outcome.result(), outcome.status(),
+                outcome.reason(), outcome.oldCancelled(), outcome.orderId()));
     }
 
     /** All captured events, in emission (== processing) order. */

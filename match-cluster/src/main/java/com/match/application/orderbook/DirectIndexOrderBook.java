@@ -255,6 +255,51 @@ public class DirectIndexOrderBook {
         return orders[orderBase + 1];
     }
 
+    /**
+     * RC2 S5 (contract 5.4): the remaining quantity of a resting order, or -1. The guards of
+     * {@link #restingUserId}. Read-only.
+     */
+    public long restingRemaining(long orderId) {
+        final long location = orderLocations.get(orderId);
+        if (location == EMPTY_LOCATION) return -1L;
+        final int orderBase = (unpackPriceIdx(location) * maxOrdersPerLevel + unpackSlot(location)) * ORDER_FIELDS;
+        if (orders[orderBase] != orderId) return -1L;
+        return orders[orderBase + 2];
+    }
+
+    // RC2 S5 (contract 3.3, FIX-2): pure accessors of the FOK pre-walk. Unlike getHeadOrder*, they
+    // never advance the head and never free a slot.
+
+    /** The head slot of level {@code priceIdx} as stored (it may be a tombstone). */
+    int levelHeadSlot(int priceIdx) {
+        return (int) levels[priceIdx * LEVEL_FIELDS];
+    }
+
+    /** Remaining quantity in {@code slot} of level {@code priceIdx} (0 = tombstone). */
+    long slotQuantity(int priceIdx, int slot) {
+        return orders[(priceIdx * maxOrdersPerLevel + slot) * ORDER_FIELDS + 2];
+    }
+
+    /** Next slot after {@code slot} in level {@code priceIdx}'s chain (-1 = tail). */
+    int slotNext(int priceIdx, int slot) {
+        return (int) orders[(priceIdx * maxOrdersPerLevel + slot) * ORDER_FIELDS + 3];
+    }
+
+    /** Free slots of level {@code priceIdx} (test access: the pre-walk must leave it unchanged). */
+    int freeSlotCount(int priceIdx) {
+        return freeSlotCounts[priceIdx];
+    }
+
+    /** The price index of {@code price} (test access). */
+    int priceIndexOf(long price) {
+        return priceToIndex(price);
+    }
+
+    /** The per-level node bound of this book. */
+    public int getMaxOrdersPerLevel() {
+        return maxOrdersPerLevel;
+    }
+
     public boolean cancelOrder(long orderId) {
         long location = orderLocations.get(orderId);
         if (location == EMPTY_LOCATION) return false;

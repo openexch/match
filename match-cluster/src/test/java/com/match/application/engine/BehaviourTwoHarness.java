@@ -125,6 +125,20 @@ public final class BehaviourTwoHarness implements AutoCloseable {
                 behaviorVersion, commandLedgerCapacity, genesisId, maxWireVersion);
     }
 
+    /**
+     * RC2 S5 (W1, FIX-12): {@link #config} with an explicit impl and match cap. Array: capacity 4096,
+     * {@code maxOrdersPerLevel} 0; direct: {@code bookCapacity} 0 and the given
+     * {@code maxOrdersPerLevel} (64 when 0 is passed).
+     */
+    public static EngineConfigState config(long configVersion, long behaviorVersion, long genesisId,
+                                           long maxWireVersion, long commandLedgerCapacity, String impl,
+                                           long maxMatchesPerOrder, long maxOrdersPerLevel) {
+        final boolean direct = EngineConfigState.IMPL_DIRECT.equals(impl);
+        return EngineConfigState.of(configVersion, impl, direct ? 0 : 4096, maxMatchesPerOrder,
+                direct ? (maxOrdersPerLevel == 0 ? 64 : maxOrdersPerLevel) : 0, btcMarket(),
+                behaviorVersion, commandLedgerCapacity, genesisId, maxWireVersion);
+    }
+
     /** The standard behaviour-2 genesis config: cv 1, t 2, genesis G, ceiling 12, capacity 50000. */
     public static EngineConfigState fresh2() {
         return config(1, 2, G, 12, 50_000);

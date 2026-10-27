@@ -37,6 +37,15 @@ import java.util.Map;
  *   CANCEL u=100 order=1
  *   UPDATE u=100 order=1 side=BID px=61000.0 qty=2.0 [type=LIMIT|LIMIT_MAKER]  (default LIMIT)
  *   SNAPSHOT                               serialize → restore into a fresh engine
+ *
+ *   RC2 S5 (behaviour 2):
+ *   GENESIS behaviour=2 [cap=n]            first line only: FRESH through the EngineConfigStateMachine with
+ *                                          the runner's impl and the five compiled markets (cap default 10000)
+ *   DCREATE u= side= type= px= qty= [budget=] oms= attempt= [tif=GTC|IOC|FOK]
+ *   DCANCEL u= order= oms= attempt=
+ *   DUPDATE u= order= side= px= qty= [type=] oms= attempt= exp=   (exp: expectedOldRemaining, quantity units)
+ *                                          core-shaped ids: idHigh = oms, idLow = attempt << 2 | kind;
+ *                                          applied through Engine.acceptDurableV2 (record 3 is rendered OUTCOME)
  * </pre>
  */
 public final class ScenarioRunner {
@@ -48,6 +57,9 @@ public final class ScenarioRunner {
     private long timerCorrelationId = 0L;
     // Matching implementation to use; null = the flag-resolved default (production behavior).
     private final String impl;
+    // RC2 S5: true after GENESIS (the engine is a config-mode engine at behaviour 2).
+    private boolean genesis;
+    private int lines;
 
     private ScenarioRunner(String impl) {
         this.impl = impl;
@@ -56,7 +68,84 @@ public final class ScenarioRunner {
     }
 
     private Engine newEngine() {
+        if (genesis) {
+            return Engine.deferredUntilConfig();
+        }
         return impl == null ? new Engine() : new Engine(impl);
+    }
+
+    /** The impl the runner builds: explicit, else the flag-resolved one (the Engine() default). */
+    private String resolvedImpl() {
+        if (impl != null) {
+            return impl;
+        }
+        String p = System.getProperty("match.engine.impl");
+        if (p == null || p.isEmpty()) {
+            p = System.getenv("MATCH_ENGINE_IMPL");
+        }
+        return (p == null || p.isEmpty()) ? "array" : p.toLowerCase();
+    }
+
+    /** RC2 S5: FRESH at behaviour 2 with the five compiled markets' geometry. */
+    private void genesis(Map<String, String> kv) {
+        if (lines != 1) {
+            throw new IllegalArgumentException("GENESIS must be the first line");
+        }
+        final long behaviour = reqLong(kv, "behaviour");
+        final long cap = Long.parseLong(kv.getOrDefault("cap", "10000"));
+        final boolean direct = "direct".equals(resolvedImpl());
+        final com.match.application.engine.MarketConfig[] all = com.match.application.engine.MarketConfig.ALL_MARKETS;
+        final com.match.application.engine.EngineConfigState.MarketDef[] defs =
+                new com.match.application.engine.EngineConfigState.MarketDef[all.length];
+        for (int i = 0; i < all.length; i++) {
+            defs[i] = new com.match.application.engine.EngineConfigState.MarketDef(all[i].marketId, all[i].symbol,
+                    all[i].basePrice, all[i].maxPrice, all[i].tickSize);
+        }
+        final com.match.application.engine.EngineConfigState config = com.match.application.engine.EngineConfigState.of(
+                1, direct ? com.match.application.engine.EngineConfigState.IMPL_DIRECT
+                        : com.match.application.engine.EngineConfigState.IMPL_ARRAY,
+                direct ? 0 : 4096, cap, direct ? 64 : 0, defs, behaviour, 100_000,
+                0x1234_5678_9ABC_DEF1L, 12);
+        genesis = true;
+        sink.recordOutcomes();
+        engine = Engine.deferredUntilConfig();
+        engine.setEventPublisher(sink);
+        final var sm = new com.match.application.engine.EngineConfigStateMachine(engine, () -> {
+            throw new IllegalStateException("GENESIS: fail-fast");
+        }, null);
+        final var d = sm.onEngineConfig(config);
+        if (d != com.match.application.engine.EngineConfigStateMachine.Decision.FRESH) {
+            throw new IllegalArgumentException("GENESIS: expected FRESH, got " + d);
+        }
+    }
+
+    /** RC2 S5: a core-shaped durable command through the behaviour-2 entry. */
+    private void durable(int kind, Map<String, String> kv) {
+        if (!genesis) {
+            throw new IllegalArgumentException("D* verbs need GENESIS behaviour=2");
+        }
+        final long oms = reqLong(kv, "oms");
+        final long attempt = reqLong(kv, "attempt");
+        final OrderType t = kind == Engine.CMD_CANCEL ? OrderType.LIMIT : type(kv.getOrDefault("type", "LIMIT"));
+        final int typeWire = t == OrderType.LIMIT ? 0 : t == OrderType.MARKET ? 1 : 2;
+        final int sideWire = kind == Engine.CMD_CANCEL ? 0 : side(req(kv, "side")) == OrderSide.BID ? 0 : 1;
+        final int tif;
+        switch (kv.getOrDefault("tif", "GTC").toUpperCase()) {
+            case "GTC": tif = 0; break;
+            case "IOC": tif = 1; break;
+            case "FOK": tif = 2; break;
+            default: throw new IllegalArgumentException("bad tif '" + kv.get("tif") + "'");
+        }
+        final long price = kind == Engine.CMD_CANCEL || t == OrderType.MARKET ? 0
+                : FixedPoint.fromDouble(reqDouble(kv, "px"));
+        final long qty = kind == Engine.CMD_CANCEL ? 0 : FixedPoint.fromDouble(reqDouble(kv, "qty"));
+        final long budget = kv.containsKey("budget") ? FixedPoint.fromDouble(reqDouble(kv, "budget")) : 0;
+        final long old = kind == Engine.CMD_CREATE ? 0 : reqLong(kv, "order");
+        final long exp = kind == Engine.CMD_UPDATE ? FixedPoint.fromDouble(reqDouble(kv, "exp")) : 0;
+        final com.match.domain.commands.DurableOrderIntent intent = new com.match.domain.commands.DurableOrderIntent(
+                oms, (attempt << 2) | kind, reqLong(kv, "u"), oms, old, price, qty, budget, market, kind, typeWire,
+                sideWire, tif, exp);
+        engine.acceptDurableV2(intent, clock.now());
     }
 
     /** Run a scenario file and return its canonical rendered output (flag-resolved impl). */
@@ -99,7 +188,20 @@ public final class ScenarioRunner {
         String verb = tokens[0].toUpperCase();
         Map<String, String> kv = parseKv(tokens);
 
+        lines++;
         switch (verb) {
+            case "GENESIS":
+                genesis(kv);
+                break;
+            case "DCREATE":
+                durable(Engine.CMD_CREATE, kv);
+                break;
+            case "DCANCEL":
+                durable(Engine.CMD_CANCEL, kv);
+                break;
+            case "DUPDATE":
+                durable(Engine.CMD_UPDATE, kv);
+                break;
             case "MARKET":
                 market = marketId(tokens[1]);
                 break;

@@ -34,7 +34,7 @@ public class JournalDarkNodeParityTest {
         f.add(engineConfig(1, 2, G, 12, 50_000));                               // FRESH
         f.add(durableCreate(1, 100, 9001, 0, 59_000, 2));                       // order 1 rests
         f.add(durableCreate(2, 200, 9002, 1, 59_000, 1));                       // trade
-        f.add(durable(3, 2, 100, 9001, 1, 0, 58_500, 1, 0, 0));                 // replace 1 -> 3
+        f.add(durable(3, 2, 100, 9001, 1, 0, 58_500, 1, 0, com.match.domain.FixedPoint.fromDouble(1))); // replace 1 -> 3 (1 left)
         f.add(durableCreate(4, 300, 9004, 1, 58_500, 1));                       // trade, maker 3 FILLED
         f.add(durableCreate(5, 400, 9005, 0, 57_000, 1));                       // order 5 rests
         f.add(durable(6, 1, 400, 9005, 5, 0, 0, 0, 0, 0));                      // cancel 5

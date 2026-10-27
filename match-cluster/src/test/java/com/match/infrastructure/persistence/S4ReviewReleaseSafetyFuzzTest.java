@@ -4,6 +4,7 @@ package com.match.infrastructure.persistence;
 import com.match.application.engine.BehaviourTwoHarness.Shape;
 import com.match.application.engine.Engine;
 import com.match.application.orderbook.MatchingEngine;
+import com.match.application.orderbook.S5Probe;
 import com.match.domain.commands.DurableCommandOutcome;
 import com.match.infrastructure.mejournal.generated.CommandOutcomeDecoder;
 import com.match.infrastructure.mejournal.generated.CommandReleaseDecoder;
@@ -118,7 +119,8 @@ public class S4ReviewReleaseSafetyFuzzTest {
                         final int t = rnd.nextInt(10);
                         frame = t < 8 ? createOfType(h, 0, 100 + rnd.nextInt(3), rnd.nextInt(2), price, qty,
                                 t < 6 ? LIMIT : LIMIT_MAKER)
-                                : durableRaw(h, 0, CREATE, 100, h, 0, t == 8 ? 0 : 1, 0, t == 9 ? fp(qty) : 0,
+                                // MARKET: the buy (t 8) carries its quantity bound with the budget (RC2 S5 9.1).
+                                : durableRaw(h, 0, CREATE, 100, h, 0, t == 8 ? 0 : 1, 0, fp(qty),
                                 t == 8 ? fp(qty * 60_000) : 0, MARKET, 0, 0);
                     } else if (pick < 9) {
                         // Iceberg slice / stop child: another CREATE under an existing idHigh.
@@ -136,8 +138,11 @@ public class S4ReviewReleaseSafetyFuzzTest {
                         if (rnd.nextBoolean()) {
                             frame = cancel(leg.h, att, user, leg.orderId);
                         } else {
+                            // RC2 S5 9.1: the core-shaped reference, the leg's remaining (test access).
+                            final long remaining = S5Probe.restingRemaining(a.h.engine.getEngine(1), leg.orderId,
+                                    leg.side == 0);
                             frame = amend(leg.h, att, user, leg.orderId, leg.side, price, qty,
-                                    rnd.nextInt(4) == 0 ? LIMIT_MAKER : LIMIT);
+                                    rnd.nextInt(4) == 0 ? LIMIT_MAKER : LIMIT, remaining > 0 ? remaining : fp(1));
                         }
                     } else {
                         final int k = 1 + rnd.nextInt(4);
