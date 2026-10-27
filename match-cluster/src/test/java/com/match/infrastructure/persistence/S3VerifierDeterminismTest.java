@@ -188,12 +188,13 @@ public class S3VerifierDeterminismTest {
         }
     }
 
-    private static byte[] anyDurable(long idLow, int kind, int type, long userId, long omsOrderId,
+    /** RC2 S4 (B1): core-shaped ids, idHigh = omsOrderId, idLow = attempt << 2 | kind. */
+    private static byte[] anyDurable(long attempt, int kind, int type, long userId, long omsOrderId,
                                      long oldOrderId, int side, long price, long qty, long budget,
                                      int tif, long expectedOldRemaining) {
         final UnsafeBuffer buffer = new UnsafeBuffer(new byte[256]);
         new DurableOrderCommandEncoder().wrapAndApplyHeader(buffer, 0, new MessageHeaderEncoder())
-                .commandIdHigh(17).commandIdLow(idLow).userId(userId).omsOrderId(omsOrderId)
+                .commandIdHigh(omsOrderId).commandIdLow((attempt << 2) | kind).userId(userId).omsOrderId(omsOrderId)
                 .oldOrderId(oldOrderId).price(price).quantity(qty).budget(budget)
                 .marketId(BehaviourTwoHarness.MARKET).commandKind((short) kind).orderType((short) type)
                 .orderSide((short) side).timeInForce((short) tif).expectedOldRemaining(expectedOldRemaining);
@@ -268,7 +269,9 @@ public class S3VerifierDeterminismTest {
                         frame = sent.get(rnd.nextInt(sent.size()));                      // verbatim retry
                     } else if (pick < 9) {
                         final int type = rnd.nextInt(3);
-                        frame = anyDurable(1 + rnd.nextInt(1_500), 0, type, user, oms, 0, side,
+                        // RC2 S4: core-shaped creates on a small id space (400 orders x 4 attempts)
+                        // so different payloads still collide on one id (CONFLICT).
+                        frame = anyDurable(rnd.nextInt(4), 0, type, user, 1 + rnd.nextInt(400), 0, side,
                                 hostilePrice(rnd), hostileQty(rnd), type == 1 ? hostileQty(rnd) * 50_000 : 0,
                                 rnd.nextInt(3), 0);
                     } else if (pick < 13 && !legs.isEmpty()) {

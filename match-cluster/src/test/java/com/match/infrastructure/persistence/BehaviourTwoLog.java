@@ -67,9 +67,115 @@ final class BehaviourTwoLog {
         return Arrays.copyOf(buffer.byteArray(), MessageHeaderEncoder.ENCODED_LENGTH + encoder.encodedLength());
     }
 
-    /** A v12 DurableOrderCommand (template 9, block 80). */
-    static byte[] durable(long idLow, int kind, long userId, long omsOrderId, long oldOrderId, int side,
+    /**
+     * RC2 S4: an EngineConfig with explicit impl, caps and markets (ids get BTC-like bands with
+     * the same min/max/tick as {@link #engineConfig}).
+     */
+    static byte[] engineConfigWith(long configVersion, long behaviorVersion, long genesisId, long maxWireVersion,
+                                   long commandLedgerCapacity, boolean direct, long bookCapacity,
+                                   long maxMatchesPerOrder, long maxOrdersPerLevel, int... marketIds) {
+        final UnsafeBuffer buffer = new UnsafeBuffer(new byte[2048]);
+        final EngineConfigEncoder encoder = new EngineConfigEncoder();
+        encoder.wrapAndApplyHeader(buffer, 0, new MessageHeaderEncoder())
+                .configVersion(configVersion)
+                .impl(direct ? EngineImpl.DIRECT : EngineImpl.ARRAY)
+                .bookCapacity(bookCapacity)
+                .maxMatchesPerOrder(maxMatchesPerOrder)
+                .maxOrdersPerLevel(maxOrdersPerLevel)
+                .behaviorVersion(behaviorVersion)
+                .commandLedgerCapacity(commandLedgerCapacity)
+                .genesisId(genesisId)
+                .maxWireVersion((int) maxWireVersion);
+        final EngineConfigEncoder.MarketsEncoder g = encoder.marketsCount(marketIds.length);
+        for (int id : marketIds) {
+            g.next().marketId(id).symbol("M" + id)
+                    .minPrice(FixedPoint.fromDouble(50_000.0))
+                    .maxPrice(FixedPoint.fromDouble(150_000.0))
+                    .tickSize(FixedPoint.fromDouble(1.0));
+        }
+        return Arrays.copyOf(buffer.byteArray(), MessageHeaderEncoder.ENCODED_LENGTH + encoder.encodedLength());
+    }
+
+    /** A legacy-lane UpdateOrder (template 3), LIMIT. */
+    static byte[] updateOrder(long userId, long orderId, int side, double price, double qty) {
+        final UnsafeBuffer buffer = new UnsafeBuffer(new byte[256]);
+        final UpdateOrderEncoder encoder = new UpdateOrderEncoder();
+        encoder.wrapAndApplyHeader(buffer, 0, new MessageHeaderEncoder())
+                .userId(userId)
+                .orderId(orderId)
+                .price(FixedPoint.fromDouble(price))
+                .quantity(FixedPoint.fromDouble(qty))
+                .marketId(BehaviourTwoHarness.MARKET)
+                .orderType(OrderType.LIMIT)
+                .orderSide(side == 0 ? OrderSide.BID : OrderSide.ASK);
+        return Arrays.copyOf(buffer.byteArray(), MessageHeaderEncoder.ENCODED_LENGTH + encoder.encodedLength());
+    }
+
+    /**
+     * A v12 DurableOrderCommand (template 9, block 80) with a core-shaped id (RC2 S4 9.2, B1):
+     * {@code commandIdHigh = omsOrderId} and {@code commandIdLow = attempt << 2 | kind}, the way the
+     * core mints it. {@code attempt} is the caller's per-command number; distinct (omsOrderId,
+     * attempt) pairs are distinct ids, equal ones are the same id.
+     */
+    static byte[] durable(long attempt, int kind, long userId, long omsOrderId, long oldOrderId, int side,
                           double price, double qty, int tif, long expectedOldRemaining) {
+        return durableRaw(omsOrderId, coreIdLow(attempt, kind), kind, userId, omsOrderId, oldOrderId, side,
+                FixedPoint.fromDouble(price), FixedPoint.fromDouble(qty), 0L, 0, tif, expectedOldRemaining);
+    }
+
+    /** The core's idLow: {@code attempt << 2 | kind}. */
+    static long coreIdLow(long attempt, int kind) {
+        return (attempt << 2) | kind;
+    }
+
+    /** A v12 DurableOrderCommand with every field explicit (fixed-point price/qty/budget). */
+    static byte[] durableRaw(long idHigh, long idLow, int kind, long userId, long omsOrderId, long oldOrderId,
+                             int side, long price, long qty, long budget, int orderType, int tif,
+                             long expectedOldRemaining) {
+        return durableRaw(idHigh, idLow, kind, userId, omsOrderId, oldOrderId, side, price, qty, budget, orderType,
+                tif, expectedOldRemaining, BehaviourTwoHarness.MARKET);
+    }
+
+    /** {@link #durableRaw} on an explicit market. */
+    static byte[] durableRaw(long idHigh, long idLow, int kind, long userId, long omsOrderId, long oldOrderId,
+                             int side, long price, long qty, long budget, int orderType, int tif,
+                             long expectedOldRemaining, int marketId) {
+        final UnsafeBuffer buffer = new UnsafeBuffer(new byte[256]);
+        new DurableOrderCommandEncoder().wrapAndApplyHeader(buffer, 0, new MessageHeaderEncoder())
+                .commandIdHigh(idHigh).commandIdLow(idLow).userId(userId).omsOrderId(omsOrderId)
+                .oldOrderId(oldOrderId).price(price).quantity(qty)
+                .budget(budget).marketId(marketId)
+                .commandKind((short) kind).orderType((short) orderType).orderSide((short) side)
+                .timeInForce((short) tif).expectedOldRemaining(expectedOldRemaining);
+        return Arrays.copyOf(buffer.byteArray(), MessageHeaderEncoder.ENCODED_LENGTH + DurableOrderCommandEncoder.BLOCK_LENGTH);
+    }
+
+    /**
+     * RC2 S4: a ReleaseCommandIds frame (template 10). {@code entries} is a flat list of
+     * {@code (commandIdHigh, idLowFloor, scope)} triples; scope 0 UP_TO, 1 ORDER (raw byte, so a
+     * test can send an out-of-range scope).
+     */
+    static byte[] release(long releaseSeq, long... entries) {
+        if (entries.length % 3 != 0) {
+            throw new IllegalArgumentException("entries are (high, floor, scope) triples");
+        }
+        final int n = entries.length / 3;
+        final UnsafeBuffer buffer = new UnsafeBuffer(new byte[64 + n * 17]);
+        final ReleaseCommandIdsEncoder encoder = new ReleaseCommandIdsEncoder();
+        encoder.wrapAndApplyHeader(buffer, 0, new MessageHeaderEncoder()).releaseSeq(releaseSeq);
+        final ReleaseCommandIdsEncoder.ReleasesEncoder g = encoder.releasesCount(n);
+        for (int i = 0; i < n; i++) {
+            g.next().commandIdHigh(entries[3 * i]).idLowFloor(entries[3 * i + 1]);
+            // Raw scope byte at entry offset 16 (so 2 can be encoded): header 8 + root 8 + group 4.
+            buffer.putByte(MessageHeaderEncoder.ENCODED_LENGTH + ReleaseCommandIdsEncoder.BLOCK_LENGTH + 4
+                    + i * ReleaseCommandIdsEncoder.ReleasesEncoder.sbeBlockLength() + 16, (byte) entries[3 * i + 2]);
+        }
+        return Arrays.copyOf(buffer.byteArray(), MessageHeaderEncoder.ENCODED_LENGTH + encoder.encodedLength());
+    }
+
+    /** The legacy (pre-S4) template-9 builder: a fixed commandIdHigh 17 (not core-shaped). */
+    static byte[] durableIdHigh17(long idLow, int kind, long userId, long omsOrderId, long oldOrderId, int side,
+                                  double price, double qty, int tif, long expectedOldRemaining) {
         final UnsafeBuffer buffer = new UnsafeBuffer(new byte[256]);
         new DurableOrderCommandEncoder().wrapAndApplyHeader(buffer, 0, new MessageHeaderEncoder())
                 .commandIdHigh(17).commandIdLow(idLow).userId(userId).omsOrderId(omsOrderId)
@@ -80,8 +186,13 @@ final class BehaviourTwoLog {
         return Arrays.copyOf(buffer.byteArray(), MessageHeaderEncoder.ENCODED_LENGTH + DurableOrderCommandEncoder.BLOCK_LENGTH);
     }
 
-    static byte[] durableCreate(long idLow, long userId, long omsOrderId, int side, double price, double qty) {
-        return durable(idLow, 0, userId, omsOrderId, 0L, side, price, qty, 0, 0L);
+    static byte[] durableCreate(long attempt, long userId, long omsOrderId, int side, double price, double qty) {
+        return durable(attempt, 0, userId, omsOrderId, 0L, side, price, qty, 0, 0L);
+    }
+
+    /** The pre-S4 CREATE builder (commandIdHigh 17, the caller's idLow): behaviour-1 reference logs. */
+    static byte[] durableCreateIdHigh17(long idLow, long userId, long omsOrderId, int side, double price, double qty) {
+        return durableIdHigh17(idLow, 0, userId, omsOrderId, 0L, side, price, qty, 0, 0L);
     }
 
     /** A legacy-lane CreateOrder (template 1), LIMIT. */

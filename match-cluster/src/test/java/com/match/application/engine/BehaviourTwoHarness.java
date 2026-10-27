@@ -160,6 +160,12 @@ public final class BehaviourTwoHarness implements AutoCloseable {
                 new UnsafeBuffer(frame), 0, new com.match.infrastructure.mejournal.generated.MessageHeaderDecoder());
     }
 
+    /** RC2 S4: decode a record 4 (CommandRelease) frame. */
+    public static com.match.infrastructure.mejournal.generated.CommandReleaseDecoder record4(byte[] frame) {
+        return new com.match.infrastructure.mejournal.generated.CommandReleaseDecoder().wrapAndApplyHeader(
+                new UnsafeBuffer(frame), 0, new com.match.infrastructure.mejournal.generated.MessageHeaderDecoder());
+    }
+
     public static com.match.infrastructure.mejournal.generated.CommandOutcomeDecoder record3(byte[] frame) {
         return new com.match.infrastructure.mejournal.generated.CommandOutcomeDecoder().wrapAndApplyHeader(
                 new UnsafeBuffer(frame), 0, new com.match.infrastructure.mejournal.generated.MessageHeaderDecoder());

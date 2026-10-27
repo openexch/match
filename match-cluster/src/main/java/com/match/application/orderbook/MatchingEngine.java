@@ -34,6 +34,13 @@ public interface MatchingEngine {
     /** Cancel a resting order on the given side. Returns true if it was present and removed. */
     boolean cancelOrder(long orderId, boolean isBuy);
 
+    /**
+     * RC2 S4 (contract 5.1): the owning userId of {@code orderId} if it rests on the given side, else
+     * -1. Uses the book's own collision guards (the location must still name this order), so a
+     * cancelled, filled or never-seen id and a reused slot all read -1. Read-only, allocation-free.
+     */
+    long restingUserId(long orderId, boolean isBuy);
+
     // ==================== Validation ====================
 
     /** Validate a limit price against this market's rules. Returns an OrderRejectReason code. */

@@ -209,6 +209,18 @@ public final class ArrayOrderBook {
      *
      * @return true if the order was present and removed
      */
+    /**
+     * RC2 S4 (contract 5.1): the owner of a resting order, or -1. The same guards as
+     * {@link #cancelOrder}: a location must exist and the slot must still hold this order id.
+     */
+    public long restingUserId(long orderId) {
+        final long slotL = orderLocations.get(orderId);
+        if (slotL == NO_SLOT) return -1L;
+        final int slot = (int) slotL;
+        if (sOrderId[slot] != orderId) return -1L; // stale / collision guard
+        return sUserId[slot];
+    }
+
     public boolean cancelOrder(long orderId) {
         long slotL = orderLocations.get(orderId);
         if (slotL == NO_SLOT) return false;

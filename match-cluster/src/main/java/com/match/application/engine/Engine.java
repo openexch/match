@@ -71,36 +71,77 @@ public class Engine {
     private MatchEventSink eventPublisher;
 
     // Maps cluster orderId → omsOrderId for maker order correlation in trade executions
-    // When a maker order is on the book, we need to look up its omsOrderId when it matches
-    private final Long2LongHashMap orderIdToOmsOrderId = new Long2LongHashMap(-1);
+    // When a maker order is on the book, we need to look up its omsOrderId when it matches.
+    // RC2 S4 (contract 5.2): owned by LegIndex together with the omsOrderId -> resting leg count;
+    // every put and remove below goes through it, and so does the snapshot restore.
+    private final LegIndex legIndex = new LegIndex();
 
     // P1.1 (match#30): orders rejected at admission because price*quantity does not
     // fit 64-bit fixed-point. Plain long: written and read on the service thread only;
     // surfaced on the EGRESS-DIAG line as overflowRej.
     private final DurableCommandLedger commandLedger = new DurableCommandLedger();
-    private com.match.domain.commands.DurableOrderIntent applyingIntent;
+    // RC2 S4: the behaviour-2 ledger (contract section 2). null until a FRESH at behaviour >= 2
+    // installs it with the recorded capacity C, or a snapshot restore installs it from the
+    // marker-4 block. Behaviour 1 never creates it and keeps ledger v1 (commandLedger).
+    private DurableCommandLedgerV2 ledgerV2;
+    // The durable command being applied (captureCommandStatus / publishReplaceCancelStatus).
+    private boolean applyingDurable;
+    private long applyingOldOrderId;
     private long outcomeOrder, expectedNewOrder;
     private int outcomeStatus, outcomeReason;
     private boolean outcomeOldCancelled;
+    // RC2 S4 section 8: pooled command objects of the durable apply (both behaviours; identical outputs).
+    private final CreateOrderCommand durableCreate = new CreateOrderCommand();
+    private final CancelOrderCommand durableCancel = new CancelOrderCommand();
+    private final UpdateOrderCommand durableUpdate = new UpdateOrderCommand();
+    // RC2 S4 section 8: the single mutable outcome scratch handed to the sink as a view.
+    private final OutcomeScratch outcome = new OutcomeScratch();
+    // The slot of the prior outcome of the last suppressed duplicate (behaviour 2), else -1.
+    private int lastSuppressedSlot = -1;
+    // RC2 S4 section 4.3: the release apply's preallocated result arrays (S1 cap 48).
+    private final int[] releaseResult = new int[MAX_RELEASE_ENTRIES];
+    private final int[] releaseRemoved = new int[MAX_RELEASE_ENTRIES];
+
+    // RC2 S4 section 6.4 counters. Node-local (never replicated, never read by a decision); single
+    // writer (service thread), volatile for the scraper.
+    private volatile long releasedCount;
+    private volatile long invalidWireCount;
+    private volatile long invalidKindBitsCount;
+    private volatile long invalidOwnerIdCount;
+    private volatile long invalidSignCount;
+    private volatile long capacityCount;
+    private volatile long releaseAppliedCount;
+    private volatile long releaseNoopCount;
+    private volatile long releaseLegLiveCount;
+    private volatile long releaseNoopFrameCount;
+
+    /** RC2 S4: the record 4 entry cap (S1 3.2), the size of the release scratch. */
+    public static final int MAX_RELEASE_ENTRIES = 48;
+
     public DurableCommandLedger commandLedger() { return commandLedger; }
 
+    /** RC2 S4: the behaviour-2 ledger, or null (behaviour 1 / not configured). */
+    public DurableCommandLedgerV2 ledgerV2() { return ledgerV2; }
+
+    /** RC2 S4: the omsMap owner (read accessors; mutation is the engine's and the restore's). */
+    public LegIndex legIndex() { return legIndex; }
+
+    /**
+     * The durable command entry that returns the outcome as a record. Behaviour 1: ledger v1,
+     * unchanged. Behaviour 2 (identity bound): delegates to {@link #acceptDurableV2} and copies the
+     * outcome into a record (allocates; tests only, the demuxer calls {@link #acceptDurableV2}).
+     */
     public com.match.domain.commands.DurableCommandOutcome acceptDurable(
             com.match.domain.commands.DurableOrderIntent c, long timestamp) {
+        if (dense) {
+            acceptDurableV2(c, timestamp);
+            return lastSuppressedSlot >= 0 ? ledgerV2.outcomeAt(lastSuppressedSlot) : outcome.toRecord();
+        }
         var prior = commandLedger.get(c);
         if (prior != null) {
             // Behaviour 1: the 12-field compare. The v12 fields (timeInForce, expectedOldRemaining)
             // are not in the ledger snapshot, so they can not decide DUPLICATE vs CONFLICT.
             if (prior.intent().sameCommandBehaviour1(c)) {
-                if (dense) {
-                    // RC2 S3 X4 (contract section 5): behaviour 2 journals nothing for an equal
-                    // duplicate of a recorded outcome and consumes no journalSeq. The original is
-                    // durable at its own seq on every journaling node; a re-journal would get a
-                    // new seq and could never fill another node's hole. The decision reads only
-                    // the ledger (replicated, snapshotted). Also at full capacity: this check
-                    // precedes the capacity check.
-                    suppressedDuplicateCount = suppressedDuplicateCount + 1;
-                    return prior;
-                }
                 // Behaviour 1: re-journal the prior outcome at journalSeq 0. The journaled record 3
                 // echoes THIS frame's intent (12 fields equal to the prior's) so its v12 tail is a
                 // function of the log entry, not of whether this node restored the prior from a
@@ -133,34 +174,16 @@ public class Engine {
         if (engines.get(c.marketId()) == null) reject = 6;
         else if (c.kind() != CMD_CREATE) {
             var owner = commandLedger.owner(c.oldOrderId());
-            if (owner == null || orderIdToOmsOrderId.get(c.oldOrderId()) == -1) reject = 4;
+            if (owner == null || legIndex.get(c.oldOrderId()) == -1) reject = 4;
             else if (owner.userId()!=c.userId() || owner.omsOrderId()!=c.omsOrderId()
                     || owner.marketId()!=c.marketId() || (c.kind()==CMD_UPDATE && owner.side()!=c.side())) reject = 5;
         }
         com.match.domain.commands.DurableCommandOutcome result;
         if (reject != 0) result = commandRejection(c, timestamp, reject);
         else {
-            applyingIntent=c; expectedNewOrder=orderIdGenerator.get();
-            outcomeOrder=0; outcomeStatus=-1; outcomeReason=0; outcomeOldCancelled=false;
-            try {
-                var side = c.side()==0 ? OrderSide.BID : OrderSide.ASK;
-                var type = c.type()==0 ? OrderType.LIMIT : c.type()==1 ? OrderType.MARKET : OrderType.LIMIT_MAKER;
-                if (c.kind()==CMD_CREATE) {
-                    var cmd = new CreateOrderCommand(); cmd.setUserId(c.userId()); cmd.setOmsOrderId(c.omsOrderId());
-                    cmd.setPrice(c.price()); cmd.setQuantity(c.quantity()); cmd.setTotalPrice(c.budget());
-                    cmd.setOrderSide(side); cmd.setOrderType(type); acceptOrder(c.marketId(),CMD_CREATE,cmd,timestamp);
-                } else if (c.kind()==CMD_CANCEL) {
-                    var cmd = new CancelOrderCommand(); cmd.setUserId(c.userId()); cmd.setOrderId(c.oldOrderId());
-                    acceptOrder(c.marketId(),CMD_CANCEL,cmd,timestamp);
-                } else {
-                    var cmd = new UpdateOrderCommand(); cmd.setUserId(c.userId()); cmd.setOrderId(c.oldOrderId());
-                    cmd.setPrice(c.price()); cmd.setQuantity(c.quantity()); cmd.setOrderSide(side); cmd.setOrderType(type);
-                    acceptOrder(c.marketId(),CMD_UPDATE,cmd,timestamp);
-                }
-                if (outcomeStatus<0) throw new IllegalStateException("Command applied without an outcome");
-                result = new com.match.domain.commands.DurableCommandOutcome(c,currentLogPosition,timestamp,
-                    outcomeOrder,outcomeStatus,outcomeReason,outcomeOldCancelled,outcomeStatus==4?1:0);
-            } finally { applyingIntent=null; }
+            applyDurable(c, timestamp);
+            result = new com.match.domain.commands.DurableCommandOutcome(c,currentLogPosition,timestamp,
+                outcomeOrder,outcomeStatus,outcomeReason,outcomeOldCancelled,outcomeStatus==4?1:0);
         }
         // Publisher failure is an application failure: service halts, replay restores the whole command.
         // ledgerSize on record 3 is the size AFTER this outcome is recorded (the next line). The
@@ -172,17 +195,246 @@ public class Engine {
         commandLedger.record(result);
         return result;
     }
+
+    /**
+     * Apply a durable CREATE / CANCEL / UPDATE through the matching path with the pooled command
+     * objects, capturing the command's own status (both behaviours; the outputs are those of the
+     * pre-S4 per-call objects, field for field).
+     */
+    private void applyDurable(com.match.domain.commands.DurableIntentView c, long timestamp) {
+        applyingDurable = true;
+        applyingOldOrderId = c.oldOrderId();
+        expectedNewOrder = orderIdGenerator.get();
+        outcomeOrder = 0; outcomeStatus = -1; outcomeReason = 0; outcomeOldCancelled = false;
+        try {
+            final OrderSide side = c.side() == 0 ? OrderSide.BID : OrderSide.ASK;
+            final OrderType type = c.type() == 0 ? OrderType.LIMIT : c.type() == 1 ? OrderType.MARKET : OrderType.LIMIT_MAKER;
+            if (c.kind() == CMD_CREATE) {
+                final CreateOrderCommand cmd = durableCreate;
+                cmd.reset();
+                cmd.setUserId(c.userId()); cmd.setOmsOrderId(c.omsOrderId());
+                cmd.setPrice(c.price()); cmd.setQuantity(c.quantity()); cmd.setTotalPrice(c.budget());
+                cmd.setOrderSide(side); cmd.setOrderType(type);
+                acceptOrder(c.marketId(), CMD_CREATE, cmd, timestamp);
+            } else if (c.kind() == CMD_CANCEL) {
+                final CancelOrderCommand cmd = durableCancel;
+                cmd.reset();
+                cmd.setUserId(c.userId()); cmd.setOrderId(c.oldOrderId());
+                acceptOrder(c.marketId(), CMD_CANCEL, cmd, timestamp);
+            } else {
+                final UpdateOrderCommand cmd = durableUpdate;
+                cmd.reset();
+                cmd.setUserId(c.userId()); cmd.setOrderId(c.oldOrderId());
+                cmd.setPrice(c.price()); cmd.setQuantity(c.quantity()); cmd.setOrderSide(side); cmd.setOrderType(type);
+                acceptOrder(c.marketId(), CMD_UPDATE, cmd, timestamp);
+            }
+            if (outcomeStatus < 0) throw new IllegalStateException("Command applied without an outcome");
+        } finally {
+            applyingDurable = false;
+        }
+    }
+
+    // ==================== RC2 S4: behaviour-2 durable path ====================
+
+    /**
+     * RC2 S4 (contract 3.2): the behaviour-2 durable command entry, rows B1-B7 (B0, the v11 header,
+     * is decided by the demuxer through {@link #journalInvalidWire}). Allocation-free after warm-up.
+     * Returns the outcome's result code (a suppressed duplicate returns the prior's).
+     *
+     * @throws IllegalStateException when no behaviour-2 ledger is installed (programming error)
+     */
+    public int acceptDurableV2(com.match.domain.commands.DurableIntentView c, long timestamp) {
+        final DurableCommandLedgerV2 ledger = ledgerV2;
+        if (ledger == null) {
+            throw new IllegalStateException("behaviour-2 durable command before the ledger v2 is installed");
+        }
+        lastSuppressedSlot = -1;
+        // B1: behaviour-2 identity rules.
+        final int cause = com.match.domain.commands.DurableOrderIntent.behaviourTwoCause(
+                c.idHigh(), c.idLow(), c.omsOrderId(), c.kind());
+        if (cause != com.match.domain.commands.DurableOrderIntent.B2_OK) {
+            if (cause == com.match.domain.commands.DurableOrderIntent.B2_INVALID_SIGN) {
+                invalidSignCount = invalidSignCount + 1;
+            } else if (cause == com.match.domain.commands.DurableOrderIntent.B2_INVALID_KIND_BITS) {
+                invalidKindBitsCount = invalidKindBitsCount + 1;
+            } else {
+                invalidOwnerIdCount = invalidOwnerIdCount + 1;
+            }
+            return journalRejectionV2(c, timestamp, com.match.domain.commands.DurableCommandOutcome.INVALID);
+        }
+        final long h = c.idHigh(), l = c.idLow();
+        // B2: released (tombstone or floor).
+        if (ledger.covered(h, l)) {
+            releasedCount = releasedCount + 1;
+            return journalRejectionV2(c, timestamp, com.match.domain.commands.DurableCommandOutcome.RELEASED);
+        }
+        // B3: inflight hit.
+        final int prior = ledger.find(h, l);
+        if (prior >= 0) {
+            if (ledger.sameIntent(prior, c)) {
+                // RC2 S3 X4: no sink call, no journalSeq; the prior is durable at its own seq.
+                suppressedDuplicateCount = suppressedDuplicateCount + 1;
+                lastSuppressedSlot = prior;
+                return ledger.result(prior);
+            }
+            return journalRejectionV2(c, timestamp, com.match.domain.commands.DurableCommandOutcome.CONFLICT);
+        }
+        // B4: capacity.
+        if (ledger.size() >= ledger.capacity()) {
+            capacityCount = capacityCount + 1;
+            return journalRejectionV2(c, timestamp, com.match.domain.commands.DurableCommandOutcome.CAPACITY);
+        }
+        // B5 / B6 / B7: recorded.
+        final MatchingEngine engine = engines.get(c.marketId());
+        int reject = 0;
+        if (engine == null) {
+            reject = com.match.domain.commands.DurableCommandOutcome.UNKNOWN_MARKET;
+        } else if (c.kind() != CMD_CREATE) {
+            reject = derivedOwnership(engine, c);
+        }
+        if (reject != 0) {
+            outcome.set(c, currentLogPosition, timestamp, 0L, -1, 0, false, reject);
+        } else {
+            applyDurable(c, timestamp);
+            outcome.set(c, currentLogPosition, timestamp, outcomeOrder, outcomeStatus, outcomeReason,
+                    outcomeOldCancelled, outcomeStatus == OrderStatusType.REJECTED ? 1 : 0);
+        }
+        // Record 3 after the command's trades and terminals; ledgerSize after the record.
+        final long seq = journalSeqFor();
+        if (eventPublisher != null) {
+            eventPublisher.publishCommandOutcome(currentLogPosition, seq, outcome, ledger.size() + 1,
+                    ledger.capacity());
+        }
+        ledger.record(outcome);
+        return outcome.result();
+    }
+
+    /**
+     * RC2 S4 (contract 5.1): CANCEL / UPDATE ownership derived from the book. Pass (0) when the leg
+     * rests on this market with the command's userId, its omsMap value is the command's omsOrderId
+     * and (UPDATE) its side is the command's side; WRONG_OWNER (5) when it rests here with any of
+     * those different or rests on another market (still mapped); UNKNOWN_LEG (4) otherwise.
+     */
+    private int derivedOwnership(MatchingEngine engine, com.match.domain.commands.DurableIntentView c) {
+        final long leg = c.oldOrderId();
+        boolean onBid = true;
+        long owner = engine.restingUserId(leg, true);
+        if (owner == -1L) {
+            owner = engine.restingUserId(leg, false);
+            onBid = false;
+        }
+        if (owner != -1L) {
+            if (owner != c.userId() || legIndex.get(leg) != c.omsOrderId()
+                    || (c.kind() == CMD_UPDATE && (onBid ? 0 : 1) != c.side())) {
+                return com.match.domain.commands.DurableCommandOutcome.WRONG_OWNER;
+            }
+            return 0;
+        }
+        return legIndex.get(leg) != LegIndex.MISSING
+                ? com.match.domain.commands.DurableCommandOutcome.WRONG_OWNER
+                : com.match.domain.commands.DurableCommandOutcome.UNKNOWN_LEG;
+    }
+
+    /** B0-B4 at behaviour 2: journal the commandRejection shape, record nothing. */
+    private int journalRejectionV2(com.match.domain.commands.DurableIntentView c, long timestamp, int result) {
+        outcome.set(c, currentLogPosition, timestamp, 0L, -1, 0, false, result);
+        final long seq = journalSeqFor();
+        if (eventPublisher != null) {
+            final DurableCommandLedgerV2 ledger = ledgerV2;
+            eventPublisher.publishCommandOutcome(currentLogPosition, seq, outcome, ledger.size(), ledger.capacity());
+        }
+        return result;
+    }
+
+    /**
+     * RC2 S4 B0: a behaviour-2 template-9 frame with header version 11 (no tif, no
+     * expectedOldRemaining on the wire; the view carries 0/0). INVALID, not recorded.
+     */
+    public int journalInvalidWire(com.match.domain.commands.DurableIntentView c, long timestamp) {
+        if (ledgerV2 == null) {
+            throw new IllegalStateException("behaviour-2 INVALID before the ledger v2 is installed");
+        }
+        invalidWireCount = invalidWireCount + 1;
+        return journalRejectionV2(c, timestamp, com.match.domain.commands.DurableCommandOutcome.INVALID);
+    }
+
+    /**
+     * RC2 S4 (contract 4.2, 4.3): apply one {@code ReleaseCommandIds} frame already validated by the
+     * demuxer (4.1). Entries in group order, each against the state the previous one left. A frame
+     * with an APPLIED or LEG_LIVE entry journals exactly one record 4 (journalSeq consumed whether or
+     * not this node journals); an all-NOOP frame (0 entries included) journals nothing and consumes
+     * no journalSeq (decision A1). Allocation-free.
+     */
+    public void applyRelease(long releaseSeq, int count, long[] commandIdHigh, long[] idLowFloor, int[] scope) {
+        final DurableCommandLedgerV2 ledger = ledgerV2;
+        if (ledger == null) {
+            throw new IllegalStateException("ReleaseCommandIds before the ledger v2 is installed");
+        }
+        if (count < 0 || count > releaseResult.length) {
+            throw new IllegalStateException("release frame with " + count + " entries reached the engine");
+        }
+        boolean journal = false;
+        for (int i = 0; i < count; i++) {
+            final long h = commandIdHigh[i];
+            int result;
+            int removed = 0;
+            if (scope[i] == DurableCommandLedgerV2.SCOPE_UP_TO) {
+                final int r = ledger.releaseUpTo(h, idLowFloor[i]);
+                if (r < 0) {
+                    result = DurableCommandLedgerV2.RELEASE_NOOP;
+                } else {
+                    result = DurableCommandLedgerV2.RELEASE_APPLIED;
+                    removed = r;
+                }
+            } else if (ledger.tombstoned(h)) {
+                result = DurableCommandLedgerV2.RELEASE_NOOP;
+            } else if (legIndex.count(h) > 0) {
+                result = DurableCommandLedgerV2.RELEASE_LEG_LIVE;
+            } else {
+                removed = ledger.releaseOrder(h);
+                result = DurableCommandLedgerV2.RELEASE_APPLIED;
+            }
+            releaseResult[i] = result;
+            releaseRemoved[i] = removed;
+            if (result == DurableCommandLedgerV2.RELEASE_NOOP) {
+                releaseNoopCount = releaseNoopCount + 1;
+            } else {
+                journal = true;
+                if (result == DurableCommandLedgerV2.RELEASE_APPLIED) {
+                    releaseAppliedCount = releaseAppliedCount + 1;
+                } else {
+                    releaseLegLiveCount = releaseLegLiveCount + 1;
+                }
+            }
+        }
+        if (!journal) {
+            releaseNoopFrameCount = releaseNoopFrameCount + 1;
+            return;
+        }
+        final long seq = journalSeqFor();
+        if (eventPublisher != null) {
+            eventPublisher.publishCommandRelease(currentLogPosition, seq, releaseSeq, ledger.size(),
+                    ledger.capacity(), ledger.rangeCount(), count, commandIdHigh, idLowFloor, scope,
+                    releaseResult, releaseRemoved);
+        }
+    }
+
     /**
      * RC2 S2 (contract section 6): a template-9 frame above the recorded wire ceiling whose v12
-     * prefix decoded to a valid intent. Journals record 3 with {@code result 8} (INVALID) and
-     * every other field pinned by {@link #commandRejection}: appliedPosition = egressSeq = the
-     * entry's log position, the cluster timestamp, orderId 0, status -1, reason 0, oldCancelled
-     * false, the frame's intent echoed, ledgerSize unchanged. Never records in the ledger (ledger
-     * restore refuses result > 6, and a recorded INVALID would become a canonical outcome); no
-     * capacity check, no apply, no trade or terminal.
+     * prefix decoded to a valid intent. Journals record 3 with {@code result 8} (INVALID) in the
+     * commandRejection shape: appliedPosition = egressSeq = the entry's log position, the cluster
+     * timestamp, orderId 0, status -1, reason 0, oldCancelled false, the frame's intent echoed,
+     * ledgerSize unchanged. Never recorded; no capacity check, no apply, no trade or terminal. Only
+     * reachable at a recorded behaviour >= 2, so through the behaviour-2 ledger (RC2 S4: the
+     * record carries the recorded capacity).
      */
-    public void journalInvalid(com.match.domain.commands.DurableOrderIntent c, long timestamp) {
-        final var result = commandRejection(c, timestamp, com.match.domain.commands.DurableCommandOutcome.INVALID);
+    public void journalInvalid(com.match.domain.commands.DurableIntentView c, long timestamp) {
+        if (ledgerV2 != null) {
+            journalRejectionV2(c, timestamp, com.match.domain.commands.DurableCommandOutcome.INVALID);
+            return;
+        }
+        final var result = commandRejection(((com.match.domain.commands.DurableOrderIntent) c), timestamp,
+                com.match.domain.commands.DurableCommandOutcome.INVALID);
         final long seq = journalSeqFor();
         if (eventPublisher != null) {
             eventPublisher.publishCommandOutcome(currentLogPosition, seq, result, commandLedger.size());
@@ -200,9 +452,13 @@ public class Engine {
         return dense ? meIdentity.allocateJournalSeq() : 0L;
     }
 
-    /** RC2 S3: FRESH at behaviour >= 2 binds the identity and turns dense allocation on. */
-    void bindFreshIdentity(long genesisId, long recordedBehaviorVersion) {
+    /**
+     * RC2 S3: FRESH at behaviour >= 2 binds the identity and turns dense allocation on. RC2 S4: and
+     * installs the empty behaviour-2 ledger with the recorded capacity C (contract 2.1).
+     */
+    void bindFreshIdentity(long genesisId, long recordedBehaviorVersion, long commandLedgerCapacity) {
         meIdentity.bindFresh(genesisId, recordedBehaviorVersion);
+        ledgerV2 = new DurableCommandLedgerV2(Math.toIntExact(commandLedgerCapacity));
         dense = true;
     }
 
@@ -215,6 +471,14 @@ public class Engine {
         dense = true;
     }
 
+    /** RC2 S4: the snapshot restore installs the behaviour-2 ledger read from the marker-4 block. */
+    public void restoreLedgerV2(DurableCommandLedgerV2 restored) {
+        if (!dense) {
+            throw new IllegalStateException("ledger v2 restored without a bound identity");
+        }
+        this.ledgerV2 = restored;
+    }
+
     /** RC2 S3: true once journalSeq allocation is dense; always equals {@code meIdentity().isBound()}. */
     public boolean isJournalSeqDense() {
         return dense;
@@ -225,9 +489,79 @@ public class Engine {
         return new com.match.domain.commands.DurableCommandOutcome(c,currentLogPosition,timestamp,0,-1,0,false,result);
     }
     private void captureCommandStatus(long order,int status,int reason) {
-        if (applyingIntent!=null && (order==expectedNewOrder || order==applyingIntent.oldOrderId())) {
+        if (applyingDurable && (order==expectedNewOrder || order==applyingOldOrderId)) {
             outcomeOrder=order; outcomeStatus=status; outcomeReason=reason;
         }
+    }
+
+    // RC2 S4 section 6.4 counters (scraper).
+    public long releasedCount() { return releasedCount; }
+    public long invalidWireCount() { return invalidWireCount; }
+    public long invalidKindBitsCount() { return invalidKindBitsCount; }
+    public long invalidOwnerIdCount() { return invalidOwnerIdCount; }
+    public long invalidSignCount() { return invalidSignCount; }
+    public long capacityCount() { return capacityCount; }
+    public long releaseAppliedCount() { return releaseAppliedCount; }
+    public long releaseNoopCount() { return releaseNoopCount; }
+    public long releaseLegLiveCount() { return releaseLegLiveCount; }
+    public long releaseNoopFrameCount() { return releaseNoopFrameCount; }
+
+    /** RC2 S4 gauges: ledger v2 size, capacity, floors, tombstone ranges (0 without a v2 ledger). */
+    public long ledgerSizeGauge() { final DurableCommandLedgerV2 l = ledgerV2; return l == null ? 0 : l.gaugeSize(); }
+    public long ledgerCapacityGauge() { final DurableCommandLedgerV2 l = ledgerV2; return l == null ? 0 : l.capacity(); }
+    public long ledgerFloorsGauge() { final DurableCommandLedgerV2 l = ledgerV2; return l == null ? 0 : l.gaugeFloors(); }
+    public long ledgerRangesGauge() { final DurableCommandLedgerV2 l = ledgerV2; return l == null ? 0 : l.gaugeRanges(); }
+
+    /**
+     * RC2 S4 section 8: the engine's single mutable outcome, handed to the sink as a view (the
+     * sink must not retain it). The intent half is copied from the incoming view.
+     */
+    static final class OutcomeScratch implements com.match.domain.commands.DurableOutcomeView {
+        private long idHigh, idLow, userId, omsOrderId, oldOrderId, price, quantity, budget, expectedOldRemaining;
+        private int marketId, kind, type, side, timeInForce;
+        private long appliedPosition, timestamp, orderId;
+        private int status, reason, result;
+        private boolean oldCancelled;
+
+        void set(com.match.domain.commands.DurableIntentView c, long appliedPosition, long timestamp, long orderId,
+                 int status, int reason, boolean oldCancelled, int result) {
+            this.idHigh = c.idHigh(); this.idLow = c.idLow(); this.userId = c.userId();
+            this.omsOrderId = c.omsOrderId(); this.oldOrderId = c.oldOrderId(); this.price = c.price();
+            this.quantity = c.quantity(); this.budget = c.budget(); this.marketId = c.marketId();
+            this.kind = c.kind(); this.type = c.type(); this.side = c.side();
+            this.timeInForce = c.timeInForce(); this.expectedOldRemaining = c.expectedOldRemaining();
+            this.appliedPosition = appliedPosition; this.timestamp = timestamp; this.orderId = orderId;
+            this.status = status; this.reason = reason; this.oldCancelled = oldCancelled; this.result = result;
+        }
+
+        com.match.domain.commands.DurableCommandOutcome toRecord() {
+            return new com.match.domain.commands.DurableCommandOutcome(new com.match.domain.commands.DurableOrderIntent(
+                    idHigh, idLow, userId, omsOrderId, oldOrderId, price, quantity, budget, marketId, kind, type,
+                    side, timeInForce, expectedOldRemaining), appliedPosition, timestamp, orderId, status, reason,
+                    oldCancelled, result);
+        }
+
+        @Override public long idHigh() { return idHigh; }
+        @Override public long idLow() { return idLow; }
+        @Override public long userId() { return userId; }
+        @Override public long omsOrderId() { return omsOrderId; }
+        @Override public long oldOrderId() { return oldOrderId; }
+        @Override public long price() { return price; }
+        @Override public long quantity() { return quantity; }
+        @Override public long budget() { return budget; }
+        @Override public int marketId() { return marketId; }
+        @Override public int kind() { return kind; }
+        @Override public int type() { return type; }
+        @Override public int side() { return side; }
+        @Override public int timeInForce() { return timeInForce; }
+        @Override public long expectedOldRemaining() { return expectedOldRemaining; }
+        @Override public long appliedPosition() { return appliedPosition; }
+        @Override public long timestamp() { return timestamp; }
+        @Override public long orderId() { return orderId; }
+        @Override public int status() { return status; }
+        @Override public int reason() { return reason; }
+        @Override public boolean oldCancelled() { return oldCancelled; }
+        @Override public int result() { return result; }
     }
 
     private long overflowRejectCount;
@@ -503,7 +837,7 @@ public class Engine {
 
         // Store omsOrderId mapping for maker correlation in trades
         if (omsOrderId != 0) {
-            orderIdToOmsOrderId.put(orderId, omsOrderId);
+            legIndex.put(orderId, omsOrderId);
         }
 
         boolean isBuy = (side == OrderSide.BID);
@@ -522,7 +856,7 @@ public class Engine {
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
                     0, 0, price, isBuy, omsOrderId, OrderRejectReason.INVALID_QUANTITY);
                 if (omsOrderId != 0) {
-                    orderIdToOmsOrderId.remove(orderId);
+                    legIndex.remove(orderId);
                 }
                 return;
             }
@@ -556,7 +890,7 @@ public class Engine {
             }
             // Clean up mapping for fully consumed market orders
             if (omsOrderId != 0) {
-                orderIdToOmsOrderId.remove(orderId);
+                legIndex.remove(orderId);
             }
         } else if (type == OrderType.LIMIT) {
             // Loud-limits: validate price before matching — reject the whole
@@ -576,7 +910,7 @@ public class Engine {
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
                     quantity, 0, price, isBuy, omsOrderId, validity);
                 if (omsOrderId != 0) {
-                    orderIdToOmsOrderId.remove(orderId);
+                    legIndex.remove(orderId);
                 }
                 return;
             }
@@ -593,7 +927,7 @@ public class Engine {
                     0, filledQty, price, isBuy, omsOrderId, OrderRejectReason.NONE);
                 // Clean up mapping for fully filled orders
                 if (omsOrderId != 0) {
-                    orderIdToOmsOrderId.remove(orderId);
+                    legIndex.remove(orderId);
                 }
             } else if (restReason != OrderRejectReason.NONE) {
                 // Remainder could not rest on the book — loud terminal status,
@@ -609,7 +943,7 @@ public class Engine {
                         0, filledQty, price, isBuy, omsOrderId, restReason);
                 }
                 if (omsOrderId != 0) {
-                    orderIdToOmsOrderId.remove(orderId);
+                    legIndex.remove(orderId);
                 }
             } else if (matchCount > 0 && remainingQty > 0) {
                 // Partially filled, rest on book — keep mapping for future maker matches
@@ -638,7 +972,7 @@ public class Engine {
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
                     quantity, 0, price, isBuy, omsOrderId, validity);
                 if (omsOrderId != 0) {
-                    orderIdToOmsOrderId.remove(orderId);
+                    legIndex.remove(orderId);
                 }
                 return;
             }
@@ -656,7 +990,7 @@ public class Engine {
                     publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
                         quantity, 0, price, isBuy, omsOrderId, addResult);
                     if (omsOrderId != 0) {
-                        orderIdToOmsOrderId.remove(orderId);
+                        legIndex.remove(orderId);
                     }
                     return;
                 }
@@ -668,7 +1002,7 @@ public class Engine {
                 publishOrderStatus(marketId, timestamp, orderId, userId, OrderStatusType.REJECTED,
                     0, 0, price, isBuy, omsOrderId, OrderRejectReason.WOULD_CROSS);
                 if (omsOrderId != 0) {
-                    orderIdToOmsOrderId.remove(orderId);
+                    legIndex.remove(orderId);
                 }
             }
         }
@@ -734,7 +1068,7 @@ public class Engine {
      * correlation until they trade — OMS reconciles by cluster orderId).
      */
     public long getOmsOrderIdFor(long orderId) {
-        final long v = orderIdToOmsOrderId.get(orderId);
+        final long v = legIndex.get(orderId);
         return v == -1 ? 0 : v;
     }
 
@@ -770,7 +1104,7 @@ public class Engine {
             long matchQty = engine.getMatchQuantity(i);
 
             // Look up maker's omsOrderId from stored mapping
-            long makerOmsOrderId = orderIdToOmsOrderId.get(makerOrderId);
+            long makerOmsOrderId = legIndex.get(makerOrderId);
             if (makerOmsOrderId == -1) {
                 makerOmsOrderId = 0; // Not found (pre-OMS order)
             }
@@ -794,7 +1128,7 @@ public class Engine {
             // terminal statuses — without this the maker's hold is never feed-released. Quantities
             // are zeros like processCancel's ack: trades are the quantity source of record.
             if (engine.isMatchMakerFilled(i)) {
-                orderIdToOmsOrderId.remove(makerOrderId);
+                legIndex.remove(makerOrderId);
                 publishOrderStatus(marketId, timestamp, makerOrderId, makerUserId,
                     OrderStatusType.FILLED, 0, 0, 0, !takerIsBuy, makerOmsOrderId,
                     OrderRejectReason.NONE);
@@ -819,7 +1153,7 @@ public class Engine {
 
         if (cancelled) {
             // Look up and clean up omsOrderId mapping
-            long omsOrderId = orderIdToOmsOrderId.remove(orderId);
+            long omsOrderId = legIndex.remove(orderId);
             if (omsOrderId == -1) {
                 omsOrderId = 0;
             }
@@ -831,7 +1165,7 @@ public class Engine {
             // cancel or its terminal egress was lost) gets definitive closure and releases the
             // now-unencumbered hold. The OMS releases only the UNFILLED remainder (hold minus
             // trade-derived consumed), so acking an already-filled order is a safe no-op there. (oms#21)
-            long omsOrderId = orderIdToOmsOrderId.remove(orderId);
+            long omsOrderId = legIndex.remove(orderId);
             if (omsOrderId == -1) {
                 omsOrderId = 0;
             }
@@ -854,7 +1188,7 @@ public class Engine {
         boolean isBuy = (side == OrderSide.BID);
 
         // Preserve omsOrderId before cancel removes the mapping
-        long omsOrderId = orderIdToOmsOrderId.get(oldOrderId);
+        long omsOrderId = legIndex.get(oldOrderId);
         if (omsOrderId == -1) {
             omsOrderId = 0;
         }
@@ -904,7 +1238,7 @@ public class Engine {
         }
 
         // Clean up old mapping
-        orderIdToOmsOrderId.remove(oldOrderId);
+        legIndex.remove(oldOrderId);
 
         // Publish cancel for old order (the successful half of an accepted amend, not a reject).
         // Journal-exempt: this CANCELLED shares the live replacement's omsOrderId — see
@@ -914,7 +1248,7 @@ public class Engine {
         // 2. Place new order with updated price/quantity
         long newOrderId = orderIdGenerator.getAndIncrement();
         if (omsOrderId != 0) {
-            orderIdToOmsOrderId.put(newOrderId, omsOrderId);
+            legIndex.put(newOrderId, omsOrderId);
         }
 
         // match#92: a LIMIT_MAKER replacement rests post-only. We already proved it does not cross
@@ -931,7 +1265,7 @@ public class Engine {
                 publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.REJECTED,
                     newQuantity, 0, newPrice, isBuy, omsOrderId, addResult);
                 if (omsOrderId != 0) {
-                    orderIdToOmsOrderId.remove(newOrderId);
+                    legIndex.remove(newOrderId);
                 }
                 return;
             }
@@ -952,7 +1286,7 @@ public class Engine {
             publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.FILLED,
                 0, filledQty, newPrice, isBuy, omsOrderId, OrderRejectReason.NONE);
             if (omsOrderId != 0) {
-                orderIdToOmsOrderId.remove(newOrderId);
+                legIndex.remove(newOrderId);
             }
         } else if (restReason != OrderRejectReason.NONE) {
             // Remainder could not rest — loud terminal status (see processCreate)
@@ -966,7 +1300,7 @@ public class Engine {
                     0, filledQty, newPrice, isBuy, omsOrderId, restReason);
             }
             if (omsOrderId != 0) {
-                orderIdToOmsOrderId.remove(newOrderId);
+                legIndex.remove(newOrderId);
             }
         } else if (matchCount > 0 && remainingQty > 0) {
             publishOrderStatus(marketId, timestamp, newOrderId, userId, OrderStatusType.PARTIALLY_FILLED,
@@ -1043,7 +1377,7 @@ public class Engine {
      */
     private void publishReplaceCancelStatus(int marketId, long timestamp, long orderId, long userId,
             boolean isBuy, long omsOrderId) {
-        if (applyingIntent != null && orderId == applyingIntent.oldOrderId()) outcomeOldCancelled = true;
+        if (applyingDurable && orderId == applyingOldOrderId) outcomeOldCancelled = true;
         if (eventPublisher == null) {
             return;
         }
@@ -1123,6 +1457,6 @@ public class Engine {
      * Get the orderId-to-omsOrderId mapping for snapshot.
      */
     public Long2LongHashMap getOrderIdToOmsOrderId() {
-        return orderIdToOmsOrderId;
+        return legIndex.view();
     }
 }

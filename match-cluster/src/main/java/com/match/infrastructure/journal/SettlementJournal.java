@@ -2,8 +2,8 @@
 package com.match.infrastructure.journal;
 
 import com.match.application.engine.MeIdentity;
-import com.match.domain.commands.DurableCommandOutcome;
-import com.match.domain.commands.DurableOrderIntent;
+import com.match.application.engine.DurableCommandLedger;
+import com.match.domain.commands.DurableOutcomeView;
 import com.match.infrastructure.Logger;
 import com.match.infrastructure.mejournal.generated.BooleanType;
 import com.match.infrastructure.mejournal.generated.CommandOutcomeEncoder;
@@ -69,12 +69,6 @@ public final class SettlementJournal {
             + MAX_RELEASE_ENTRIES * CommandReleaseEncoder.ReleasesEncoder.sbeBlockLength();
 
     /**
-     * Record 3 {@code ledgerCapacity}: the cap the behaviour-1 ledger actually enforces. Stays
-     * 100000 in S2 (contract section 5); S4 switches it to the recorded capacity.
-     */
-    static final int S1_LEDGER_CAPACITY = 100_000;
-
-    /**
      * RC2 S2: the engine-owned identity (one reference, never a copy, so a later bind is seen).
      * Defaults to an unbound identity for a journal that is never bound (meEpoch 0, behaviour 1).
      * RC2 S3 (S2 review NOTE-2): a plain field, bound once at bootstrap before the cluster
@@ -128,10 +122,15 @@ public final class SettlementJournal {
      * {@code timeInForce} and {@code expectedOldRemaining} come from the outcome's intent (0/0 for
      * a v11 frame); {@code ledgerSizeAfter} is the command ledger size after this outcome is
      * recorded (the caller knows whether it will be).
+     *
+     * <p>RC2 S4 (contract 3.3): {@code ledgerCapacity} is a parameter on both paths: the recorded
+     * C at behaviour 2, the ledger v1 cap {@link DurableCommandLedger#MAX_ENTRIES} at behaviour 1.
+     * The outcome is read through the view (the engine's scratch at behaviour 2, the record at
+     * behaviour 1); nothing is retained.</p>
      */
-    public void appendCommandOutcome(final long journalSeq, final long egressSeq, final DurableCommandOutcome o,
-                                     final int ledgerSizeAfter) {
-        final DurableOrderIntent c = o.intent();
+    public void appendCommandOutcome(final long journalSeq, final long egressSeq, final DurableOutcomeView o,
+                                     final int ledgerSizeAfter, final int ledgerCapacity) {
+        final DurableOutcomeView c = o;
         final MeIdentity id = identity;
         outcomeEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
                 .journalSeq(journalSeq)
@@ -159,10 +158,19 @@ public final class SettlementJournal {
                 .timeInForce((short) c.timeInForce())
                 .expectedOldRemaining(c.expectedOldRemaining())
                 .ledgerSize(ledgerSizeAfter)
-                .ledgerCapacity(S1_LEDGER_CAPACITY)
+                .ledgerCapacity(ledgerCapacity)
                 .behaviorVersion(id.behaviorVersion());
         blockingWrite(MSG_TYPE_OUTCOME,
                 MessageHeaderEncoder.ENCODED_LENGTH + outcomeEncoder.encodedLength(), c.idLow());
+    }
+
+    /**
+     * Behaviour-1 form of record 3: {@code ledgerCapacity} is the ledger v1 cap
+     * ({@link DurableCommandLedger#MAX_ENTRIES}, 100000), the cap that ledger enforces.
+     */
+    public void appendCommandOutcome(final long journalSeq, final long egressSeq, final DurableOutcomeView o,
+                                     final int ledgerSizeAfter) {
+        appendCommandOutcome(journalSeq, egressSeq, o, ledgerSizeAfter, DurableCommandLedger.MAX_ENTRIES);
     }
 
     /**

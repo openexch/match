@@ -222,7 +222,8 @@ public final class EngineConfigStateMachine {
         engine.createEnginesFromConfig(incoming);
         final MeIdentity identity = engine.meIdentity();
         // RC2 S3: bound through the engine so dense allocation (records 1-4) starts here too.
-        engine.bindFreshIdentity(incoming.genesisId, incoming.behaviorVersion);
+        // RC2 S4 (row 2 hook): and the empty ledger v2 with the recorded capacity C is installed.
+        engine.bindFreshIdentity(incoming.genesisId, incoming.behaviorVersion, incoming.commandLedgerCapacity);
         final long journalSeq = identity.allocateJournalSeq();
         acceptedCount++;
         final String msg = "[ENGINE-CONFIG] ACCEPTED (fresh, behaviour " + incoming.behaviorVersion

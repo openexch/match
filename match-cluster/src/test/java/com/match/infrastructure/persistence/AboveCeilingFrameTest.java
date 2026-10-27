@@ -50,8 +50,9 @@ public class AboveCeilingFrameTest {
             assertEquals(2L, o.behaviorVersion());
             assertEquals(G, o.meEpoch());
             // The 14 intent fields are echoed.
-            assertEquals(17L, o.commandIdHigh());
-            assertEquals(7L, o.commandIdLow());
+            // RC2 S4: BehaviourTwoLog.durable mints core-shaped ids (idHigh = omsOrderId, attempt << 2 | kind).
+            assertEquals(9001L, o.commandIdHigh());
+            assertEquals(7L << 2, o.commandIdLow());
             assertEquals(100L, o.userId());
             assertEquals(9001L, o.omsOrderId());
             assertEquals(0L, o.oldOrderId());
@@ -69,7 +70,7 @@ public class AboveCeilingFrameTest {
                 assertEquals(1, r.demuxer.aboveCeilingInvalidCount());
                 assertEquals(0, r.demuxer.schemaRejectCount());
                 assertEquals(0, r.demuxer.decodeRejectCount());
-                assertEquals("never recorded in the ledger", 0, r.h.engine.commandLedger().size());
+                assertEquals("never recorded in the ledger", 0, r.h.engine.ledgerV2().size());
                 assertTrue("no apply", r.h.engine.getEngine(BehaviourTwoHarness.MARKET).isBidEmpty());
                 assertEquals(0, r.h.failFast.get());
             }
@@ -77,7 +78,7 @@ public class AboveCeilingFrameTest {
             // The next v12 frame applies.
             final List<byte[]> next = a.apply(new Entry(durableCreate(8, 100, 9002, 0, 59_000, 1), POS + 128, TS + 1));
             assertEquals(DurableCommandOutcome.APPLIED, BehaviourTwoHarness.record3(next.get(0)).result());
-            assertEquals(1, a.h.engine.commandLedger().size());
+            assertEquals(1, a.h.engine.ledgerV2().size());
             assertFalse(a.h.engine.getEngine(BehaviourTwoHarness.MARKET).isBidEmpty());
         }
     }
@@ -101,7 +102,7 @@ public class AboveCeilingFrameTest {
             assertEquals("tif 3 above the ceiling", 2, r.demuxer.decodeRejectCount());
             assertEquals(0, r.demuxer.aboveCeilingInvalidCount());
             assertTrue(r.h.drain().isEmpty());
-            assertEquals(0, r.h.engine.commandLedger().size());
+            assertEquals(0, r.h.engine.ledgerV2().size());
             assertEquals(0, r.demuxer.applyErrorCount());
         }
     }
@@ -135,7 +136,7 @@ public class AboveCeilingFrameTest {
             assertEquals(DurableCommandOutcome.INVALID, BehaviourTwoHarness.record3(f13.get(0)).result());
             assertArrayEquals("same record on both jars", f12.get(0), f13.get(0));
             assertEquals(1, v13Jar.demuxer.aboveCeilingInvalidCount());
-            assertEquals(0, v13Jar.h.engine.commandLedger().size());
+            assertEquals(0, v13Jar.h.engine.ledgerV2().size());
             assertEquals(0, v13Jar.h.failFast.get());
 
             // Other templates above the ceiling: the same counted drop on the later jar.
@@ -149,7 +150,7 @@ public class AboveCeilingFrameTest {
             v13Jar.apply(new Entry(engineConfig(1, 2, G, 13, 50_000), 64L, 1_000L));
             final List<byte[]> f = v13Jar.apply(new Entry(v13, POS, TS));
             assertEquals(DurableCommandOutcome.APPLIED, BehaviourTwoHarness.record3(f.get(0)).result());
-            assertEquals(1, v13Jar.h.engine.commandLedger().size());
+            assertEquals(1, v13Jar.h.engine.ledgerV2().size());
         }
     }
 }

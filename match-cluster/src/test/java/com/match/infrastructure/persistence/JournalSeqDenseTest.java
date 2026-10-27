@@ -41,9 +41,10 @@ public class JournalSeqDenseTest {
     /** The behaviour-1 reference frames, captured at 3b95c56 (contract W6, review NOTE-6). */
     static final String BEHAVIOUR1_RESOURCE = "/s3/behaviour1-journal.bin";
 
-    private static DurableOrderIntent intent(long idLow, int kind, long userId, long omsOrderId, long oldOrderId,
+    /** RC2 S4 (B1): core-shaped, idHigh = omsOrderId, idLow = n << 2 | kind. */
+    private static DurableOrderIntent intent(long n, int kind, long userId, long omsOrderId, long oldOrderId,
                                              int side, double price, double qty) {
-        return new DurableOrderIntent(17, idLow, userId, omsOrderId, oldOrderId, FixedPoint.fromDouble(price),
+        return new DurableOrderIntent(omsOrderId, (n << 2) | kind, userId, omsOrderId, oldOrderId, FixedPoint.fromDouble(price),
                 FixedPoint.fromDouble(qty), 0, BehaviourTwoHarness.MARKET, kind, 0, side);
     }
 
@@ -178,21 +179,23 @@ public class JournalSeqDenseTest {
      * The behaviour-1 log: durable creates (rest, cross), an equal retry (re-journaled in
      * behaviour 1), a conflict, a durable replace, a legacy create crossing it, a durable taker
      * filling the maker, legacy cancels (unknown leg ack, resting leg), a durable cancel of a
+     * (RC2 S4: built with the pre-S4 commandIdHigh-17 builders, so the frames stay those of the
+     * 3b95c56 reference; behaviour 1 has no B1 rule)
      * filled leg (UNKNOWN_LEG) and a pre-cancel amend rejection.
      */
     static List<byte[]> behaviourOneOrders() {
         final List<byte[]> f = new ArrayList<>();
-        f.add(durableCreate(1, 100, 9001, 0, 59_000, 2));                       // order 1 rests
-        f.add(durableCreate(2, 200, 9002, 1, 59_000, 1));                       // order 2 fills against 1
-        f.add(durableCreate(2, 200, 9002, 1, 59_000, 1));                       // equal retry
-        f.add(durableCreate(2, 200, 9002, 1, 59_500, 1));                       // conflict
-        f.add(durable(3, 2, 100, 9001, 1, 0, 58_000, 1, 0, 0));                 // replace 1 -> order 3
+        f.add(durableCreateIdHigh17(1, 100, 9001, 0, 59_000, 2));                       // order 1 rests
+        f.add(durableCreateIdHigh17(2, 200, 9002, 1, 59_000, 1));                       // order 2 fills against 1
+        f.add(durableCreateIdHigh17(2, 200, 9002, 1, 59_000, 1));                       // equal retry
+        f.add(durableCreateIdHigh17(2, 200, 9002, 1, 59_500, 1));                       // conflict
+        f.add(durableIdHigh17(3, 2, 100, 9001, 1, 0, 58_000, 1, 0, 0));                 // replace 1 -> order 3
         f.add(createOrder(300, 9003, 1, 58_000, 0.5));                          // order 4, partial vs 3
-        f.add(durableCreate(4, 400, 9004, 1, 58_000, 0.5));                     // order 5 fills 3
+        f.add(durableCreateIdHigh17(4, 400, 9004, 1, 58_000, 0.5));                     // order 5 fills 3
         f.add(cancelOrder(100, 99));                                            // unknown: CANCELLED ack
-        f.add(durable(5, 1, 200, 9002, 2, 1, 0, 0, 0, 0));                      // cancel of filled 2: UNKNOWN_LEG
-        f.add(durableCreate(6, 100, 9006, 0, 57_000, 1));                       // order 6 rests
-        f.add(durable(7, 2, 100, 9006, 6, 0, 40_000, 1, 0, 0));                 // amend refused before cancel
+        f.add(durableIdHigh17(5, 1, 200, 9002, 2, 1, 0, 0, 0, 0));                      // cancel of filled 2: UNKNOWN_LEG
+        f.add(durableCreateIdHigh17(6, 100, 9006, 0, 57_000, 1));                       // order 6 rests
+        f.add(durableIdHigh17(7, 2, 100, 9006, 6, 0, 40_000, 1, 0, 0));                 // amend refused before cancel
         f.add(cancelOrder(100, 6));                                             // CANCELLED
         return f;
     }

@@ -127,9 +127,10 @@ public class MeTradeIdWithoutRingBufferTest {
         }
     }
 
-    private static DurableOrderIntent intent(long idLow, int kind, long userId, long omsOrderId, long oldOrderId,
+    /** RC2 S4 (B1): core-shaped, idHigh = omsOrderId, idLow = n << 2 | kind. */
+    private static DurableOrderIntent intent(long n, int kind, long userId, long omsOrderId, long oldOrderId,
                                              int side, double price, double qty) {
-        return new DurableOrderIntent(17, idLow, userId, omsOrderId, oldOrderId, FixedPoint.fromDouble(price),
+        return new DurableOrderIntent(omsOrderId, (n << 2) | kind, userId, omsOrderId, oldOrderId, FixedPoint.fromDouble(price),
                 FixedPoint.fromDouble(qty), 0, BehaviourTwoHarness.MARKET, kind, 0, side);
     }
 

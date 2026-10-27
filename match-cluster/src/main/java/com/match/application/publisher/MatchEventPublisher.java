@@ -120,8 +120,47 @@ public class MatchEventPublisher implements MatchEventSink {
             }
             return;
         }
-        journal.appendCommandOutcome(journalSeq, position, outcome, ledgerSizeAfter);
+        // Behaviour 1: the ledger v1 cap is the capacity record 3 reports.
+        journal.appendCommandOutcome(journalSeq, position, outcome, ledgerSizeAfter,
+                com.match.application.engine.DurableCommandLedger.MAX_ENTRIES);
     }
+
+    /** RC2 S4: the behaviour-2 view form; the journal copies the fields into the frame. */
+    @Override public void publishCommandOutcome(long position, long journalSeq,
+                                                com.match.domain.commands.DurableOutcomeView outcome,
+                                                int ledgerSizeAfter, int ledgerCapacity) {
+        final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
+        if (journal == null) {
+            if (darkCommandOutcomeCount.getAndIncrement() == 0) {
+                logger.error("DURABLE COMMAND OUTCOME NOT JOURNALED: settlement journal is off on this node;"
+                        + " counted as match_dark_command_outcomes_total");
+            }
+            return;
+        }
+        journal.appendCommandOutcome(journalSeq, position, outcome, ledgerSizeAfter, ledgerCapacity);
+    }
+
+    // RC2 S4: record 4 release frames this node could not journal because journaling is off here.
+    // The release itself applied like on every other replica.
+    private final AtomicLong darkCommandReleaseCount = new AtomicLong();
+
+    @Override public void publishCommandRelease(long egressSeq, long journalSeq, long releaseSeq, int ledgerSize,
+                                                int ledgerCapacity, int tombstoneRanges, int count,
+                                                long[] commandIdHigh, long[] idLowFloor, int[] scope,
+                                                int[] result, int[] removed) {
+        final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
+        if (journal == null) {
+            if (darkCommandReleaseCount.getAndIncrement() == 0) {
+                logger.error("COMMAND RELEASE NOT JOURNALED: settlement journal is off on this node;"
+                        + " counted as match_dark_command_releases_total");
+            }
+            return;
+        }
+        journal.appendCommandRelease(journalSeq, egressSeq, releaseSeq, ledgerSize, ledgerCapacity,
+                tombstoneRanges, count, commandIdHigh, idLowFloor, scope, result, removed);
+    }
+
+    public long getDarkCommandReleaseCount() { return darkCommandReleaseCount.get(); }
 
     public long getDarkCommandOutcomeCount() { return darkCommandOutcomeCount.get(); }
 

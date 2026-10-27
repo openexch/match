@@ -311,6 +311,11 @@ public class DirectMatchingEngine implements MatchingEngine {
         return book.cancelOrder(orderId);
     }
 
+    @Override
+    public long restingUserId(long orderId, boolean isBuy) {
+        return (isBuy ? bidBook : askBook).restingUserId(orderId);
+    }
+
     /**
      * Add order directly (no matching). O(1)
      *

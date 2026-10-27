@@ -69,6 +69,23 @@ public class SbeDemuxer {
     // every other template is a counted drop. Same discipline as the reject counters.
     private long aboveCeilingInvalidCount;
     private long aboveCeilingDropCount;
+    // RC2 S4 (contract 5.3, decision A2): legacy templates 1/2/3 refused at behaviour 2. Same
+    // discipline as the reject counters (service thread only, not replicated).
+    private long legacyLaneRejectCount;
+
+    // RC2 S4 section 8: pooled template-9 and template-10 decoders, the reusable intent view and
+    // the release entry scratch (S1 cap 48), so the behaviour-2 durable path allocates nothing.
+    private final com.match.infrastructure.generated.DurableOrderCommandDecoder durableDecoder =
+            new com.match.infrastructure.generated.DurableOrderCommandDecoder();
+    private final com.match.infrastructure.generated.ReleaseCommandIdsDecoder releaseDecoder =
+            new com.match.infrastructure.generated.ReleaseCommandIdsDecoder();
+    private final com.match.domain.commands.MutableDurableIntent durableView =
+            new com.match.domain.commands.MutableDurableIntent();
+    /** RC2 S4 (S1 3.2 cap): a template-10 frame with more entries is a frame-bounds reject. */
+    static final int MAX_RELEASE_ENTRIES = Engine.MAX_RELEASE_ENTRIES;
+    private final long[] releaseHigh = new long[MAX_RELEASE_ENTRIES];
+    private final long[] releaseFloor = new long[MAX_RELEASE_ENTRIES];
+    private final int[] releaseScope = new int[MAX_RELEASE_ENTRIES];
     // Service-thread only. Once a command may have partially applied, this instance cannot
     // establish another applied prefix. Decode-only poison never enters this state.
     private boolean applying;
@@ -319,8 +336,8 @@ public class SbeDemuxer {
                     // The generated decoder reads with the frame's own blockLength and version;
                     // an above-ceiling frame (version > 12) decodes its v12 prefix exactly like a
                     // v12 frame, with the same identity and range checks (F1 included).
-                    var d = new com.match.infrastructure.generated.DurableOrderCommandDecoder()
-                        .wrapAndApplyHeader(frame,0,headerDecoder);
+                    // RC2 S4 section 8: one pooled decoder (wrap resets every cursor).
+                    final var d = durableDecoder.wrapAndApplyHeader(frame,0,headerDecoder);
                     // Null before range (RC2 S1 contract section 3): a pre-12 header maps the two v12
                     // fields to 0/0 and runs NO range check (the decoder would return the SBE null);
                     // a v12 header reads them and range-checks (poison = decode reject below).
@@ -338,6 +355,11 @@ public class SbeDemuxer {
                         if (expectedOldRemaining < 0) {
                             throw new IllegalArgumentException("expectedOldRemaining " + expectedOldRemaining);
                         }
+                    }
+                    if (engine.isJournalSeqDense()) {
+                        dispatchDurableBehaviourTwo(d, version, timeInForce, expectedOldRemaining,
+                                aboveCeiling, timestamp);
+                        break;
                     }
                     var intent = new com.match.domain.commands.DurableOrderIntent(d.commandIdHigh(),d.commandIdLow(),
                         d.userId(),d.omsOrderId(),d.oldOrderId(),d.price(),d.quantity(),d.budget(),d.marketId(),
@@ -365,6 +387,10 @@ public class SbeDemuxer {
                         handlePreConfigCreateOrder(frame, 0, timestamp);
                         break;
                     }
+                    if (engine.isJournalSeqDense()) {
+                        refuseLegacyLane();
+                        break;
+                    }
                     handleCreateOrder(frame, 0, timestamp);
                     break;
 
@@ -373,12 +399,20 @@ public class SbeDemuxer {
                         handlePreConfigCancelOrUpdate("CancelOrder");
                         break;
                     }
+                    if (engine.isJournalSeqDense()) {
+                        refuseLegacyLane();
+                        break;
+                    }
                     handleCancelOrder(frame, 0, timestamp);
                     break;
 
                 case UpdateOrderDecoder.TEMPLATE_ID:
                     if (!engine.hasEngines()) {
                         handlePreConfigCancelOrUpdate("UpdateOrder");
+                        break;
+                    }
+                    if (engine.isJournalSeqDense()) {
+                        refuseLegacyLane();
                         break;
                     }
                     handleUpdateOrder(frame, 0, timestamp);
@@ -404,9 +438,14 @@ public class SbeDemuxer {
                     break;
 
                 case com.match.infrastructure.generated.ReleaseCommandIdsDecoder.TEMPLATE_ID:
-                    // RC2 S1: defined and bounds-checked above, served from S4 (behaviour 2).
-                    // Counted, never applied: the command ledger is untouched, no egress.
-                    countUnserved();
+                    // RC2 S1: defined and bounds-checked above. RC2 S4 (contract 4.1): served only
+                    // with engines and a recorded behaviour >= 2 (identity bound); otherwise the S1
+                    // counted unserved drop (ledger untouched, no egress, no journal).
+                    if (!engine.hasEngines() || !engine.isJournalSeqDense()) {
+                        countUnserved();
+                        break;
+                    }
+                    dispatchRelease(timestamp);
                     break;
 
                 default:
@@ -440,6 +479,114 @@ public class SbeDemuxer {
 
     public long createOrderCount() {
         return createOrderCount;
+    }
+
+    /**
+     * RC2 S4 (contract 3.1, 3.2 B0): a behaviour-2 template-9 frame. The base rules (the record 3
+     * echo is reader-valid) are checked on the pooled view without building a record; a violation
+     * stays the counted decode drop (S2 normalized-echo request declined, delta 12.12). Then the
+     * S2 above-ceiling INVALID, then B0 (header version 11), then the engine's B1-B7.
+     */
+    private void dispatchDurableBehaviourTwo(final com.match.infrastructure.generated.DurableOrderCommandDecoder d,
+                                             final int version, final int timeInForce,
+                                             final long expectedOldRemaining, final boolean aboveCeiling,
+                                             final long timestamp) {
+        final long idHigh = d.commandIdHigh();
+        final long idLow = d.commandIdLow();
+        final long userId = d.userId();
+        final long omsOrderId = d.omsOrderId();
+        final long oldOrderId = d.oldOrderId();
+        final int marketId = d.marketId();
+        final int kind = d.commandKind();
+        final int type = d.orderType();
+        final int side = d.orderSide();
+        if (!com.match.domain.commands.DurableOrderIntent.isValid(idHigh, idLow, userId, omsOrderId, oldOrderId,
+                marketId, kind, type, side, timeInForce, expectedOldRemaining)) {
+            rejectDecode();
+            return;
+        }
+        durableView.set(idHigh, idLow, userId, omsOrderId, oldOrderId, d.price(), d.quantity(), d.budget(),
+                marketId, kind, type, side, timeInForce, expectedOldRemaining);
+        applying = true;
+        if (aboveCeiling) {
+            // Record 3 result 8: no capacity, no ledger, no apply (S2 contract 6).
+            engine.journalInvalid(durableView, timestamp);
+            final long n = ++aboveCeilingInvalidCount;
+            if (shouldLogReject(n)) {
+                System.err.println("INGRESS INVALID (above ceiling): DurableOrderCommand version="
+                        + version + " above the recorded maxWireVersion="
+                        + engine.getEngineConfig().maxWireVersion
+                        + " journaled as INVALID; aboveCeilingInvalid=" + n);
+            }
+            return;
+        }
+        if (version < V12) {
+            // B0: a v11 header carries no tif and no expectedOldRemaining (echoed 0/0).
+            engine.journalInvalidWire(durableView, timestamp);
+            return;
+        }
+        engine.acceptDurableV2(durableView, timestamp);
+    }
+
+    /**
+     * RC2 S4 (contract 4.1): template 10 at behaviour 2. All-or-nothing validation before any
+     * mutation: more than 48 entries is a frame-bounds reject; {@code releaseSeq < 0} or any entry
+     * with {@code commandIdHigh < 1}, {@code idLowFloor < 0} or a raw scope outside 0..1 is a
+     * counted decode reject (no entry applied, nothing journaled). 0 entries is a legal all-NOOP
+     * frame.
+     */
+    private void dispatchRelease(final long timestamp) {
+        releaseDecoder.wrapAndApplyHeader(frame, 0, headerDecoder);
+        final long releaseSeq = releaseDecoder.releaseSeq();
+        final com.match.infrastructure.generated.ReleaseCommandIdsDecoder.ReleasesDecoder group =
+                releaseDecoder.releases();
+        final int count = group.count();
+        if (count > MAX_RELEASE_ENTRIES) {
+            rejectFrameBounds();
+            return;
+        }
+        boolean valid = releaseSeq >= 0;
+        for (int i = 0; i < count; i++) {
+            group.next();
+            final long high = group.commandIdHigh();
+            final long floor = group.idLowFloor();
+            final int scope = group.scopeRaw();
+            if (high < 1 || floor < 0 || scope > 1) {
+                valid = false;
+            }
+            releaseHigh[i] = high;
+            releaseFloor[i] = floor;
+            releaseScope[i] = scope;
+        }
+        if (!valid) {
+            rejectDecode();
+            return;
+        }
+        applying = true;
+        engine.applyRelease(releaseSeq, count, releaseHigh, releaseFloor, releaseScope);
+    }
+
+    /** RC2 S4 (5.3): counted, rate-limited log, no mutation, no egress, no journal. */
+    private void refuseLegacyLane() {
+        final long n = ++legacyLaneRejectCount;
+        if (shouldLogReject(n)) {
+            System.err.println("INGRESS REFUSED (legacy lane closed at behaviour 2): templateId="
+                    + headerDecoder.templateId() + "; legacyLaneRejects=" + n);
+        }
+    }
+
+    /** Scrapeable (match_legacy_lane_rejects_total): legacy templates 1/2/3 refused at behaviour 2 (RC2 S4). */
+    public long legacyLaneRejectCount() {
+        return legacyLaneRejectCount;
+    }
+
+    /** A counted decode drop decided without an exception (same counter and log as the catch path). */
+    private void rejectDecode() {
+        final long n = ++decodeRejectCount;
+        if (shouldLogReject(n)) {
+            System.err.println("INGRESS DROP (decode): templateId=" + headerDecoder.templateId()
+                    + " type=validation; decodeRejects=" + n);
+        }
     }
 
     /** RC2 S2: a recorded behaviour >= 2 config exists and {@code version} is above its ceiling. */

@@ -14,15 +14,54 @@ package com.match.domain.commands;
  */
 public record DurableOrderIntent(long idHigh, long idLow, long userId, long omsOrderId,
         long oldOrderId, long price, long quantity, long budget, int marketId,
-        int kind, int type, int side, int timeInForce, long expectedOldRemaining) {
+        int kind, int type, int side, int timeInForce, long expectedOldRemaining) implements DurableIntentView {
     public DurableOrderIntent {
-        if ((idHigh == 0 && idLow == 0) || userId <= 0 || omsOrderId <= 0 || marketId <= 0
+        if (!isValid(idHigh, idLow, userId, omsOrderId, oldOrderId, marketId, kind, type, side,
+                timeInForce, expectedOldRemaining))
+            throw new IllegalArgumentException("Invalid durable command identity");
+    }
+
+    /**
+     * The base rules every reader enforces (the record 3 echo is reader-valid iff these hold, RC2
+     * S4 contract 3.1). Static and allocation-free so the behaviour-2 demuxer checks a pooled
+     * view without building the record; the constructor uses the same expression.
+     */
+    public static boolean isValid(long idHigh, long idLow, long userId, long omsOrderId, long oldOrderId,
+                                  int marketId, int kind, int type, int side, int timeInForce,
+                                  long expectedOldRemaining) {
+        return !((idHigh == 0 && idLow == 0) || userId <= 0 || omsOrderId <= 0 || marketId <= 0
                 || kind < 0 || kind > 2 || type < 0 || type > 2 || side < 0 || side > 1
                 || (kind == 0 ? oldOrderId != 0 : oldOrderId <= 0)
                 || timeInForce < 0 || timeInForce > 2 || expectedOldRemaining < 0
                 // F1 (RC2 S2 6.1): expectedOldRemaining is an UPDATE-only field.
-                || (kind != 2 && expectedOldRemaining != 0))
-            throw new IllegalArgumentException("Invalid durable command identity");
+                || (kind != 2 && expectedOldRemaining != 0));
+    }
+
+    /** RC2 S4 B1: a behaviour-2 identity is valid. */
+    public static final int B2_OK = 0;
+    /** RC2 S4 B1: {@code idHigh < 1} or {@code idLow < 0}. */
+    public static final int B2_INVALID_SIGN = 1;
+    /** RC2 S4 B1: {@code (idLow & 3) != kind}. */
+    public static final int B2_INVALID_KIND_BITS = 2;
+    /** RC2 S4 B1 (decision A3): {@code omsOrderId != idHigh}. */
+    public static final int B2_INVALID_OWNER_ID = 3;
+
+    /**
+     * RC2 S4 B1, the behaviour-2 identity rules on top of {@link #isValid}: the core mints
+     * {@code idHigh = omsOrderId = orderId >= 1} and {@code idLow = attempt << 2 | kind}. Returns
+     * {@link #B2_OK} or the first failing cause in the contract's order (sign, kind bits, owner).
+     */
+    public static int behaviourTwoCause(long idHigh, long idLow, long omsOrderId, int kind) {
+        if (idHigh < 1 || idLow < 0) {
+            return B2_INVALID_SIGN;
+        }
+        if ((idLow & 3) != kind) {
+            return B2_INVALID_KIND_BITS;
+        }
+        if (omsOrderId != idHigh) {
+            return B2_INVALID_OWNER_ID;
+        }
+        return B2_OK;
     }
 
     /** A pre-v12 intent: {@code timeInForce} GTC (0), {@code expectedOldRemaining} 0. */

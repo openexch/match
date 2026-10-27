@@ -105,7 +105,7 @@ public class PreConfigDurableCommandTest {
                 assertEquals("not malformed input", 0, n.demuxer.decodeRejectCount());
                 assertEquals("counted by the fresh-cluster guard", 1, n.demuxer.preConfigOrderRejectCount());
                 assertEquals(0, n.failFast.get());
-                assertEquals("only the served command is in the ledger", 1, n.engine.commandLedger().size());
+                assertEquals("only the served command is in the ledger", 1, n.engine.ledgerV2().size());
             }
             // Journal: record 5 for the FRESH and record 3 APPLIED for the served command; nothing
             // for the pre-config frame (no epoch existed).

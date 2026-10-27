@@ -28,8 +28,9 @@ public class DuplicateSuppressionTest {
     private static final long PRICE = FixedPoint.fromDouble(59_000);
     private static final long QTY = FixedPoint.fromDouble(1);
 
-    private static DurableOrderIntent create(long idLow, long price) {
-        return new DurableOrderIntent(17, idLow, 100, 9000 + idLow, 0, price, QTY, 0, BehaviourTwoHarness.MARKET, 0, 0, 0);
+    /** RC2 S4 (B1): a core-shaped CREATE, idHigh = omsOrderId = 9000 + n, idLow = 0 << 2 | CREATE. */
+    private static DurableOrderIntent create(long n, long price) {
+        return new DurableOrderIntent(9000 + n, 0, 100, 9000 + n, 0, price, QTY, 0, BehaviourTwoHarness.MARKET, 0, 0, 0);
     }
 
     private static Replica fresh() {
@@ -43,11 +44,14 @@ public class DuplicateSuppressionTest {
         return r.h.engine.acceptDurable(c, 1_000L + position);
     }
 
-    /** Fill the ledger to MAX_ENTRIES with recorded outcomes (never through the 1 MiB ring). */
+    /**
+     * Fill the ledger to its recorded capacity C with recorded outcomes (never through the 1 MiB
+     * ring). RC2 S4: the behaviour-2 ledger is v2 and its capacity is the recorded C (50000 here).
+     */
     private static void fillLedger(Engine engine) {
-        for (long i = engine.commandLedger().size() + 1000; engine.commandLedger().size() < DurableCommandLedger.MAX_ENTRIES; i++) {
-            engine.commandLedger().record(new DurableCommandOutcome(
-                    new DurableOrderIntent(17, i, 100, 9001, 999, 0, 0, 0, 1, 1, 0, 0), 0, 1_000, 0, -1, 0, false, 4));
+        for (long i = 1_000_000; engine.ledgerV2().size() < engine.ledgerV2().capacity(); i++) {
+            engine.ledgerV2().record(new DurableCommandOutcome(
+                    new DurableOrderIntent(i, 1, 100, i, 999, 0, 0, 0, 1, 1, 0, 0), 0, 1_000, 0, -1, 0, false, 4));
         }
     }
 
@@ -65,7 +69,7 @@ public class DuplicateSuppressionTest {
             assertEquals("the equal retry adds no frame to the ring", List.of(), r.h.drain());
             assertEquals(1L, r.h.engine.suppressedDuplicateCount());
             assertEquals("the original outcome at seq 2", 2L, k);
-            assertEquals(1, r.h.engine.commandLedger().size());
+            assertEquals(1, r.h.engine.ledgerV2().size());
 
             at(r, 448L, create(2, PRICE));
             final List<byte[]> next = r.h.drain();
@@ -96,7 +100,7 @@ public class DuplicateSuppressionTest {
             assertEquals(DurableCommandOutcome.INVALID, record3(invalid.get(0)).result());
             assertEquals(DurableCommandOutcome.INVALID, record3(invalid.get(1)).result());
             assertEquals(List.of(5L, 6L), List.of(journalSeqOf(invalid.get(0)), journalSeqOf(invalid.get(1))));
-            assertEquals("neither CONFLICT nor INVALID is recorded", 1, r.h.engine.commandLedger().size());
+            assertEquals("neither CONFLICT nor INVALID is recorded", 1, r.h.engine.ledgerV2().size());
 
             // Ledger full: two CAPACITY copies at consecutive seqs.
             fillLedger(r.h.engine);
@@ -107,7 +111,7 @@ public class DuplicateSuppressionTest {
             assertEquals(DurableCommandOutcome.CAPACITY, record3(capacity.get(0)).result());
             assertEquals(DurableCommandOutcome.CAPACITY, record3(capacity.get(1)).result());
             assertEquals(List.of(7L, 8L), List.of(journalSeqOf(capacity.get(0)), journalSeqOf(capacity.get(1))));
-            assertEquals("CAPACITY is not recorded", DurableCommandLedger.MAX_ENTRIES, r.h.engine.commandLedger().size());
+            assertEquals("CAPACITY is not recorded", 50_000, r.h.engine.ledgerV2().size());
             assertEquals(0L, r.h.engine.suppressedDuplicateCount());
             assertEquals(9L, r.h.engine.meIdentity().nextJournalSeq());
         }
@@ -134,15 +138,15 @@ public class DuplicateSuppressionTest {
     public void duplicateOfARecordedRejectionIsSuppressed() {
         try (Replica r = fresh()) {
             final DurableOrderIntent unknownMarket =
-                    new DurableOrderIntent(17, 1, 100, 9001, 0, PRICE, QTY, 0, 2, 0, 0, 0);
+                    new DurableOrderIntent(9001, 0, 100, 9001, 0, PRICE, QTY, 0, 2, 0, 0, 0);
             final DurableOrderIntent unknownLeg =
-                    new DurableOrderIntent(17, 2, 100, 9002, 777, 0, 0, 0, BehaviourTwoHarness.MARKET, 1, 0, 0);
+                    new DurableOrderIntent(9002, 1, 100, 9002, 777, 0, 0, 0, BehaviourTwoHarness.MARKET, 1, 0, 0);
             assertEquals(DurableCommandOutcome.UNKNOWN_MARKET, at(r, 192L, unknownMarket).result());
             assertEquals(DurableCommandOutcome.UNKNOWN_LEG, at(r, 320L, unknownLeg).result());
             final List<byte[]> first = r.h.drain();
             assertEquals(2, first.size());
             assertEquals("one seq each", List.of(2L, 3L), List.of(journalSeqOf(first.get(0)), journalSeqOf(first.get(1))));
-            assertEquals("both are recorded", 2, r.h.engine.commandLedger().size());
+            assertEquals("both are recorded", 2, r.h.engine.ledgerV2().size());
 
             assertEquals(DurableCommandOutcome.UNKNOWN_MARKET, at(r, 448L, unknownMarket).result());
             assertEquals(DurableCommandOutcome.UNKNOWN_LEG, at(r, 576L, unknownLeg).result());

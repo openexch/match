@@ -242,6 +242,19 @@ public class DirectIndexOrderBook {
     /**
      * Cancel order by ID. O(1)
      */
+    /**
+     * RC2 S4 (contract 5.1): the owner of a resting order, or -1. The same guards as
+     * {@link #cancelOrder}: a location must exist (a tombstone has none) and the packed slot must
+     * still hold this order id.
+     */
+    public long restingUserId(long orderId) {
+        final long location = orderLocations.get(orderId);
+        if (location == EMPTY_LOCATION) return -1L;
+        final int orderBase = (unpackPriceIdx(location) * maxOrdersPerLevel + unpackSlot(location)) * ORDER_FIELDS;
+        if (orders[orderBase] != orderId) return -1L;
+        return orders[orderBase + 1];
+    }
+
     public boolean cancelOrder(long orderId) {
         long location = orderLocations.get(orderId);
         if (location == EMPTY_LOCATION) return false;
