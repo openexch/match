@@ -54,13 +54,13 @@ public class ApplyFailureFenceTest {
         engine.setEventPublisher(failingSink(failure));
         var demux = new SbeDemuxer(engine);
         var b = create();
-        assertSame(failure, assertThrows(failure.getClass(), () -> demux.dispatch(b, 0, b.capacity(), 10)));
+        assertSame(failure, assertThrows(failure.getClass(), () -> demux.dispatchTrusted(b, 0, b.capacity(), 10)));
         assertFalse("failure occurs after the real book mutation", engine.getEngine(1).isBidEmpty());
         assertEquals(1, demux.applyErrorCount());
         assertEquals("apply exceptions are not poison input", 0, demux.decodeRejectCount());
         long nextOrderId = engine.getOrderIdGenerator();
         engine.setEventPublisher(null);
-        assertThrows(IllegalStateException.class, () -> demux.dispatch(b, 0, b.capacity(), 20));
+        assertThrows(IllegalStateException.class, () -> demux.dispatchTrusted(b, 0, b.capacity(), 20));
         assertEquals("failed instance must never apply another order", nextOrderId, engine.getOrderIdGenerator());
         assertEquals("one underlying failure, not one per blocked retry", 1, demux.applyErrorCount());
     }
@@ -72,47 +72,47 @@ public class ApplyFailureFenceTest {
 
     @Test public void tradePublicationFailureCannotBeAcknowledgedAsApplied() {
         var engine = new Engine("array"); var demux = new SbeDemuxer(engine); var b = create();
-        demux.dispatch(b, 0, b.capacity(), 10);
+        demux.dispatchTrusted(b, 0, b.capacity(), 10);
         var failure = new IllegalStateException("injected trade publication");
         engine.setEventPublisher(failingSink(failure));
         new CreateOrderEncoder().wrapAndApplyHeader(b, 0, new MessageHeaderEncoder())
             .userId(8).omsOrderId(1002).marketId(1).orderSide(OrderSide.ASK)
             .orderType(OrderType.LIMIT).price(FixedPoint.fromDouble(60000)).quantity(FixedPoint.fromDouble(1));
-        assertSame(failure, assertThrows(IllegalStateException.class, () -> demux.dispatch(b, 0, b.capacity(), 20)));
+        assertSame(failure, assertThrows(IllegalStateException.class, () -> demux.dispatchTrusted(b, 0, b.capacity(), 20)));
         assertTrue("matching has already consumed the maker", engine.getEngine(1).isBidEmpty());
         assertTrue(engine.getEngine(1).isAskEmpty());
         assertEquals(1, demux.applyErrorCount()); assertEquals(0, demux.decodeRejectCount());
         engine.setEventPublisher(null);
-        assertThrows(IllegalStateException.class, () -> demux.dispatch(b, 0, b.capacity(), 30));
+        assertThrows(IllegalStateException.class, () -> demux.dispatchTrusted(b, 0, b.capacity(), 30));
     }
 
     @Test public void poisonInputDoesNotFenceHealthyEngine() {
         Engine engine = new Engine("array");
         var demux = new SbeDemuxer(engine); var b = create();
         b.putByte(8 + CreateOrderEncoder.orderSideEncodingOffset(), (byte) 99);
-        demux.dispatch(b, 0, b.capacity(), 10);
+        demux.dispatchTrusted(b, 0, b.capacity(), 10);
         assertTrue(engine.getEngine(1).isBidEmpty());
         assertEquals(1, demux.decodeRejectCount());
         assertEquals(0, demux.applyErrorCount());
-        b = create(); demux.dispatch(b, 0, b.capacity(), 20);
+        b = create(); demux.dispatchTrusted(b, 0, b.capacity(), 20);
         assertFalse(engine.getEngine(1).isBidEmpty());
     }
 
     @Test public void invalidPhysicalBoundsAreDroppedBeforeHeaderAccess() {
         var engine = new Engine("array"); var demux = new SbeDemuxer(engine);
         var shortBuffer = new UnsafeBuffer(new byte[4]);
-        demux.dispatch(shortBuffer, 0, 8, 10);
-        demux.dispatch(shortBuffer, Integer.MAX_VALUE, 8, 10);
+        demux.dispatchTrusted(shortBuffer, 0, 8, 10);
+        demux.dispatchTrusted(shortBuffer, Integer.MAX_VALUE, 8, 10);
         assertEquals(2, demux.decodeRejectCount());
         assertEquals(0, demux.applyErrorCount());
-        var valid = create(); demux.dispatch(valid, 0, valid.capacity(), 20);
+        var valid = create(); demux.dispatchTrusted(valid, 0, valid.capacity(), 20);
         assertFalse(engine.getEngine(1).isBidEmpty());
     }
 
     @Test public void truncatedLogicalFrameCannotReadStaleBackingBytes() {
         var engine = new Engine("array"); var demux = new SbeDemuxer(engine); var b = create();
         // Backing memory contains a complete prior command, but this frame does not.
-        demux.dispatch(b, 0, 10, 10);
+        demux.dispatchTrusted(b, 0, 10, 10);
         assertTrue("truncated frame must not place a stale order", engine.getEngine(1).isBidEmpty());
         assertEquals(1, demux.decodeRejectCount()); assertEquals(0, demux.applyErrorCount());
     }
@@ -120,7 +120,7 @@ public class ApplyFailureFenceTest {
     @Test public void shortDeclaredBlockCannotHideFullStalePayload() {
         var engine = new Engine("array"); var demux = new SbeDemuxer(engine); var b = create();
         b.putShort(0, (short) 1, java.nio.ByteOrder.LITTLE_ENDIAN);
-        demux.dispatch(b, 0, b.capacity(), 10);
+        demux.dispatchTrusted(b, 0, b.capacity(), 10);
         assertTrue(engine.getEngine(1).isBidEmpty());
         assertEquals(1, demux.decodeRejectCount()); assertEquals(0, demux.applyErrorCount());
     }
@@ -128,7 +128,7 @@ public class ApplyFailureFenceTest {
     @Test public void validFrameAtNonzeroOffsetStillApplies() {
         var engine = new Engine("array"); var demux = new SbeDemuxer(engine); var command = create();
         var b = new UnsafeBuffer(new byte[256]); b.putBytes(17, command, 0, command.capacity());
-        demux.dispatch(b, 17, command.capacity(), 10);
+        demux.dispatchTrusted(b, 17, command.capacity(), 10);
         assertFalse(engine.getEngine(1).isBidEmpty());
         assertEquals(0, demux.decodeRejectCount()); assertEquals(0, demux.applyErrorCount());
     }
@@ -140,7 +140,7 @@ public class ApplyFailureFenceTest {
         var e = new EngineConfigEncoder().wrapAndApplyHeader(b, 0, new MessageHeaderEncoder())
             .configVersion(1).impl(EngineImpl.ARRAY).bookCapacity(4096).maxMatchesPerOrder(100).maxOrdersPerLevel(0);
         e.marketsCount(1).next().marketId(1).symbol("BTC-USD").minPrice(1).maxPrice(100).tickSize(1);
-        demux.dispatch(b, 0, 8 + e.encodedLength() - 1, 10);
+        demux.dispatchTrusted(b, 0, 8 + e.encodedLength() - 1, 10);
         assertEquals(0, calls[0]); assertEquals(1, demux.decodeRejectCount());
         assertEquals(0, demux.applyErrorCount());
     }
@@ -151,7 +151,7 @@ public class ApplyFailureFenceTest {
         demux.setOpenOrdersSnapshotRequestHandler(id -> { throw failure; });
         var b = new UnsafeBuffer(new byte[128]);
         var e = new RequestOpenOrdersSnapshotEncoder().wrapAndApplyHeader(b, 0, new MessageHeaderEncoder()).requestId(123);
-        assertSame(failure, assertThrows(IllegalArgumentException.class, () -> demux.dispatch(b, 0, 8 + e.encodedLength(), 10)));
+        assertSame(failure, assertThrows(IllegalArgumentException.class, () -> demux.dispatchTrusted(b, 0, 8 + e.encodedLength(), 10)));
         assertEquals(1, demux.applyErrorCount()); assertEquals(0, demux.decodeRejectCount());
     }
 
@@ -163,7 +163,7 @@ public class ApplyFailureFenceTest {
         var e = new EngineConfigEncoder().wrapAndApplyHeader(b, 0, new MessageHeaderEncoder())
             .configVersion(1).impl(EngineImpl.ARRAY).bookCapacity(4096).maxMatchesPerOrder(100).maxOrdersPerLevel(0);
         e.marketsCount(0);
-        assertSame(failure, assertThrows(IllegalArgumentException.class, () -> demux.dispatch(b, 0, 8 + e.encodedLength(), 10)));
+        assertSame(failure, assertThrows(IllegalArgumentException.class, () -> demux.dispatchTrusted(b, 0, 8 + e.encodedLength(), 10)));
         assertEquals(1, demux.applyErrorCount()); assertEquals(0, demux.decodeRejectCount());
     }
 
@@ -172,7 +172,7 @@ public class ApplyFailureFenceTest {
         var failure = new IllegalArgumentException("injected reply");
         demux.setPreConfigOrderRejectHandler((m,u,o,b,t) -> { throw failure; });
         var b = create();
-        assertSame(failure, assertThrows(IllegalArgumentException.class, () -> demux.dispatch(b, 0, b.capacity(), 10)));
+        assertSame(failure, assertThrows(IllegalArgumentException.class, () -> demux.dispatchTrusted(b, 0, b.capacity(), 10)));
         assertEquals(1, demux.applyErrorCount()); assertEquals(0, demux.decodeRejectCount());
     }
 
@@ -189,7 +189,9 @@ public class ApplyFailureFenceTest {
     private static void dispatch(AppClusteredService service) {
         var b = create(); var header = new Header(0, 16);
         header.buffer(new UnsafeBuffer(new byte[32]));
-        service.onSessionMessage(null, 10, b, 0, b.capacity(), header);
+        // RC2 S6 (FIX-2): a principal-bearing session; a null session is the R0 halt, not this fence.
+        service.onSessionMessage(TestAuth.session(1, com.openexchange.cluster.auth.ClusterSessionClass.ADMIN),
+                10, b, 0, b.capacity(), header);
     }
 
     @Test public void serviceFailureStopsAdmissionAndSnapshotsImmediately() throws Exception {

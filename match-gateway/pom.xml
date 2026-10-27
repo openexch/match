@@ -22,6 +22,12 @@
             <artifactId>match-common</artifactId>
         </dependency>
 
+        <!-- RC2 S6: the ME session credential (ME_AUTH_CREDENTIAL), one kit copy for every client. -->
+        <dependency>
+            <groupId>com.openexchange</groupId>
+            <artifactId>cluster-kit</artifactId>
+        </dependency>
+
         <!-- Aeron (need aeron-all for cluster client and media driver) -->
         <dependency>
             <groupId>io.aeron</groupId>

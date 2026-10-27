@@ -72,6 +72,8 @@ public class SbeDemuxer {
     // RC2 S4 (contract 5.3, decision A2): legacy templates 1/2/3 refused at behaviour 2. Same
     // discipline as the reject counters (service thread only, not replicated).
     private long legacyLaneRejectCount;
+    // RC2 S6 (contract 3.2): frames refused by the session-class rows R1-R4. Same discipline.
+    private long unauthorizedRejectCount;
 
     // RC2 S4 section 8: pooled template-9 and template-10 decoders, the reusable intent view and
     // the release entry scratch (S1 cap 48), so the behaviour-2 durable path allocates nothing.
@@ -216,10 +218,44 @@ public class SbeDemuxer {
     }
 
     /**
+     * RC2 S6 (contract 3.1): the session-class code of a trusted in-process caller. Passes every class row
+     * (R1-R4); never a wire class. For in-process tests and tools only, as the AE's {@code dispatchTrusted}.
+     */
+    static final int TRUSTED = -1;
+
+    /**
+     * Dispatch a frame from a session of class {@code classCode} (a {@code ClusterSessionClass} code read from
+     * the session's replicated principal). The service halts on class 0 before it calls this (R0, contract
+     * 3.2); a class-0 frame that reaches the demuxer anyway is refused like an unauthorized one.
+     */
+    public void dispatch(final int classCode, final DirectBuffer buffer, final int offset, final int length,
+                         final long timestamp) {
+        dispatch(classCode, -1L, buffer, offset, length, timestamp);
+    }
+
+    /** As {@link #dispatch(int, DirectBuffer, int, int, long)}; {@code clusterSessionId} only names the session in logs. */
+    public void dispatch(final int classCode, final long clusterSessionId, final DirectBuffer buffer,
+                         final int offset, final int length, final long timestamp) {
+        if (classCode == TRUSTED) {
+            throw new IllegalArgumentException("TRUSTED is not a wire class; use dispatchTrusted");
+        }
+        dispatchAs(classCode, clusterSessionId, buffer, offset, length, timestamp);
+    }
+
+    /**
+     * In-process dispatch that bypasses the class rows R1-R4 (every other gate unchanged). For tests and tools
+     * that hold no ClientSession; never reached from the log.
+     */
+    public void dispatchTrusted(final DirectBuffer buffer, final int offset, final int length, final long timestamp) {
+        dispatchAs(TRUSTED, -1L, buffer, offset, length, timestamp);
+    }
+
+    /**
      * Dispatch a message to the appropriate handler.
      * ZERO allocations, direct primitive access.
      */
-    public void dispatch(final DirectBuffer buffer, final int offset, final int length, final long timestamp) {
+    private void dispatchAs(final int classCode, final long clusterSessionId, final DirectBuffer buffer,
+                            final int offset, final int length, final long timestamp) {
         if (applyFailed) {
             throw new IllegalStateException("Ingress application already failed; restart required");
         }
@@ -310,6 +346,15 @@ public class SbeDemuxer {
                 rejectFrameBounds();
                 return;
             }
+        }
+
+        // RC2 S6 (contract 3.2 R1-R4): the session class decides, after the header, schema, ceiling-drop
+        // and frame/group-bounds gates and before any body decode, so a refused frame mutates nothing,
+        // journals nothing (no above-ceiling INVALID either), consumes no journalSeq and sends no egress.
+        // Reads the replicated principal and the recorded behaviour only: every member decides alike.
+        if (classCode != TRUSTED && !authorised(classCode, headerDecoder.templateId())) {
+            refuseUnauthorized(classCode, clusterSessionId);
+            return;
         }
 
         // A-4: non-throwing body decode. The generated enum accessors OrderSide.get()/
@@ -564,6 +609,56 @@ public class SbeDemuxer {
         }
         applying = true;
         engine.applyRelease(releaseSeq, count, releaseHigh, releaseFloor, releaseScope);
+    }
+
+    /**
+     * RC2 S6 contract 3.2, rows R1-R4 (R0 is the service's halt; R5 and R7 fall through to the existing paths;
+     * R6, any other template id, is ignored by the switch as before). Codes are {@code ClusterSessionClass}
+     * values: 1 GATEWAY, 2 FORWARDER, 4 ADMIN, 7 REPLICA; 3, 5 and 6 are never minted by the ME key table and
+     * authorise nothing under R2-R4. Allocation-free.
+     */
+    private boolean authorised(final int classCode, final int templateId) {
+        switch (templateId) {
+            case CreateOrderDecoder.TEMPLATE_ID:
+            case CancelOrderDecoder.TEMPLATE_ID:
+            case UpdateOrderDecoder.TEMPLATE_ID:
+                return classCode > 0 && classCode != CLASS_REPLICA; // R1; R5/R7 below
+            case com.match.infrastructure.generated.EngineConfigDecoder.TEMPLATE_ID:
+                return classCode == CLASS_ADMIN; // R1, R2: every state
+            case com.match.infrastructure.generated.DurableOrderCommandDecoder.TEMPLATE_ID:
+            case com.match.infrastructure.generated.ReleaseCommandIdsDecoder.TEMPLATE_ID:
+                if (classCode <= 0 || classCode == CLASS_REPLICA) {
+                    return false; // R1
+                }
+                return !engine.isJournalSeqDense() || classCode == CLASS_FORWARDER; // R3
+            case com.match.infrastructure.generated.RequestOpenOrdersSnapshotDecoder.TEMPLATE_ID:
+                if (classCode <= 0 || classCode == CLASS_REPLICA) {
+                    return false; // R1
+                }
+                return !engine.isJournalSeqDense() || classCode == CLASS_FORWARDER || classCode == CLASS_ADMIN; // R4
+            default:
+                return true; // R6: not served, ignored by the switch, every class
+        }
+    }
+
+    static final int CLASS_GATEWAY = 1;
+    static final int CLASS_FORWARDER = 2;
+    static final int CLASS_ADMIN = 4;
+    static final int CLASS_REPLICA = 7;
+
+    /** RC2 S6 (3.2 UNAUTHORIZED): counted, rate-limited log; no mutation, journal, journalSeq, egress or close. */
+    private void refuseUnauthorized(final int classCode, final long clusterSessionId) {
+        final long n = ++unauthorizedRejectCount;
+        if (shouldLogReject(n)) {
+            System.err.println("INGRESS UNAUTHORIZED: templateId=" + headerDecoder.templateId()
+                    + " sessionClass=" + classCode + " clusterSessionId=" + clusterSessionId
+                    + " behaviour2=" + engine.isJournalSeqDense() + "; unauthorizedRejects=" + n);
+        }
+    }
+
+    /** Scrapeable (match_ingress_unauthorized_total): frames refused by the session-class rows (RC2 S6). */
+    public long unauthorizedRejectCount() {
+        return unauthorizedRejectCount;
     }
 
     /** RC2 S4 (5.3): counted, rate-limited log, no mutation, no egress, no journal. */

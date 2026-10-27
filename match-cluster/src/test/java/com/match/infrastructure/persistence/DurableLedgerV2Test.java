@@ -814,7 +814,7 @@ public class DurableLedgerV2Test {
             final long before = mx.getCurrentThreadAllocatedBytes();
             for (int i = 0; i < frames.length; i++) {
                 r.engine().setCurrentLogPosition(192L + 128L * i);
-                r.r.demuxer.dispatch(frames[i], 0, frames[i].capacity(), 1_001L + i);
+                r.r.demuxer.dispatchTrusted(frames[i], 0, frames[i].capacity(), 1_001L + i);
             }
             final long allocated = mx.getCurrentThreadAllocatedBytes() - before;
             r.r.h.drain();

@@ -122,7 +122,7 @@ public class S4ReviewZeroAllocFullMixTest {
                 long position = 64L;
                 h.engine.setCurrentLogPosition(position);
                 final UnsafeBuffer fresh = new UnsafeBuffer(freshConfig);
-                demuxer.dispatch(fresh, 0, fresh.capacity(), 1_000L);
+                demuxer.dispatchTrusted(fresh, 0, fresh.capacity(), 1_000L);
                 assertEquals(name + ": FRESH", 1, h.decisions.size());
                 final Plan warm = new Plan();
                 for (int c = 0; c < CYCLES * WARMUP_ROUNDS; c++) {
@@ -138,7 +138,7 @@ public class S4ReviewZeroAllocFullMixTest {
                 for (UnsafeBuffer b : warm.frames) {
                     position += 128;
                     h.engine.setCurrentLogPosition(position);
-                    demuxer.dispatch(b, 0, b.capacity(), ts++);
+                    demuxer.dispatchTrusted(b, 0, b.capacity(), ts++);
                 }
                 assertEquals(name + ": warm-up applies cleanly", 0, demuxer.applyErrorCount());
                 assertEquals(name + ": warm-up ends with an empty ledger", 0, S4Probe.ledgerSize(h.engine));
@@ -155,7 +155,7 @@ public class S4ReviewZeroAllocFullMixTest {
                     final UnsafeBuffer b = frames.get(i);
                     position += 128;
                     h.engine.setCurrentLogPosition(position);
-                    demuxer.dispatch(b, 0, b.capacity(), ts++);
+                    demuxer.dispatchTrusted(b, 0, b.capacity(), ts++);
                 }
                 final long allocated = mx.getCurrentThreadAllocatedBytes() - a0 - calibration;
                 final long[] after = counters(h.engine, demuxer);

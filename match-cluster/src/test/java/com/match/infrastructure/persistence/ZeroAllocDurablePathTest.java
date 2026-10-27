@@ -145,7 +145,7 @@ public class ZeroAllocDurablePathTest {
                 long position = 64L;
                 h.engine.setCurrentLogPosition(position);
                 final UnsafeBuffer fresh = new UnsafeBuffer(freshConfig);
-                demuxer.dispatch(fresh, 0, fresh.capacity(), 1_000L);
+                demuxer.dispatchTrusted(fresh, 0, fresh.capacity(), 1_000L);
                 assertEquals(name + ": FRESH", 1, h.decisions.size());
 
                 // Warm-up: the same mix, WARMUP_ROUNDS x the window (well above the contract's 10k
@@ -171,7 +171,8 @@ public class ZeroAllocDurablePathTest {
                 for (UnsafeBuffer b : warm.frames) {
                     position += 128;
                     h.engine.setCurrentLogPosition(position);
-                    demuxer.dispatch(b, 0, b.capacity(), ts++);
+                    // RC2 S6: the FORWARDER class check is on the measured path (R1-R4, zero allocation).
+                    demuxer.dispatch(SbeDemuxer.CLASS_FORWARDER, 3L, b, 0, b.capacity(), ts++);
                 }
                 final long warmApplyErrors = demuxer.applyErrorCount();
                 final int warmLedger = S4Probe.ledgerSize(h.engine);
@@ -191,7 +192,8 @@ public class ZeroAllocDurablePathTest {
                     final UnsafeBuffer b = frames.get(i);
                     position += 128;
                     h.engine.setCurrentLogPosition(position);
-                    demuxer.dispatch(b, 0, b.capacity(), ts++);
+                    // RC2 S6: the FORWARDER class check is on the measured path (R1-R4, zero allocation).
+                    demuxer.dispatch(SbeDemuxer.CLASS_FORWARDER, 3L, b, 0, b.capacity(), ts++);
                 }
                 final long allocated = mx.getCurrentThreadAllocatedBytes() - a0 - calibration;
                 final long[] after = causes(h.engine, demuxer);
@@ -242,7 +244,7 @@ public class ZeroAllocDurablePathTest {
             final UnsafeBuffer b = frames.get(i);
             final long a = mx.getCurrentThreadAllocatedBytes();
             h.engine.setCurrentLogPosition(position + 128L * (i + 1));
-            demuxer.dispatch(b, 0, b.capacity(), ts + i);
+            demuxer.dispatchTrusted(b, 0, b.capacity(), ts + i);
             final long d = mx.getCurrentThreadAllocatedBytes() - a;
             if (d != 0) {
                 System.out.println("[S4-BISECT] frame " + i + " template " + b.getShort(2) + " allocated " + d

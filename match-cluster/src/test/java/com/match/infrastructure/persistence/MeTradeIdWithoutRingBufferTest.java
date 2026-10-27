@@ -117,7 +117,7 @@ public class MeTradeIdWithoutRingBufferTest {
             for (Entry e : log) {
                 a.apply(e);
                 c.setCurrentLogPosition(e.position);
-                dc.dispatch(new UnsafeBuffer(e.frame), 0, e.frame.length, e.timestamp);
+                dc.dispatchTrusted(new UnsafeBuffer(e.frame), 0, e.frame.length, e.timestamp);
             }
             assertTrue("non-vacuous: A's maker is gone", omsMap(a.h.engine).isEmpty());
             assertEquals("the filled maker is gone on the sink-less engine too", omsMap(a.h.engine), omsMap(c));

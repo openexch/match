@@ -50,13 +50,13 @@ public class LegacyLaneClosedTest {
         long position = 64;
         for (byte[] f : List.of(engineConfig(1, 2, G, 12, 1_000), create(78, 0, 100, 0, 59_000, 1))) {
             engine.setCurrentLogPosition(position += 128);
-            demuxer.dispatch(new UnsafeBuffer(f), 0, f.length, position);
+            demuxer.dispatchTrusted(new UnsafeBuffer(f), 0, f.length, position);
         }
         final int events = sink.events().size();
         assertEquals("the durable create published its NEW", 1, events);
         for (byte[] f : List.of(createOrder(100, 9001, 1, 59_000, 1), cancelOrder(100, 1), updateOrder(100, 1, 0, 58_000, 1))) {
             engine.setCurrentLogPosition(position += 128);
-            demuxer.dispatch(new UnsafeBuffer(f), 0, f.length, position);
+            demuxer.dispatchTrusted(new UnsafeBuffer(f), 0, f.length, position);
         }
         assertEquals("no egress for the refused legacy frames", events, sink.events().size());
         assertEquals(3, S4Probe.legacyLaneRejects(demuxer));
@@ -67,6 +67,38 @@ public class LegacyLaneClosedTest {
             one.apply(new Entry(createOrder(100, 9001, 0, 59_000, 1), 192L, 1_001L));
             assertEquals("behaviour 1: the legacy create rests", 1, resting(one.h.engine));
             assertEquals(0, S4Probe.legacyLaneRejects(one.demuxer));
+        }
+    }
+    /**
+     * RC2 S6 section 8 (precedence pin, passes on the base by construction): at behaviour 2 templates 1/2/3
+     * from GATEWAY, FORWARDER and ADMIN all meet the S4 lane refusal (legacyLaneRejects, never
+     * unauthorizedRejects); at behaviour 1 all three classes are served. REPLICA is R1 (MeSessionAuthorityTest).
+     */
+    @Test
+    public void laneRefusalIsClassIndependent() {
+        for (int c : new int[] {MeSessionAuthorityTest.GATEWAY, MeSessionAuthorityTest.FORWARDER,
+                MeSessionAuthorityTest.ADMIN}) {
+            try (Run r = fresh(1_000)) {
+                final long leg = appliedOrderId(MeSessionAuthorityTest.sendAs(r, MeSessionAuthorityTest.FORWARDER,
+                        create(77, 0, 100, 0, 59_000, 1)));
+                final byte[] before = r.r.snapshot();
+                for (byte[] f : List.of(createOrder(100, 9001, 1, 59_000, 1), cancelOrder(100, leg),
+                        updateOrder(100, leg, 0, 58_000, 1))) {
+                    assertTrue("class " + c + ": no journal", MeSessionAuthorityTest.sendAs(r, c, f).isEmpty());
+                }
+                assertEquals("class " + c, 3, S4Probe.legacyLaneRejects(r.r.demuxer));
+                assertEquals("class " + c + ": the lane refusal, not the class rows", 0,
+                        r.r.demuxer.unauthorizedRejectCount());
+                assertArrayEquals(before, r.r.snapshot());
+            }
+            try (Replica one = new Replica()) {
+                MeSessionAuthorityTest.applyAs(one, MeSessionAuthorityTest.ADMIN,
+                        new Entry(engineConfig(1, 1, 0, 0, 100_000), 64L, 1_000L));
+                MeSessionAuthorityTest.applyAs(one, c, new Entry(createOrder(100, 9001, 0, 59_000, 1), 192L, 1_001L));
+                assertEquals("behaviour 1, class " + c + ": the legacy create rests", 1, resting(one.h.engine));
+                assertEquals(0, S4Probe.legacyLaneRejects(one.demuxer));
+                assertEquals(0, one.demuxer.unauthorizedRejectCount());
+            }
         }
     }
 }

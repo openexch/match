@@ -259,8 +259,24 @@ public final class ClusterConfig
                 // Prevents session exhaustion during load tests + gateway reconnections
                 .maxConcurrentSessions(50);
 
+        // RC2 S6 (contract 2.7, 3.3, 3.5): every session authenticates against the node-local key table
+        // (ME_AUTH_KEYS / -Dmatch.auth.keys) and the minted principal rides SessionOpen to every member.
+        // Always on, on every behaviour (A1): an empty table rejects everyone, loudly; a malformed table
+        // throws here, so the node never starts with a partial table. BackupQuery, HeartbeatRequest,
+        // StandbySnapshot and AdminRequest pass the class table: REPLICA may BackupQuery, nothing else
+        // (A14). One instance of each; Aeron calls each supplier once per consensus module, and the
+        // service reads the same instances for its gauges.
+        final com.openexchange.cluster.auth.ClusterAuthenticator authenticator =
+                com.match.infrastructure.auth.MatchAuth.authenticatorFromEnvironment(consensusModuleContext::sessionTimeoutNs);
+        final com.openexchange.cluster.auth.ClassAuthorisationService authorisation =
+                com.match.infrastructure.auth.MatchAuth.authorisationService();
+        consensusModuleContext
+                .authenticatorSupplier(() -> authenticator)
+                .authorisationServiceSupplier(() -> authorisation);
+
         if (clusteredService instanceof AppClusteredService engineService) {
             engineService.readinessConsensus(consensusModuleContext);
+            engineService.sessionAuthority(authenticator, authorisation);
         }
 
         final List<ClusteredServiceContainer.Context> serviceContexts = new ArrayList<>();

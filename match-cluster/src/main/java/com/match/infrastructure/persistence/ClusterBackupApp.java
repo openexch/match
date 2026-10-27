@@ -65,6 +65,13 @@ public class ClusterBackupApp {
     static final String PROGRESS_FILE_NAME = "backup-progress.json";
 
     public static void main(final String[] args) {
+        // RC2 S6 (A14, BLOCKER-1): an S6 ME authenticates every BackupQuery, and only REPLICA may send one.
+        // Refuse to start without ME_AUTH_CREDENTIAL or with another class: a backup that cannot query
+        // would otherwise stall silently (match#36) on the first S6 deploy.
+        final com.openexchange.cluster.auth.ClusterCredentials credentials =
+                com.openexchange.cluster.auth.ClusterCredentials.requireFromEnvironment(
+                        com.match.infrastructure.auth.MatchAuth.POLICY,
+                        com.openexchange.cluster.auth.ClusterSessionClass.REPLICA);
         final ShutdownSignalBarrier barrier = new ShutdownSignalBarrier();
 
         final String clusterAddresses = getClusterAddresses();
@@ -121,19 +128,9 @@ public class ClusterBackupApp {
 
         final BackupEventsListener eventsListener = new BackupEventsListener();
 
-        final ClusterBackup.Context clusterBackupContext = new ClusterBackup.Context()
-            .aeronDirectoryName(aeronDirName)
-            .clusterDirectoryName(new File(baseDir, ClusterConfig.CLUSTER_SUB_DIR).getAbsolutePath())
-            .archiveContext(localArchiveContext.clone())
-            .clusterArchiveContext(clusterArchiveContext)
-            .clusterBackupIntervalNs(backupIntervalNs)
-            .clusterConsensusEndpoints(clusterConsensusEndpoints)
-            .consensusChannel(consensusChannel)
-            .catchupEndpoint(backupHost + ":0")
-            .catchupChannel(catchupChannel)
-            .sourceType(ClusterBackup.SourceType.LEADER)
-            .eventsListener(eventsListener)
-            .deleteDirOnStart(true);
+        final ClusterBackup.Context clusterBackupContext = backupContext(aeronDirName, baseDir,
+            localArchiveContext.clone(), clusterArchiveContext, backupIntervalNs, clusterConsensusEndpoints,
+            consensusChannel, backupHost, catchupChannel, eventsListener, credentials);
 
         MediaDriver mediaDriver = null;
         Archive archive = null;
@@ -151,6 +148,40 @@ public class ClusterBackupApp {
         } finally {
             CloseHelper.quietCloseAll(clusterBackup, archive, mediaDriver);
         }
+    }
+
+    /**
+     * The backup's ClusterBackup context, the one place it is built (main and the S6 backup-authority cluster
+     * test use it). {@code credentials} are presented with every BackupQuery: the ME's authenticator judges
+     * them and its class table lets REPLICA query, nobody else (RC2 S6 A14).
+     */
+    static ClusterBackup.Context backupContext(
+        final String aeronDirName,
+        final File baseDir,
+        final AeronArchive.Context localArchiveContext,
+        final AeronArchive.Context clusterArchiveContext,
+        final long backupIntervalNs,
+        final String clusterConsensusEndpoints,
+        final String consensusChannel,
+        final String backupHost,
+        final String catchupChannel,
+        final ClusterBackupEventsListener eventsListener,
+        final com.openexchange.cluster.auth.ClusterCredentials credentials) {
+        return new ClusterBackup.Context()
+            .aeronDirectoryName(aeronDirName)
+            .clusterDirectoryName(new File(baseDir, ClusterConfig.CLUSTER_SUB_DIR).getAbsolutePath())
+            .archiveContext(localArchiveContext)
+            .clusterArchiveContext(clusterArchiveContext)
+            .clusterBackupIntervalNs(backupIntervalNs)
+            .clusterConsensusEndpoints(clusterConsensusEndpoints)
+            .consensusChannel(consensusChannel)
+            .catchupEndpoint(backupHost + ":0")
+            .catchupChannel(catchupChannel)
+            .sourceType(ClusterBackup.SourceType.LEADER)
+            .eventsListener(eventsListener)
+            .credentialsSupplier(credentials == null ? new io.aeron.security.NullCredentialsSupplier()
+                : credentials.supplier())
+            .deleteDirOnStart(true);
     }
 
     /**

@@ -22,6 +22,12 @@
     <description>Load testing tools for the matching engine</description>
 
     <dependencies>
+        <!-- RC2 S6: the ME session credential (ME_AUTH_CREDENTIAL), one kit copy for every client. -->
+        <dependency>
+            <groupId>com.openexchange</groupId>
+            <artifactId>cluster-kit</artifactId>
+        </dependency>
+
         <!-- Internal: common code -->
         <dependency>
             <groupId>com.match</groupId>

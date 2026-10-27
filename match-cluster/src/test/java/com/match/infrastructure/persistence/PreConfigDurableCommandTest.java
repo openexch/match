@@ -61,7 +61,7 @@ public class PreConfigDurableCommandTest {
             final List<byte[]> frames = new ArrayList<>();
             for (Entry e : log) {
                 engine.setCurrentLogPosition(e.position);
-                demuxer.dispatch(new UnsafeBuffer(e.frame), 0, e.frame.length, e.timestamp);
+                demuxer.dispatchTrusted(new UnsafeBuffer(e.frame), 0, e.frame.length, e.timestamp);
                 journal.ringBuffer().read((t, b, i, n) -> {
                     final byte[] v = new byte[n];
                     b.getBytes(i, v);

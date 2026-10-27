@@ -100,10 +100,13 @@ public class DurableLedgerRetentionClusterTest {
         }
     }
 
-    private static void fresh(MeClusterHarness h, Client client) {
-        client.send(engineConfig(1, 2, G, 12, C));
-        assertTrue("record 5 on every member", MeClusterHarness.await(client.session,
-                () -> h.engineConfigRecords.get() >= MeClusterHarness.MEMBERS, 20_000));
+    private static void fresh(MeClusterHarness h, Client client) throws InterruptedException {
+        // RC2 S6 (R2): EngineConfig is ADMIN-only; the durable lane stays on the FORWARDER client.
+        try (AeronCluster admin = h.connect(com.openexchange.cluster.auth.ClusterSessionClass.ADMIN)) {
+            assertTrue("offer accepted", MeClusterHarness.offer(admin, engineConfig(1, 2, G, 12, C), 10_000) > 0);
+            assertTrue("record 5 on every member", MeClusterHarness.await(admin,
+                    () -> h.engineConfigRecords.get() >= MeClusterHarness.MEMBERS, 20_000));
+        }
     }
 
     @Test
