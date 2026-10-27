@@ -122,6 +122,17 @@ public class AppClusteredService implements ClusteredService {
     // healthy during idle markets. Session liveness is handled by Aeron's
     // protocol-level keep-alive (never enters the Raft log) — NOT by this.
     private static final long EGRESS_KEEP_WARM_INTERVAL_MS = 1_000;
+
+    // RC2 S12 W9 (D-S12-1, F-ME-1): the epoch hello. The keep-warm above is sent only when NO egress reached ANY
+    // session for 1 s, so a forwarder that connects to a busy ME never sees the meEpoch it must bind before it
+    // registers with the core. Every session opened on the leader, and every session present when the flush
+    // timer first fires as leader in a new term, gets one ClusterHeartbeat (the keep-warm encoding, current
+    // meEpoch) from the leader's flush branch; a session leaves the set only on a positive offer (kept on
+    // NOT_CONNECTED or BACK_PRESSURED) or when it closes. Node-local egress only: no replicated state, no new
+    // timer, no journal, nothing in the snapshot.
+    private final org.agrona.collections.LongHashSet epochHelloPending = new org.agrona.collections.LongHashSet();
+    private long epochHelloTerm = Long.MIN_VALUE; // the term whose first leader flush filled the set
+    private long epochHelloSentCount = 0;
     private volatile long lastEgressSendMs = 0;
 
     // Periodic full-book resnapshot: the lossy market-data egress can shed a
@@ -920,6 +931,9 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_publisher_dropped_status_total", "Reliable OMS status-egress dropped by market publishers (buffer-full or flush error; should stay 0)", eventPublisher::droppedStatusEgressTotal)
                     .counter("match_unknown_timers_total", "Fired cluster timers with no runnable", timerManager::getUnknownTimerCount)
                     .counter("match_flush_timer_fires_total", "Egress flush timer fires while leading (RC2 S6: per-term id)", () -> flushTimerFireCount)
+                    .counter("match_epoch_hello_sent_total",
+                            "ClusterHeartbeat epoch hellos sent to new sessions from the leader's flush timer (RC2 S12 W9)",
+                            () -> epochHelloSentCount)
                     .gauge("match_flush_timer_term",
                             "Leadership term of the last armed flush timer id (base + term * 1e6); -1 before any (RC2 S6)",
                             () -> flushTimerTerm)
@@ -1206,6 +1220,9 @@ public class AppClusteredService implements ClusteredService {
     private void onFlushTimer() {
         if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
             aeronBroadcaster.flush();
+
+            // RC2 S12 W9: the epoch hello, before the keep-warm (which a busy ME never sends).
+            sendEpochHellos();
 
             // Egress keep-warm: idle markets produce no market data, but the
             // gateway's stale-egress detection needs periodic egress traffic
@@ -1587,6 +1604,9 @@ public class AppClusteredService implements ClusteredService {
             haltPrincipalLess("session open", session.id(), cluster == null ? -1L : cluster.logPosition());
         }
         clientSessions.addSession(session);
+        if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
+            epochHelloPending.add(session.id()); // RC2 S12 W9: sent from the next leader flush
+        }
         System.out.println("New client session connected: " + session.id()
                 + " (total sessions=" + clientSessions.getAllSessions().size() + ")");   // match#25 diag: track session count
 
@@ -1623,6 +1643,7 @@ public class AppClusteredService implements ClusteredService {
     private void applyOnSessionClose(final ClientSession session, final long timestamp, final CloseReason closeReason) {
         context.setClusterTime(timestamp);
         clientSessions.removeSession(session);
+        epochHelloPending.remove(session.id()); // RC2 S12 W9
         // match#140: drop this session from per-session egress observability so a normally-closed
         // session can never freeze match_egress_session_last_offer_age_ms high (stale last-offer ms).
         egressSessionMetrics.removeSession(session.id());
@@ -1736,6 +1757,51 @@ public class AppClusteredService implements ClusteredService {
                 + " blackout is in progress (match_last_egress_age_ms can still read healthy if other"
                 + " sessions deliver — watch match_egress_session_last_offer_age_ms / _skips_total)");
         }
+    }
+
+    /**
+     * RC2 S12 W9: one ClusterHeartbeat (the keep-warm encoding with the current meEpoch) to every session in
+     * {@link #epochHelloPending}. On the first leader flush of a term (the term the flush timer was armed for, not
+     * the role change) every present session is added first. A session leaves the set on a positive offer only.
+     */
+    private void sendEpochHellos() {
+        if (epochHelloTerm != leadershipTermId) {
+            epochHelloTerm = leadershipTermId;
+            for (ClientSession session : clientSessions.getAllSessions()) {
+                epochHelloPending.add(session.id());
+            }
+        }
+        // A hello of meEpoch 0 tells a forwarder nothing (it ignores 0 and binds on the first non-zero epoch): while
+        // the ME is unbound (config mode before its FRESH) every hello stays pending and goes out at the first
+        // leader flush after the bind.
+        if (epochHelloPending.isEmpty() || engine.meIdentity().meEpoch() == 0) {
+            return;
+        }
+        final int length = encodeKeepWarm(keepWarmBuffer, cluster.memberId(), System.currentTimeMillis());
+        final org.agrona.collections.LongHashSet.LongIterator it = epochHelloPending.iterator();
+        while (it.hasNext()) {
+            final long id = it.nextValue();
+            final ClientSession session = cluster.getClientSession(id);
+            if (session == null) {
+                it.remove();
+                continue;
+            }
+            final long result = session.offer(keepWarmBuffer, 0, length);
+            if (result > 0) {
+                it.remove();
+                epochHelloSentCount++;
+                egressSessionMetrics.recordDelivered(session.id(), System.currentTimeMillis());
+            }
+        }
+    }
+
+    /** Test seam (RC2 S12 W9): hellos sent on this node, and sessions still waiting for one. */
+    long epochHelloSentCount() {
+        return epochHelloSentCount;
+    }
+
+    int epochHelloPendingCount() {
+        return epochHelloPending.size();
     }
 
     /**
@@ -1994,6 +2060,9 @@ public class AppClusteredService implements ClusteredService {
         // new term's first entry is polled, so the NewLeadershipTermEvent that follows arms the term's
         // id on every member and sets the flag again; the leader-only lazy arm in onSessionOpen/
         // onSessionMessage is a reschedule of that same id, never a second chain.
+        if (newRole != Cluster.Role.LEADER) {
+            epochHelloPending.clear(); // RC2 S12 W9: only the leader sends hellos
+        }
         flushTimerScheduled = false;
     }
 
