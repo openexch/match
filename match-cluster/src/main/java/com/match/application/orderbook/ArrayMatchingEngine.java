@@ -243,6 +243,11 @@ public final class ArrayMatchingEngine implements MatchingEngine {
         return (isBuy ? bidBook : askBook).cancelOrder(orderId);
     }
 
+    @Override
+    public long restingUserId(long orderId, boolean isBuy) {
+        return (isBuy ? bidBook : askBook).restingUserId(orderId);
+    }
+
     public int addOrderNoMatch(long orderId, long userId, boolean isBuy, long price, long quantity) {
         return (isBuy ? bidBook : askBook).addOrder(orderId, userId, price, quantity);
     }

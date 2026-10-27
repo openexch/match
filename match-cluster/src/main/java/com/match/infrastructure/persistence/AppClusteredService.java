@@ -778,6 +778,57 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_durable_duplicates_suppressed_total",
                             "Equal-intent duplicates of a recorded durable command suppressed under behaviour 2: nothing journaled, no journalSeq consumed (RC2 S3 X4)",
                             engine::suppressedDuplicateCount)
+                    // RC2 S4 (contract 6.4): the behaviour-2 ledger v2 gauges (0 without a v2
+                    // ledger) and one plain series per cause (NodeMetricsServer has no labels).
+                    // Volatile reads of service-thread writes.
+                    .gauge("match_command_ledger_size",
+                            "Inflight entries of the behaviour-2 durable command ledger v2; the size record 3/4 report (RC2 S4)",
+                            engine::ledgerSizeGauge)
+                    .gauge("match_command_ledger_capacity",
+                            "Recorded commandLedgerCapacity C of the ledger v2; 0 at behaviour 1 (RC2 S4)",
+                            engine::ledgerCapacityGauge)
+                    .gauge("match_command_ledger_floors",
+                            "UP_TO floors held by the ledger v2 (RC2 S4)",
+                            engine::ledgerFloorsGauge)
+                    .gauge("match_command_ledger_tombstone_ranges",
+                            "Merged ORDER tombstone ranges of the ledger v2; grows only with never-released ids (RC2 S4)",
+                            engine::ledgerRangesGauge)
+                    .counter("match_durable_released_total",
+                            "Durable commands refused RELEASED (record 3 result 7): the id is under a floor or a tombstone (RC2 S4 B2)",
+                            engine::releasedCount)
+                    .counter("match_durable_invalid_wire_total",
+                            "Behaviour-2 durable commands with a v11 header journaled INVALID (RC2 S4 B0)",
+                            engine::invalidWireCount)
+                    .counter("match_durable_invalid_kind_bits_total",
+                            "Behaviour-2 durable commands with (idLow & 3) != kind journaled INVALID (RC2 S4 B1)",
+                            engine::invalidKindBitsCount)
+                    .counter("match_durable_invalid_owner_id_total",
+                            "Behaviour-2 durable commands with omsOrderId != idHigh journaled INVALID (RC2 S4 B1, decision A3)",
+                            engine::invalidOwnerIdCount)
+                    .counter("match_durable_invalid_sign_total",
+                            "Behaviour-2 durable commands with idHigh < 1 or idLow < 0 journaled INVALID (RC2 S4 B1)",
+                            engine::invalidSignCount)
+                    .counter("match_durable_capacity_total",
+                            "Durable commands refused CAPACITY at the recorded C (RC2 S4 B4)",
+                            engine::capacityCount)
+                    .counter("match_release_applied_total",
+                            "ReleaseCommandIds entries APPLIED (a floor rise or a tombstone) (RC2 S4)",
+                            engine::releaseAppliedCount)
+                    .counter("match_release_noop_total",
+                            "ReleaseCommandIds entries that changed no state (RC2 S4)",
+                            engine::releaseNoopCount)
+                    .counter("match_release_leg_live_total",
+                            "ORDER releases refused LEG_LIVE: a leg naming the order still rests (RC2 S4)",
+                            engine::releaseLegLiveCount)
+                    .counter("match_release_noop_frames_total",
+                            "ReleaseCommandIds frames whose entries were all NOOP: nothing journaled, no journalSeq (RC2 S4, decision A1)",
+                            engine::releaseNoopFrameCount)
+                    .counter("match_dark_command_releases_total",
+                            "Record 4 release frames applied but not journaled because the settlement journal is off on this node (RC2 S4)",
+                            eventPublisher::getDarkCommandReleaseCount)
+                    .counter("match_legacy_lane_rejects_total",
+                            "Legacy CreateOrder/CancelOrder/UpdateOrder frames refused at behaviour 2 (RC2 S4, decision A2)",
+                            sbeDemuxer::legacyLaneRejectCount)
                     .counter("match_dark_command_outcomes_total",
                             "Durable command outcomes applied but not journaled because the settlement journal is off on this node; OMS cannot resolve them from this node",
                             eventPublisher::getDarkCommandOutcomeCount)

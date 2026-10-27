@@ -21,6 +21,10 @@ import static org.junit.Assert.*;
  * RC2 S2 contract 2.2: the snapshot identity block (marker 3). Layout and position, the forced
  * envelope, the empty-ledger shape, every reader refusal, the unsigned behaviour version and the
  * restore order in both launch modes.
+ *
+ * <p>RC2 S4 (contract 9.2, delta 12.6): a behaviour-2 image is envelope 2 and the identity block is
+ * followed by the ledger v2 block (marker 4, also when empty); the "withLedger" images record a
+ * core-shaped CREATE {@code (9001, 0)} with {@code omsOrderId 9001} (B1).</p>
  */
 public class SnapshotIdentityBlockTest {
 
@@ -40,7 +44,7 @@ public class SnapshotIdentityBlockTest {
         h.apply(config, 64L);
         if (withLedger) {
             h.engine.setCurrentLogPosition(192L);
-            h.engine.acceptDurable(new DurableOrderIntent(17, 1, 100, 9001, 0, FixedPoint.fromDouble(59_000),
+            h.engine.acceptDurable(new DurableOrderIntent(9001, 0, 100, 9001, 0, FixedPoint.fromDouble(59_000),
                     FixedPoint.fromDouble(1), 0, BehaviourTwoHarness.MARKET, 0, 0, 0), 1_000L);
         }
         h.drain();
@@ -49,7 +53,22 @@ public class SnapshotIdentityBlockTest {
 
     private static boolean enveloped(byte[] image) {
         final UnsafeBuffer b = new UnsafeBuffer(image);
-        return image.length >= 20 && b.getLong(0) < 0 && b.getInt(8) == 1 && b.getInt(12) == image.length - 20;
+        return image.length >= 20 && b.getLong(0) < 0 && (b.getInt(8) == 1 || b.getInt(8) == 2)
+                && b.getInt(12) == image.length - 20;
+    }
+
+    private static int envelopeVersion(byte[] image) {
+        return new UnsafeBuffer(image).getInt(8);
+    }
+
+    /** RC2 S4: an empty ledger v2 block (marker 4) with capacity {@code c}. */
+    private static byte[] emptyLedgerV2(int c) {
+        final byte[] out = new byte[21];
+        final UnsafeBuffer b = new UnsafeBuffer(out);
+        b.putByte(0, (byte) 4);
+        b.putInt(1, 2);
+        b.putInt(5, c);
+        return out;
     }
 
     private static byte[] payload(byte[] image) {
@@ -57,12 +76,17 @@ public class SnapshotIdentityBlockTest {
         return Arrays.copyOfRange(image, 20, image.length);
     }
 
-    /** Wrap {@code payload} in the durable envelope (magic taken from {@code magicSource}). */
+    /** Wrap {@code payload} in the durable envelope 2 (magic taken from {@code magicSource}). */
     private static byte[] envelope(byte[] magicSource, byte[] payload) {
+        return envelope(magicSource, payload, 2);
+    }
+
+    /** Wrap {@code payload} in the durable envelope {@code version}. */
+    private static byte[] envelope(byte[] magicSource, byte[] payload, int version) {
         final byte[] out = new byte[payload.length + 20];
         final UnsafeBuffer b = new UnsafeBuffer(out);
         b.putLong(0, new UnsafeBuffer(magicSource).getLong(0));
-        b.putInt(8, 1);
+        b.putInt(8, version);
         b.putInt(12, payload.length);
         final java.util.zip.CRC32C crc = new java.util.zip.CRC32C();
         crc.update(payload, 0, payload.length);
@@ -109,13 +133,17 @@ public class SnapshotIdentityBlockTest {
              BehaviourTwoHarness one = at(config(1, 1, 0, 0, 100_000), false)) {
             final byte[] b1 = image(one);
             assertFalse("behaviour 1, empty ledger: no envelope (S1 shape)", enveloped(b1));
-            final byte[] p2 = payload(image(two));
-            assertEquals("payload = behaviour-1 image + 41-byte block, no marker-2 block",
-                    b1.length + 41, p2.length);
+            final byte[] i2 = image(two);
+            assertEquals("RC2 S4: behaviour 2 is envelope 2", 2, envelopeVersion(i2));
+            final byte[] p2 = payload(i2);
+            assertEquals("payload = behaviour-1 image + 41-byte block + empty 21-byte ledger v2 block",
+                    b1.length + 41 + 21, p2.length);
             assertArrayEquals("the bytes before the block are the S1 bytes",
                     b1, Arrays.copyOf(p2, b1.length));
             assertArrayEquals(identityBlock(1, 2, 50_000, 12, G, G, 2),
-                    Arrays.copyOfRange(p2, b1.length, p2.length));
+                    Arrays.copyOfRange(p2, b1.length, b1.length + 41));
+            assertArrayEquals("RC2 S4: the empty ledger v2 block ends the payload", emptyLedgerV2(50_000),
+                    Arrays.copyOfRange(p2, b1.length + 41, p2.length));
         }
     }
 
@@ -129,9 +157,19 @@ public class SnapshotIdentityBlockTest {
             final int split = p1.length - ledgerLength;
             assertEquals("ledger marker", 2, p1[split]);
             // RC2 S3: FRESH took journalSeq 1 and the durable outcome 2, so the block carries 3.
-            final byte[] expected = concat(concat(Arrays.copyOf(p1, split),
-                    identityBlock(1, 2, 50_000, 12, G, G, 3)), Arrays.copyOfRange(p1, split, p1.length));
-            assertArrayEquals(expected, p2);
+            final byte[] expectedPrefix = concat(Arrays.copyOf(p1, split), identityBlock(1, 2, 50_000, 12, G, G, 3));
+            assertArrayEquals(expectedPrefix, Arrays.copyOf(p2, expectedPrefix.length));
+            // RC2 S4: then the ledger v2 block with the one entry (132 B), not the v1 block.
+            final UnsafeBuffer v2 = new UnsafeBuffer(Arrays.copyOfRange(p2, expectedPrefix.length, p2.length));
+            assertEquals("ledger v2 block length", 21 + 132, v2.capacity());
+            assertEquals("marker 4", 4, v2.getByte(0));
+            assertEquals("block version 2", 2, v2.getInt(1));
+            assertEquals("capacity C", 50_000, v2.getInt(5));
+            assertEquals("one inflight", 1, v2.getInt(9));
+            assertEquals("no floor", 0, v2.getInt(13));
+            assertEquals("no range", 0, v2.getInt(17));
+            assertEquals("idHigh", 9001L, v2.getLong(21));
+            assertEquals("idLow", 0L, v2.getLong(29));
         }
     }
 
@@ -154,15 +192,26 @@ public class SnapshotIdentityBlockTest {
             final byte[] good = image(two);
             final byte[] p = payload(good);
             final byte[] prefix = image(one);
+            // RC2 S4: every case carries the (valid, empty) ledger v2 block after the identity block,
+            // so each is refused for its identity-block defect, not for a missing marker 4.
+            final byte[] tail = emptyLedgerV2(50_000);
+
+            // Control: the hand-built shape of a good block is accepted.
+            final Engine control = Engine.deferredUntilConfig();
+            final byte[] built = envelope(good, concat(concat(prefix, identityBlock(1, 2, 50_000, 12, G, G, 2)), tail));
+            SnapshotCodec.deserialize(new UnsafeBuffer(built), 0, built.length, control);
+            assertEquals(G, control.meIdentity().meEpoch());
 
             assertRefused("identity block without the envelope", p);
             assertRefused("truncated block", envelope(good, Arrays.copyOf(p, p.length - 8)));
-            assertRefused("block version 2", envelope(good, concat(prefix, identityBlock(2, 2, 50_000, 12, G, G, 2))));
-            assertRefused("behaviour 1 in the block", envelope(good, concat(prefix, identityBlock(1, 1, 50_000, 12, G, G, 2))));
-            assertRefused("meEpoch != genesisId", envelope(good, concat(prefix, identityBlock(1, 2, 50_000, 12, G, G + 1, 2))));
-            assertRefused("nextJournalSeq 1", envelope(good, concat(prefix, identityBlock(1, 2, 50_000, 12, G, G, 1))));
+            assertRefused("block version 2", envelope(good, concat(concat(prefix, identityBlock(2, 2, 50_000, 12, G, G, 2)), tail)));
+            assertRefused("behaviour 1 in the block", envelope(good, concat(concat(prefix, identityBlock(1, 1, 50_000, 12, G, G, 2)), tail)));
+            assertRefused("meEpoch != genesisId", envelope(good, concat(concat(prefix, identityBlock(1, 2, 50_000, 12, G, G + 1, 2)), tail)));
+            assertRefused("nextJournalSeq 1", envelope(good, concat(concat(prefix, identityBlock(1, 2, 50_000, 12, G, G, 1)), tail)));
             assertRefused("structurally invalid four (ceiling 11)",
-                    envelope(good, concat(prefix, identityBlock(1, 2, 50_000, 11, G, G, 2))));
+                    envelope(good, concat(concat(prefix, identityBlock(1, 2, 50_000, 11, G, G, 2)), tail)));
+            assertRefused("RC2 S4: an S2-shape image (envelope 1 with the identity block)",
+                    envelope(good, concat(prefix, identityBlock(1, 2, 50_000, 12, G, G, 2)), 1));
 
             // No config block before it: a config-less image followed by the block.
             final Engine legacy = new Engine("direct");
@@ -170,7 +219,7 @@ public class SnapshotIdentityBlockTest {
                 final byte[] noConfig = image(legacy);
                 assertFalse(enveloped(noConfig));
                 assertRefused("no config block precedes it",
-                        envelope(good, concat(noConfig, identityBlock(1, 2, 50_000, 12, G, G, 2))));
+                        envelope(good, concat(concat(noConfig, identityBlock(1, 2, 50_000, 12, G, G, 2)), tail)));
             } finally {
                 legacy.close();
             }
@@ -217,7 +266,8 @@ public class SnapshotIdentityBlockTest {
             assertEquals(recorded, configMode.getEngineConfig().describe());
             assertEquals(identity, configMode.meIdentity().toString());
             assertNotNull("engines rebuilt from the 10-field config", configMode.getEngine(BehaviourTwoHarness.MARKET));
-            assertEquals(1, configMode.commandLedger().size());
+            assertEquals("RC2 S4: the ledger v2 carries the entry", 1, configMode.ledgerV2().size());
+            assertEquals(0, configMode.commandLedger().size());
 
             final Engine legacyMode = new Engine("array");
             try {

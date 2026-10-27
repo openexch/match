@@ -57,11 +57,18 @@ import java.util.Arrays;
  * </pre>
  *
  * <p><b>Note for future tails:</b> every optional block starts with a distinct marker byte:
- * 1 config, 3 identity, 2 ledger; 4 is reserved for the S4 ledger v2 block.</p>
+ * 1 config, 3 identity, 2 ledger v1, 4 ledger v2 (RC2 S4).</p>
+ *
+ * <p><b>RC2 S4 (contract section 7):</b> at a recorded behaviour >= 2 the image is ALWAYS envelope
+ * version 2 and its payload is the positional body (omsMap section included), the config block,
+ * the identity block and the ledger v2 block (marker 4, also when empty), and nothing after it.
+ * Behaviour 1 keeps envelope version 1 exactly as before (only with a non-empty v1 ledger). The
+ * reader accepts envelope 1 only without markers 3 and 4, and envelope 2 only with 1, 3, 4 in that
+ * order, and then checks R1-R11 (R11: the omsMap keys and the resting legs are in bijection).</p>
  *
  * <pre>
- *   Durable envelope (whenever the ledger is non-empty or the identity block is present):
- *   [DURABLE_MAGIC : long][envelope version : int = 1][payload length : int][CRC32C : int][payload]</pre>
+ *   Durable envelope (behaviour 1: whenever the ledger is non-empty; behaviour >= 2: always):
+ *   [DURABLE_MAGIC : long][envelope version : int = 1 | 2][payload length : int][CRC32C : int][payload]</pre>
  *
  * <p>All scalars use the buffer's native byte order (Agrona default), identical to the
  * historical inline encode/decode.</p>
@@ -78,6 +85,9 @@ public final class SnapshotCodec {
     static final int IDENTITY_BLOCK_VERSION = 1;
     /** RC2 S2: marker + version + 3 ints + 3 longs. */
     static final int IDENTITY_BLOCK_LENGTH = 1 + 4 + 4 + 4 + 4 + 8 + 8 + 8;
+    /** RC2 S4: envelope versions. 1 = behaviour 1 (ledger v1); 2 = behaviour >= 2 (ledger v2). */
+    static final int ENVELOPE_V1 = 1;
+    static final int ENVELOPE_V2 = 2;
     private SnapshotCodec() {
     }
 
@@ -268,13 +278,25 @@ public final class SnapshotCodec {
             pos += 8;
         }
 
-        if (engine.commandLedger().size() > 0) {
+        if (identityBlock) {
+            // RC2 S4 (contract 7.1): the ledger v2 block, always (empty too), and envelope 2.
+            final com.match.application.engine.DurableCommandLedgerV2 ledger = engine.ledgerV2();
+            if (ledger == null) {
+                throw new IllegalStateException("[SNAPSHOT] behaviour " + config.behaviorVersion
+                        + " engine without a ledger v2: refusing to write a snapshot");
+            }
+            if (engine.commandLedger().size() > 0) {
+                throw new IllegalStateException("[SNAPSHOT] behaviour " + config.behaviorVersion
+                        + " engine holds " + engine.commandLedger().size() + " ledger v1 entries");
+            }
+            pos = ledger.write(dst, pos);
+        } else if (engine.commandLedger().size() > 0) {
             pos = engine.commandLedger().write(dst, pos);
         }
         if (engine.commandLedger().size() > 0 || identityBlock) {
             byte[] payload = new byte[pos]; dst.getBytes(0,payload);
             var crc = new java.util.zip.CRC32C(); crc.update(payload,0,payload.length);
-            dst.putLong(0,DURABLE_MAGIC); dst.putInt(8,1); dst.putInt(12,pos);
+            dst.putLong(0,DURABLE_MAGIC); dst.putInt(8, identityBlock ? ENVELOPE_V2 : ENVELOPE_V1); dst.putInt(12,pos);
             dst.putInt(16,(int)crc.getValue()); dst.putBytes(20,payload); pos+=20;
         }
         return pos;
@@ -306,8 +328,11 @@ public final class SnapshotCodec {
             throw new IllegalStateException("Invalid snapshot frame");
         final int originalOffset = offset;
         boolean durableEnvelope = src.getLong(offset)==DURABLE_MAGIC;
+        // RC2 S4: envelope 2 = a behaviour >= 2 image (ledger v2, R1-R11).
+        final boolean envelopeV2 = durableEnvelope && src.getInt(offset + 8) == ENVELOPE_V2;
         if (durableEnvelope) {
-            if (src.getInt(offset+8)!=1 || src.getInt(offset+12)!=length-20)
+            final int envelopeVersion = src.getInt(offset + 8);
+            if ((envelopeVersion != ENVELOPE_V1 && envelopeVersion != ENVELOPE_V2) || src.getInt(offset+12)!=length-20)
                 throw new IllegalStateException("Unsupported/truncated durable snapshot");
             byte[] payload = new byte[length-20]; src.getBytes(offset+20,payload);
             var crc = new java.util.zip.CRC32C(); crc.update(payload,0,payload.length);
@@ -393,17 +418,39 @@ public final class SnapshotCodec {
         // so a hand-built partial buffer (unit tests) or a pre-v9 snapshot lacking this section
         // decodes cleanly; a real v9 snapshot always carries at least the 4-byte count. Restored
         // directly into the engine — no Decoded field is needed.
-        final Long2LongHashMap omsMap = engine.getOrderIdToOmsOrderId();
-        omsMap.clear();
+        // RC2 S4 (contract 5.2): written through LegIndex (clear + restore per pair), never into the
+        // raw map. Envelope 2 (R11): the section is mandatory, its keys strictly ascending and its
+        // values >= 1; the bijection with the resting legs is checked once the books are restored.
+        final com.match.application.engine.LegIndex legIndex = engine.legIndex();
+        legIndex.clear();
+        int omsMapCount = -1;
+        if (envelopeV2 && end - pos < 4) {
+            throw new IllegalStateException("[SNAPSHOT] R11: envelope 2 without the omsMap section (corrupt snapshot)");
+        }
         if (pos + 4 <= end) {
-            final int omsMapCount = src.getInt(pos);
+            omsMapCount = src.getInt(pos);
             pos += 4;
+            if (envelopeV2 && (omsMapCount < 0 || (long) omsMapCount * 16 > end - pos)) {
+                throw new IllegalStateException("[SNAPSHOT] R11: omsMap count " + omsMapCount + " out of range (corrupt snapshot)");
+            }
+            long previousKey = 0;
             for (int i = 0; i < omsMapCount; i++) {
                 final long orderId = src.getLong(pos);
                 pos += 8;
                 final long omsOrderId = src.getLong(pos);
                 pos += 8;
-                omsMap.put(orderId, omsOrderId);
+                if (envelopeV2) {
+                    if (i > 0 && orderId <= previousKey) {
+                        throw new IllegalStateException("[SNAPSHOT] R11: omsMap keys not strictly ascending at "
+                                + i + " (orderId " + orderId + ") (corrupt snapshot)");
+                    }
+                    if (omsOrderId < 1) {
+                        throw new IllegalStateException("[SNAPSHOT] R11: omsMap value " + omsOrderId + " for orderId "
+                                + orderId + " (corrupt snapshot)");
+                    }
+                    previousKey = orderId;
+                }
+                legIndex.restore(orderId, omsOrderId);
             }
         }
 
@@ -414,6 +461,11 @@ public final class SnapshotCodec {
         // corrupt snapshot.
         boolean engineConfigPresent = false;
         boolean identityPresent = false;
+        boolean ledgerV2Restored = false;
+        if (envelopeV2 && !(pos + 1 <= end && src.getByte(pos) == 1)) {
+            throw new IllegalStateException("[SNAPSHOT] envelope 2 without the engineConfig block (marker 1)"
+                    + " (corrupt snapshot)");
+        }
         if (pos + 1 <= end && src.getByte(pos) == IDENTITY_MARKER) {
             throw new IllegalStateException("[SNAPSHOT] identity block without a preceding engineConfig"
                     + " block (corrupt snapshot)");
@@ -462,6 +514,12 @@ public final class SnapshotCodec {
                 if (!durableEnvelope) {
                     throw new IllegalStateException("[SNAPSHOT] identity block in an image without the"
                             + " durable envelope (no CRC, no end check): corrupt snapshot");
+                }
+                if (!envelopeV2) {
+                    // RC2 S4 (7.1): an S2/S3-shape image (envelope 1 + identity) was never deployed.
+                    throw new IllegalStateException("[SNAPSHOT] identity block (marker 3) in an envelope-1"
+                            + " image: a behaviour >= 2 image is envelope 2 with a ledger v2 block (corrupt or"
+                            + " pre-S4 snapshot)");
                 }
                 if (end - pos < IDENTITY_BLOCK_LENGTH) {
                     throw new IllegalStateException("[SNAPSHOT] truncated identity block: "
@@ -551,6 +609,17 @@ public final class SnapshotCodec {
                 // RC2 S3: through the engine, which turns dense journalSeq allocation on.
                 engine.restoreIdentity(meEpoch, nextJournalSeq, behaviorVersion);
             }
+            if (envelopeV2) {
+                if (!identityPresent) {
+                    throw new IllegalStateException("[SNAPSHOT] envelope 2 without the identity block (marker 3)"
+                            + " after the config block (corrupt snapshot)");
+                }
+                // RC2 S4 R1-R10: the ledger v2 block ends the payload.
+                engine.restoreLedgerV2(com.match.application.engine.DurableCommandLedgerV2.read(
+                        src, pos, end, commandLedgerCapacity));
+                pos = end;
+                ledgerV2Restored = true;
+            }
         } else if (enginesWereEmpty && !parkedMarketIds.isEmpty()) {
             // Config-mode node restoring a snapshot that has market books but NO config block:
             // nothing to build engines from — this is state loss and must be loud, never silent.
@@ -566,15 +635,57 @@ public final class SnapshotCodec {
                     + " snapshot?");
         }
 
-        if (pos < end && src.getByte(pos) == 2) pos = engine.commandLedger().read(src,pos,end);
+        if (ledgerV2Restored) {
+            engine.commandLedger().clear();
+            checkLegBijection(engine, omsMapCount, rejected);
+        } else if (durableEnvelope && pos < end && src.getByte(pos) == com.match.application.engine.DurableCommandLedgerV2.MARKER) {
+            throw new IllegalStateException("[SNAPSHOT] ledger v2 block (marker 4) in an envelope-1 image (corrupt snapshot)");
+        } else if (pos < end && src.getByte(pos) == 2) pos = engine.commandLedger().read(src,pos,end);
         else {
-            // Inside the envelope a missing ledger is legal only when the identity block forced it.
-            if (durableEnvelope && !identityPresent) throw new IllegalStateException("Durable snapshot ledger missing");
+            // Inside envelope 1 the v1 ledger block is mandatory (it is why the envelope exists).
+            if (durableEnvelope) throw new IllegalStateException("Durable snapshot ledger missing");
             engine.commandLedger().clear();
         }
         if (durableEnvelope && pos!=end) throw new IllegalStateException("Durable snapshot has trailing bytes");
         return new Decoded(orderIdGen, tradeIdGen, timerCorrelationId, timerPresent,
                 rejected, pos - originalOffset, engineConfigPresent, identityPresent);
+    }
+
+    /**
+     * RC2 S4 R11 (envelope 2, both directions of I6): every book restored every order, the number
+     * of resting orders over all books equals the omsMap count, and every key rests on some book,
+     * so keys and resting legs are in bijection (the keys are already strictly ascending).
+     */
+    private static void checkLegBijection(Engine engine, int omsMapCount, int rejectedOrders) {
+        if (rejectedOrders != 0) {
+            throw new IllegalStateException("[SNAPSHOT] R11: " + rejectedOrders + " order(s) refused by a book at"
+                    + " restore (corrupt snapshot)");
+        }
+        long resting = 0;
+        final Int2ObjectHashMap<MatchingEngine> engines = engine.getEngines();
+        final Int2ObjectHashMap<MatchingEngine>.ValueIterator values = engines.values().iterator();
+        while (values.hasNext()) {
+            final MatchingEngine me = values.next();
+            resting += me.getBidOrders().length / 4 + me.getAskOrders().length / 4;
+        }
+        if (resting != omsMapCount) {
+            throw new IllegalStateException("[SNAPSHOT] R11: " + resting + " resting order(s) but " + omsMapCount
+                    + " omsMap key(s): a resting leg without a key or a key without a leg (corrupt snapshot)");
+        }
+        final Long2LongHashMap.KeyIterator keys = engine.getOrderIdToOmsOrderId().keySet().iterator();
+        while (keys.hasNext()) {
+            final long orderId = keys.nextValue();
+            boolean rests = false;
+            final Int2ObjectHashMap<MatchingEngine>.ValueIterator it = engines.values().iterator();
+            while (it.hasNext() && !rests) {
+                final MatchingEngine me = it.next();
+                rests = me.restingUserId(orderId, true) != -1L || me.restingUserId(orderId, false) != -1L;
+            }
+            if (!rests) {
+                throw new IllegalStateException("[SNAPSHOT] R11: omsMap key " + orderId + " rests on no book"
+                        + " (orphan key) (corrupt snapshot)");
+            }
+        }
     }
 
     /** Slice C: read the fixed 16-byte NUL-padded ASCII symbol written by {@link #putPaddedSymbol}. */

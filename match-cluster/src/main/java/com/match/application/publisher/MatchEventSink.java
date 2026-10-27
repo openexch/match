@@ -32,6 +32,30 @@ public interface MatchEventSink {
     }
 
     /**
+     * RC2 S4 (contract section 8, delta 12.14): the behaviour-2 form of record 3. The outcome is the
+     * engine's single mutable scratch, a view: implementations must not retain it after the call (a
+     * recorder copies). Behaviour 1 keeps the record form above.
+     *
+     * @param ledgerSizeAfter the ledger v2 size after this outcome (+1 only for B5-B7)
+     * @param ledgerCapacity  the recorded commandLedgerCapacity C
+     */
+    default void publishCommandOutcome(long egressSeq, long journalSeq,
+                                       com.match.domain.commands.DurableOutcomeView outcome,
+                                       int ledgerSizeAfter, int ledgerCapacity) {
+    }
+
+    /**
+     * RC2 S4 (contract 4.3, section 8): journal-only side output of one {@code ReleaseCommandIds}
+     * frame with at least one APPLIED or LEG_LIVE entry (ME journal record 4). The arrays are the
+     * engine's preallocated scratch (first {@code count} used): never retain them.
+     */
+    default void publishCommandRelease(long egressSeq, long journalSeq, long releaseSeq, int ledgerSize,
+                                       int ledgerCapacity, int tombstoneRanges, int count,
+                                       long[] commandIdHigh, long[] idLowFloor, int[] scope,
+                                       int[] result, int[] removed) {
+    }
+
+    /**
      * RC2 S2: journal-only side output of a FRESH or BUMP EngineConfig decision (ME journal
      * record 5). Node configuration decides whether it is journaled, never replicated state.
      *

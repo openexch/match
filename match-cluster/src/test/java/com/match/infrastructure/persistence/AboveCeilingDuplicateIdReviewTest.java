@@ -30,7 +30,7 @@ public class AboveCeilingDuplicateIdReviewTest {
             final var applied = BehaviourTwoHarness.record3(first.get(0));
             assertEquals(DurableCommandOutcome.APPLIED, applied.result());
             final long orderId = applied.orderId();
-            assertEquals(1, r.h.engine.commandLedger().size());
+            assertEquals(1, r.h.engine.ledgerV2().size());
 
             final List<byte[]> above = r.apply(new Entry(withHeaderVersion(create, 13), 320L, 1_002L));
             assertEquals(1, above.size());
@@ -39,7 +39,7 @@ public class AboveCeilingDuplicateIdReviewTest {
             assertEquals(0L, invalid.orderId());
             assertEquals(320L, invalid.appliedPosition());
             assertEquals("ledger size unchanged", 1, invalid.ledgerSize());
-            assertEquals(1, r.h.engine.commandLedger().size());
+            assertEquals(1, r.h.engine.ledgerV2().size());
             assertEquals(1, r.demuxer.aboveCeilingInvalidCount());
 
             // The v12 retry still meets the ORIGINAL ledger entry (the INVALID was never recorded):
@@ -48,11 +48,12 @@ public class AboveCeilingDuplicateIdReviewTest {
             final List<byte[]> retry = r.apply(new Entry(create, 448L, 1_003L));
             assertTrue("the equal duplicate journals nothing", retry.isEmpty());
             assertEquals(1L, r.h.engine.suppressedDuplicateCount());
-            assertEquals(1, r.h.engine.commandLedger().size());
+            assertEquals(1, r.h.engine.ledgerV2().size());
             assertEquals("the retry consumes no journalSeq", seqBeforeRetry,
                     r.h.engine.meIdentity().nextJournalSeq());
-            assertNotNull("the original APPLIED leg is still the recorded one",
-                    r.h.engine.commandLedger().owner(orderId));
+            // RC2 S4: the ledger v2 keeps the original outcome under the core-shaped id (9001, 1 << 2).
+            assertEquals("the original APPLIED outcome is still the recorded one", orderId,
+                    r.h.engine.ledgerV2().get(9001, 1L << 2).orderId());
             assertEquals(0, r.demuxer.applyErrorCount());
         }
     }
