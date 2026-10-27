@@ -77,6 +77,29 @@ public final class OrderRejectReason {
      * engines exist from boot. A distinct code because reject codes are user-visible wire values.
      */
     public static final int ENGINE_NOT_CONFIGURED = 11;
+    /**
+     * RC2 S5 (behaviour 2): the unfilled remainder of an IOC limit order, or of a market order that
+     * exhausted the opposite book, was cancelled (never rested). Carried on the CANCELLED terminal.
+     */
+    public static final int IOC_REMAINDER = 12;
+    /** RC2 S5 (behaviour 2): a FOK order could not fill completely within the match cap; nothing traded. */
+    public static final int FOK_UNFILLABLE = 13;
+    /**
+     * RC2 S5 (behaviour 2): a bounded market buy ran out of budget before its quantity (CANCELLED
+     * with the true filled quantity), or could not pay one unit at the best ask (REJECTED). Also the
+     * report of the budget-divide overflow stop, unreachable from the core (notional caps).
+     */
+    public static final int BUDGET_EXHAUSTED = 14;
+    /**
+     * RC2 S5 (behaviour 2): an amend whose old leg's in-window fills reached or passed the new
+     * target: the old leg is cancelled and nothing is placed (record 3 REJECTED, oldCancelled 1).
+     */
+    public static final int AMEND_NO_REMAINDER = 15;
+    /**
+     * RC2 S5 (behaviour 2): an amend whose old leg has MORE remaining than the core's
+     * expectedOldRemaining (a wrong reference): REJECTED, the old leg is left as it is.
+     */
+    public static final int AMEND_REMAINING_MISMATCH = 16;
 
     private OrderRejectReason() {} // Constants only
 
@@ -94,6 +117,11 @@ public final class OrderRejectReason {
             case NO_LIQUIDITY: return "NO_LIQUIDITY";
             case ORDER_NOT_FOUND: return "ORDER_NOT_FOUND";
             case ENGINE_NOT_CONFIGURED: return "ENGINE_NOT_CONFIGURED";
+            case IOC_REMAINDER: return "IOC_REMAINDER";
+            case FOK_UNFILLABLE: return "FOK_UNFILLABLE";
+            case BUDGET_EXHAUSTED: return "BUDGET_EXHAUSTED";
+            case AMEND_NO_REMAINDER: return "AMEND_NO_REMAINDER";
+            case AMEND_REMAINING_MISMATCH: return "AMEND_REMAINING_MISMATCH";
             default: return "UNKNOWN(" + reason + ")";
         }
     }

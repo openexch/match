@@ -4,6 +4,7 @@ package com.match.infrastructure.persistence;
 import com.match.application.engine.BehaviourTwoHarness.Shape;
 import com.match.application.engine.Engine;
 import com.match.application.orderbook.MatchingEngine;
+import com.match.application.orderbook.S5Probe;
 import com.match.domain.commands.DurableCommandOutcome;
 import com.match.infrastructure.mejournal.generated.CommandOutcomeDecoder;
 import org.agrona.collections.Int2ObjectHashMap;
@@ -31,7 +32,10 @@ import static org.junit.Assert.*;
  * resting legs whose omsOrderId is {@code o}; again after a serialize/restore round trip. Seeded
  * fuzz on the array book (small capacity: BOOK_FULL) and the direct book (2 per level:
  * LEVEL_FULL), with fills, partial fills, amends, cancels, market orders and maker rejects, on a
- * journaled member and on a sink-less member side by side.
+ * journaled member and on a sink-less member side by side. RC2 S5: the mix also carries native IOC
+ * and FOK creates, bounded market buys (quantity and budget) and amends whose reference includes
+ * in-window fills (and an occasional wrong reference), and no IOC/FOK id ever keeps an omsMap key
+ * or a resting leg after its command.
  */
 public class LegIndexInvariantTest {
 
@@ -69,6 +73,8 @@ public class LegIndexInvariantTest {
         final Random rnd = new Random(seed);
         final Set<Long> omsIds = new HashSet<>();
         final List<Leg> legs = new ArrayList<>();
+        final Set<Long> immediateIds = new HashSet<>();
+        int immediate = 0, reduced = 0;
         try (Replica journaled = new Replica(Engine.deferredUntilConfig(), Shape.JOURNALED);
              Replica sinkless = new Replica(Engine.deferredUntilConfig(), Shape.SINKLESS)) {
             long position = 64, ts = 1_000;
@@ -85,14 +91,19 @@ public class LegIndexInvariantTest {
                 if (pick < 5 || legs.isEmpty()) {
                     final long h = nextH++;
                     omsIds.add(h);
-                    final int kindOfCreate = rnd.nextInt(10);
+                    final int kindOfCreate = rnd.nextInt(12);
                     if (kindOfCreate < 7) {
                         frame = create(h, 0, 100 + rnd.nextInt(4), side, price, qty);
+                    } else if (kindOfCreate >= 10) {
+                        // RC2 S5: native IOC (10) / FOK (11).
+                        frame = durableRaw(h, 0, CREATE, 100 + rnd.nextInt(4), h, 0, side, fp(price), fp(qty), 0,
+                                LIMIT, kindOfCreate - 9, 0);
                     } else if (kindOfCreate < 9) {
                         frame = createOfType(h, 0, 100 + rnd.nextInt(4), side, price, qty, LIMIT_MAKER);
                     } else {
-                        // MARKET: a buy spends a budget, a sell sizes by quantity.
-                        frame = durableRaw(h, 0, CREATE, 100, h, 0, side, 0, side == 1 ? fp(qty) : 0,
+                        // MARKET: a buy spends a budget bounded by its quantity (RC2 S5 9.1), a sell
+                        // sizes by quantity.
+                        frame = durableRaw(h, 0, CREATE, 100, h, 0, side, 0, fp(qty),
                                 side == 0 ? fp(qty * 60_000) : 0, MARKET, 0, 0);
                     }
                 } else {
@@ -101,8 +112,19 @@ public class LegIndexInvariantTest {
                     if (rnd.nextBoolean()) {
                         frame = cancel(leg.h, attempt, leg.user, leg.orderId);
                     } else {
+                        // RC2 S5 9.1: the leg's current remaining (test access), plus in-window fills
+                        // the core has not seen yet; >= 1 when the leg no longer rests (B6 answers first).
+                        final MatchingEngine me = journaled.h.engine.getEngine(1);
+                        final long remaining = S5Probe.restingRemaining(me, leg.orderId, leg.side == 0);
+                        final int r = rnd.nextInt(8);
+                        final long expected = remaining <= 0 ? fp(1)
+                                : r < 3 ? remaining + fp(1 + rnd.nextInt(2)) : r == 3 && remaining > 1 ? remaining - 1
+                                : remaining;
+                        if (remaining > 0 && expected > remaining) {
+                            reduced++;
+                        }
                         frame = amend(leg.h, attempt, leg.user, leg.orderId, leg.side, price, qty,
-                                rnd.nextInt(4) == 0 ? LIMIT_MAKER : LIMIT);
+                                rnd.nextInt(4) == 0 ? LIMIT_MAKER : LIMIT, expected);
                     }
                 }
                 position += 128;
@@ -111,6 +133,10 @@ public class LegIndexInvariantTest {
                 assertTrue(sinkless.apply(new Entry(frame, position, ts)).isEmpty());
                 for (byte[] fr : of(f, 3)) {
                     final CommandOutcomeDecoder o = record3(fr);
+                    if (o.commandKind() == 0 && o.timeInForce() != 0 && o.result() == DurableCommandOutcome.APPLIED) {
+                        immediateIds.add(o.orderId());
+                        immediate++;
+                    }
                     if (o.result() == DurableCommandOutcome.APPLIED && o.orderId() > 0 && o.status() <= 1) {
                         applied++;
                         legs.add(new Leg(o.orderId(), o.commandIdHigh(), o.userId(), o.commandKind() == 2
@@ -118,9 +144,20 @@ public class LegIndexInvariantTest {
                     }
                 }
                 check(journaled.h.engine, omsIds, name + " seed " + seed + " entry " + i + " (journaled)");
+                for (long id : immediateIds) {
+                    final MatchingEngine me = journaled.h.engine.getEngine(1);
+                    assertFalse(name + ": IOC/FOK " + id + " has an omsMap key",
+                            journaled.h.engine.getOrderIdToOmsOrderId().containsKey(id));
+                    assertEquals(name + ": IOC/FOK " + id + " rests", -1L,
+                            S5Probe.restingRemaining(me, id, true) & S5Probe.restingRemaining(me, id, false));
+                }
                 check(sinkless.h.engine, omsIds, name + " seed " + seed + " entry " + i + " (sink-less)");
             }
             assertTrue(name + ": non-vacuous applies", applied > 200);
+            System.out.println("[S5] LegIndexInvariantTest " + name + " seed " + seed + ": IOC/FOK applied " + immediate
+                    + ", amends with in-window fills " + reduced);
+            assertTrue(name + ": IOC/FOK applied", immediate > 50);
+            assertTrue(name + ": amends with in-window fills", reduced > 5);
             assertTrue(name + ": trades happened", journaled.h.engine.getTradeIdGenerator() > 100);
             final byte[] image = journaled.snapshot();
             assertArrayEquals(name + ": sink-less snapshot", image, sinkless.snapshot());

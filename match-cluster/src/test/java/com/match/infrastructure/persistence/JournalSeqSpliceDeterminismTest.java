@@ -35,7 +35,7 @@ public class JournalSeqSpliceDeterminismTest {
         f.add(durableCreate(3, 200, 9003, 0, 59_001, 2));               // 4 equal duplicate: suppressed
         f.add(durableCreate(3, 200, 9003, 0, 59_002, 2));               // 5 CONFLICT
         f.add(durableCreate(4, 300, 9004, 0, 58_000, 1));               // 6 bid rests (order 4)
-        f.add(durable(5, 2, 300, 9004, 4, 0, 58_500, 1, 0, 0));         // 7 replace 4 -> order 5
+        f.add(durable(5, 2, 300, 9004, 4, 0, 58_500, 1, 0, com.match.domain.FixedPoint.fromDouble(1))); // 7 replace 4 -> order 5
         f.add(createOrder(400, 9010, 1, 58_500, 1));                    // 8 legacy taker: trade, maker 5 FILLED
         f.add(cancelOrder(100, 99));                                    // 9 legacy cancel ack
         f.add(durableCreate(1, 100, 9001, 1, 59_000, 1));               // 10 retry of entry 1: suppressed

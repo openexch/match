@@ -808,6 +808,39 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_durable_invalid_sign_total",
                             "Behaviour-2 durable commands with idHigh < 1 or idLow < 0 journaled INVALID (RC2 S4 B1)",
                             engine::invalidSignCount)
+                    .counter("match_durable_invalid_tif_total",
+                            "Behaviour-2 durable commands with a timeInForce outside the allow-list journaled INVALID (RC2 S5 3.1)",
+                            engine::invalidTifCount)
+                    .counter("match_durable_invalid_amend_reference_total",
+                            "Behaviour-2 UPDATEs with expectedOldRemaining 0 journaled INVALID (RC2 S5 3.1)",
+                            engine::invalidAmendReferenceCount)
+                    .counter("match_durable_invalid_amend_type_total",
+                            "Behaviour-2 UPDATEs with orderType MARKET journaled INVALID (RC2 S5 3.1)",
+                            engine::invalidAmendTypeCount)
+                    .counter("match_tif_ioc_total",
+                            "Behaviour-2 IOC limit creates applied (RC2 S5)",
+                            engine::iocCount)
+                    .counter("match_tif_ioc_remainder_total",
+                            "Behaviour-2 IOC limit creates that ended CANCELLED with a remainder (RC2 S5)",
+                            engine::iocRemainderCount)
+                    .counter("match_tif_fok_total",
+                            "Behaviour-2 FOK limit creates applied (RC2 S5)",
+                            engine::fokCount)
+                    .counter("match_tif_fok_unfillable_total",
+                            "Behaviour-2 FOK limit creates CANCELLED FOK_UNFILLABLE by the pre-walk (RC2 S5)",
+                            engine::fokUnfillableCount)
+                    .counter("match_market_budget_exhausted_total",
+                            "Behaviour-2 market buys ended by the budget before the quantity bound (RC2 S5 section 4)",
+                            engine::marketBudgetExhaustedCount)
+                    .counter("match_amend_reduced_total",
+                            "Behaviour-2 amends that placed a leg reduced by in-window fills (RC2 S5 5.1)",
+                            engine::amendReducedCount)
+                    .counter("match_amend_no_remainder_total",
+                            "Behaviour-2 amends whose in-window fills reached the new quantity: leg cancelled, nothing placed (RC2 S5 5.1)",
+                            engine::amendNoRemainderCount)
+                    .counter("match_amend_remaining_mismatch_total",
+                            "Behaviour-2 amends refused because the leg's remaining exceeds expectedOldRemaining (RC2 S5 5.1)",
+                            engine::amendRemainingMismatchCount)
                     .counter("match_durable_capacity_total",
                             "Durable commands refused CAPACITY at the recorded C (RC2 S4 B4)",
                             engine::capacityCount)

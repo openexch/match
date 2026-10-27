@@ -61,7 +61,7 @@ public class S4ReviewZeroAllocFullMixTest {
         f.add(cancel(h0 + 4, 1, 999, id0 + 4));                                        // WRONG_OWNER
         f.add(create(h0 + 4, 0, 100, 1, P, 2));                                        // suppressed duplicate
         f.add(createOn(2, h0 + 16, 0, 100, 1, P, 1));                                  // UNKNOWN_MARKET
-        f.add(amend(h0 + 5, 3, 100, id0 + 5, 1, P + 1, 2, LIMIT));                    // replace -> id0+16
+        f.add(amend(h0 + 5, 3, 100, id0 + 5, 1, P + 1, 2, LIMIT, fp(2)));                    // replace -> id0+16
         p.commands += 16 + 7;
         f.add(releaseFrame(h0, order(h0 + 4)));                                        // LEG_LIVE
         f.add(cancel(h0 + 4, 2, 100, id0 + 4));

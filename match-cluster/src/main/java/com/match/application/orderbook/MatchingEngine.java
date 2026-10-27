@@ -25,7 +25,28 @@ public interface MatchingEngine {
     /** Process a limit order against the opposing book, resting any remainder. Returns match count. */
     int processLimitOrder(long orderId, long userId, boolean isBuy, long price, long quantity);
 
-    /** Process a market order (buy uses budget, sell uses quantity). Returns match count. */
+    /**
+     * RC2 S5 (contract 3.3): the sweep of {@link #processLimitOrder}, unchanged (same level loop,
+     * same per-level match, same cap), and then NO rest: the taker side is never touched. Afterwards
+     * {@link #getLastRestRejectReason()} is MATCH_LIMIT when the cap fired with a remainder,
+     * IOC_REMAINDER for any other remainder, NONE when the taker filled. Returns match count.
+     */
+    int processLimitOrderNoRest(long orderId, long userId, boolean isBuy, long price, long quantity);
+
+    /**
+     * RC2 S5 (contract 3.3, 3.5): true iff {@link #processLimitOrderNoRest} with these arguments
+     * would fill {@code quantity} completely with the cap flag clear. Read-only and allocation-free:
+     * walks the crossing makers order by order in sweep order, at most {@code maxMatchesPerOrder} of
+     * them, and mutates nothing (no head advance, no slot freed, no version bump).
+     */
+    boolean canFillCompletely(boolean isBuy, long price, long quantity);
+
+    /**
+     * Process a market order. Sell: sized by {@code quantity}. Buy: spends {@code budget}; RC2 S5
+     * (contract section 4): a buy with {@code quantity > 0} is also bounded by that quantity, and a
+     * buy with {@code quantity <= 0} is unbounded (budget only, the behaviour-1 sweep). Returns
+     * match count.
+     */
     int processMarketOrder(long orderId, long userId, boolean isBuy, long quantity, long budget);
 
     /** Add an order directly without matching (LIMIT_MAKER). Returns an OrderRejectReason code. */
@@ -40,6 +61,12 @@ public interface MatchingEngine {
      * cancelled, filled or never-seen id and a reused slot all read -1. Read-only, allocation-free.
      */
     long restingUserId(long orderId, boolean isBuy);
+
+    /**
+     * RC2 S5 (contract 5.4): the remaining quantity of {@code orderId} if it rests on the given
+     * side, else -1. The guards of {@link #restingUserId}. Read-only, allocation-free.
+     */
+    long restingRemaining(long orderId, boolean isBuy);
 
     // ==================== Validation ====================
 

@@ -52,6 +52,9 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     // remaining (i.e. the taker was terminated at the cap). Reset at the start of each order.
     private boolean matchLimitReached;
 
+    // RC2 S5 (contract section 4): the current market buy is bounded by its quantity.
+    private boolean buyBounded;
+
     public ArrayMatchingEngine(long basePrice, long maxPrice, long tickSize, int capacity) {
         this(basePrice, maxPrice, tickSize, capacity, MAX_MATCHES_PER_ORDER);
     }
@@ -93,13 +96,40 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     // ==================== Order processing ====================
 
     public int processLimitOrder(long orderId, long userId, boolean isBuy, long price, long quantity) {
+        sweepLimit(isBuy, price, quantity);
+
+        if (takerRemainingQty > 0) {
+            if (matchLimitReached) {
+                // match#93: the cap truncated the sweep with crossing liquidity still on the book.
+                // Resting the remainder would cross the book (a bid above unreached asks). Surface it
+                // through the existing rest-reject path so Engine publishes a terminal CANCELLED with
+                // the true filled quantity — never a resting, crossed remainder.
+                lastRestRejectReason = OrderRejectReason.MATCH_LIMIT;
+            } else {
+                ArrayOrderBook takerBook = isBuy ? bidBook : askBook;
+                lastRestRejectReason = takerBook.addOrder(orderId, userId, price, takerRemainingQty);
+            }
+        }
+        return matchCount;
+    }
+
+    /** RC2 S5 (contract 3.3): the sweep of {@link #processLimitOrder}, then no rest. */
+    public int processLimitOrderNoRest(long orderId, long userId, boolean isBuy, long price, long quantity) {
+        sweepLimit(isBuy, price, quantity);
+        if (takerRemainingQty > 0) {
+            lastRestRejectReason = matchLimitReached ? OrderRejectReason.MATCH_LIMIT : OrderRejectReason.IOC_REMAINDER;
+        }
+        return matchCount;
+    }
+
+    /** The limit sweep shared by {@link #processLimitOrder} and {@link #processLimitOrderNoRest}. */
+    private void sweepLimit(boolean isBuy, long price, long quantity) {
         matchCount = 0;
         takerRemainingQty = quantity;
         lastRestRejectReason = OrderRejectReason.NONE;
         matchLimitReached = false;
 
         ArrayOrderBook makerBook = isBuy ? askBook : bidBook;
-        ArrayOrderBook takerBook = isBuy ? bidBook : askBook;
 
         if (!makerBook.isEmpty()) {
             int node = makerBook.getBestLevel();
@@ -112,19 +142,35 @@ public final class ArrayMatchingEngine implements MatchingEngine {
                 node = makerBook.nextLevel(levelPrice);
             }
         }
+    }
 
-        if (takerRemainingQty > 0) {
-            if (matchLimitReached) {
-                // match#93: the cap truncated the sweep with crossing liquidity still on the book.
-                // Resting the remainder would cross the book (a bid above unreached asks). Surface it
-                // through the existing rest-reject path so Engine publishes a terminal CANCELLED with
-                // the true filled quantity — never a resting, crossed remainder.
-                lastRestRejectReason = OrderRejectReason.MATCH_LIMIT;
-            } else {
-                lastRestRejectReason = takerBook.addOrder(orderId, userId, price, takerRemainingQty);
+    /**
+     * RC2 S5 (contract 3.3, 3.5): the FOK pre-walk. The crossing makers in sweep order (levels
+     * best-first with the sweep's break rule, FIFO within a level, every chained slot is live on the
+     * array book), at most {@code maxMatchesPerOrder} of them: true at the first maker whose
+     * cumulative quantity reaches {@code quantity}, false when it would take maker cap + 1 or the
+     * crossing makers run out. Pure reads only.
+     */
+    public boolean canFillCompletely(boolean isBuy, long price, long quantity) {
+        long need = quantity;
+        if (need <= 0) return true;
+        final ArrayOrderBook makerBook = isBuy ? askBook : bidBook;
+        int makers = 0;
+        int node = makerBook.getBestLevel();
+        while (node != NIL) {
+            final long levelPrice = makerBook.getLevelPrice(node);
+            if (isBuy ? levelPrice > price : levelPrice < price) return false;
+            int slot = makerBook.levelHeadSlot(node);
+            while (slot != -1) {
+                if (makers == maxMatchesPerOrder) return false;
+                makers++;
+                need -= makerBook.slotQuantity(slot);
+                if (need <= 0) return true;
+                slot = makerBook.slotNext(slot);
             }
+            node = makerBook.nextLevel(levelPrice);
         }
-        return matchCount;
+        return false;
     }
 
     public int processMarketOrder(long orderId, long userId, boolean isBuy, long quantity, long budget) {
@@ -138,8 +184,14 @@ public final class ArrayMatchingEngine implements MatchingEngine {
 
         if (isBuy) {
             takerRemainingBudget = budget;
+            // RC2 S5 (contract section 4): quantity > 0 bounds the buy (behaviour 2); quantity <= 0
+            // is the behaviour-1 budget-only sweep, structurally unchanged (the bound never reads).
+            buyBounded = quantity > 0;
+            if (buyBounded) {
+                takerRemainingQty = quantity;
+            }
             int node = makerBook.getBestLevel();
-            while (node != NIL && takerRemainingBudget > 0) {
+            while (node != NIL && takerRemainingBudget > 0 && (!buyBounded || takerRemainingQty > 0)) {
                 long levelPrice = makerBook.getLevelPrice(node);
                 matchMarketBuyAtLevel(makerBook, node, levelPrice);
                 if (matchLimitReached) break; // cap fired mid-sweep
@@ -194,7 +246,8 @@ public final class ArrayMatchingEngine implements MatchingEngine {
 
     /** Match a market buy (budget-based) against orders at one level. */
     private void matchMarketBuyAtLevel(ArrayOrderBook book, int node, long price) {
-        while (takerRemainingBudget > 0 && book.getOrderCount(node) > 0) {
+        // RC2 S5 FIX-6: with a bound, the cap check below is reached only while quantity remains.
+        while (takerRemainingBudget > 0 && (!buyBounded || takerRemainingQty > 0) && book.getOrderCount(node) > 0) {
             if (matchCount >= maxMatchesPerOrder) {
                 // match#93: cap fired mid-sweep with crossing liquidity still here — terminate at cap.
                 matchLimitReached = true;
@@ -219,6 +272,9 @@ public final class ArrayMatchingEngine implements MatchingEngine {
                 break;
             }
             long matchQty = Math.min(maxBuyQty, makerQty);
+            if (buyBounded) {
+                matchQty = Math.min(matchQty, takerRemainingQty);
+            }
             if (matchQty <= 0) break;
 
             // Cannot overflow: matchQty <= maxBuyQty = trunc(budget/price), so
@@ -235,6 +291,9 @@ public final class ArrayMatchingEngine implements MatchingEngine {
             matchCount++;
 
             takerRemainingBudget -= cost;
+            if (buyBounded) {
+                takerRemainingQty -= matchQty;
+            }
             if (book.reduceHead(node, matchQty)) break;
         }
     }
@@ -246,6 +305,11 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     @Override
     public long restingUserId(long orderId, boolean isBuy) {
         return (isBuy ? bidBook : askBook).restingUserId(orderId);
+    }
+
+    @Override
+    public long restingRemaining(long orderId, boolean isBuy) {
+        return (isBuy ? bidBook : askBook).restingRemaining(orderId);
     }
 
     public int addOrderNoMatch(long orderId, long userId, boolean isBuy, long price, long quantity) {

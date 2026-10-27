@@ -1,0 +1,26 @@
+# RC2 S5 (behaviour 2): the amend correction (D6, G27). The core mints quantity = newQty - F0 and
+# exp = Q - F0; the ME places newQty - F whatever fills landed in the window.
+GENESIS behaviour=2
+MARKET BTC_USD
+CLOCK 1000
+DCREATE u=100 side=ASK px=60000.0 qty=10.0 oms=1 attempt=0                    # order 1: leg L rests 10
+DCREATE u=200 side=BID px=60000.0 qty=3.0 oms=2 attempt=0                     # order 2 fills 3 of L (in the window)
+DUPDATE u=100 order=1 side=ASK px=60000.0 qty=8.0 oms=1 attempt=1 exp=10.0    # mint saw 0 fills: order 3 rests 5
+DCREATE u=201 side=BID px=60000.0 qty=3.0 oms=4 attempt=0                     # order 4 fills 3 of order 3 (2 left)
+DUPDATE u=100 order=3 side=ASK px=60000.0 qty=1.0 oms=1 attempt=2 exp=5.0     # target 4 from F0 3: no remainder, REJECTED 15
+CLOCK 2000
+DCREATE u=100 side=ASK px=60005.0 qty=10.0 oms=5 attempt=0                    # order 5 rests 10
+DUPDATE u=100 order=5 side=ASK px=60006.0 qty=8.0 oms=5 attempt=1 exp=4.0     # wrong reference: REJECTED 16, leg intact
+DUPDATE u=100 order=5 side=ASK px=60006.0 qty=8.0 oms=5 attempt=2 exp=10.0    # no fill: the wire quantity, order 6 rests 8
+DUPDATE u=100 order=6 side=ASK px=60006.0 qty=8.0 oms=5 attempt=3 exp=0.0     # INVALID (zero reference)
+DUPDATE u=100 order=6 side=ASK type=MARKET px=60006.0 qty=8.0 oms=5 attempt=4 exp=8.0  # INVALID (MARKET amend)
+CLOCK 3000
+DCREATE u=100 side=ASK type=LIMIT_MAKER px=60010.0 qty=6.0 oms=7 attempt=0    # order 7: post-only leg 6
+DCREATE u=202 side=BID px=60010.0 qty=10.0 oms=8 attempt=0                    # order 8: fills order 6 (8) and 2 of order 7
+SNAPSHOT
+DCREATE u=300 side=BID px=59990.0 qty=8.0 oms=9 attempt=0                     # order 9 rests 8
+DUPDATE u=100 order=7 side=ASK type=LIMIT_MAKER px=60011.0 qty=6.0 oms=7 attempt=1 exp=6.0  # order 10: reduced 4, rests post-only
+DCREATE u=100 side=ASK px=60008.0 qty=8.0 oms=10 attempt=0                    # order 11 rests 8 (best ask)
+DCREATE u=203 side=BID px=60008.0 qty=2.0 oms=11 attempt=0                    # order 12 fills 2 of order 11
+DUPDATE u=100 order=11 side=ASK px=59990.0 qty=8.0 oms=10 attempt=1 exp=8.0   # order 13: reduced 6 crosses order 9, FILLED
+DCANCEL u=300 order=9 oms=9 attempt=1                                         # order 9 cancelled (2 left)

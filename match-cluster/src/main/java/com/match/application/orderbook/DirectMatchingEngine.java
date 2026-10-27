@@ -37,6 +37,9 @@ public class DirectMatchingEngine implements MatchingEngine {
     // remaining (i.e. the taker was terminated at the cap). Reset at the start of each order.
     private boolean matchLimitReached;
 
+    // RC2 S5 (contract section 4): the current market buy is bounded by its quantity.
+    private boolean buyBounded;
+
     // Order books (bid and ask sides)
     private final DirectIndexOrderBook askBook;
     private final DirectIndexOrderBook bidBook;
@@ -115,13 +118,41 @@ public class DirectMatchingEngine implements MatchingEngine {
     }
 
     public int processLimitOrder(long orderId, long userId, boolean isBuy, long price, long quantity) {
+        sweepLimit(isBuy, price, quantity);
+
+        if (takerRemainingQty > 0) {
+            if (matchLimitReached) {
+                // match#93: the cap truncated the sweep with crossing liquidity still on the book.
+                // Resting the remainder would cross the book (a bid above unreached asks). Surface it
+                // through the existing rest-reject path so Engine publishes a terminal CANCELLED with
+                // the true filled quantity — never a resting, crossed remainder.
+                lastRestRejectReason = OrderRejectReason.MATCH_LIMIT;
+            } else {
+                DirectIndexOrderBook takerBook = isBuy ? bidBook : askBook;
+                lastRestRejectReason = takerBook.addOrder(orderId, userId, price, takerRemainingQty);
+            }
+        }
+
+        return matchCount;
+    }
+
+    /** RC2 S5 (contract 3.3): the sweep of {@link #processLimitOrder}, then no rest. */
+    public int processLimitOrderNoRest(long orderId, long userId, boolean isBuy, long price, long quantity) {
+        sweepLimit(isBuy, price, quantity);
+        if (takerRemainingQty > 0) {
+            lastRestRejectReason = matchLimitReached ? OrderRejectReason.MATCH_LIMIT : OrderRejectReason.IOC_REMAINDER;
+        }
+        return matchCount;
+    }
+
+    /** The limit sweep shared by {@link #processLimitOrder} and {@link #processLimitOrderNoRest}. */
+    private void sweepLimit(boolean isBuy, long price, long quantity) {
         matchCount = 0;
         takerRemainingQty = quantity;
         lastRestRejectReason = OrderRejectReason.NONE;
         matchLimitReached = false;
 
         DirectIndexOrderBook makerBook = isBuy ? askBook : bidBook;
-        DirectIndexOrderBook takerBook = isBuy ? bidBook : askBook;
 
         // Match against opposing book
         if (!makerBook.isEmpty()) {
@@ -143,20 +174,45 @@ public class DirectMatchingEngine implements MatchingEngine {
                 priceIdx = makerBook.nextPriceIndex(priceIdx);
             }
         }
+    }
 
-        if (takerRemainingQty > 0) {
-            if (matchLimitReached) {
-                // match#93: the cap truncated the sweep with crossing liquidity still on the book.
-                // Resting the remainder would cross the book (a bid above unreached asks). Surface it
-                // through the existing rest-reject path so Engine publishes a terminal CANCELLED with
-                // the true filled quantity — never a resting, crossed remainder.
-                lastRestRejectReason = OrderRejectReason.MATCH_LIMIT;
-            } else {
-                lastRestRejectReason = takerBook.addOrder(orderId, userId, price, takerRemainingQty);
+    /**
+     * RC2 S5 (contract 3.3, FIX-2, 3.5): the FOK pre-walk. Navigation through the pure
+     * getBestPriceIndex / nextPriceIndex; within a level the chain is read through the pure slot
+     * accessors, NEVER getHeadOrder* (they advance the head and free tombstone slots). The per-level
+     * walk is the exact acc3fe3 bound of compactLevel / getActiveOrders: at most maxOrdersPerLevel
+     * nodes ({@code guard = maxOrdersPerLevel + 1; --guard > 0}), so a full level is walked to its
+     * last order; tombstones (quantity 0) are skipped and the level stops after its live count.
+     */
+    public boolean canFillCompletely(boolean isBuy, long price, long quantity) {
+        long need = quantity;
+        if (need <= 0) return true;
+        final DirectIndexOrderBook makerBook = isBuy ? askBook : bidBook;
+        if (makerBook.isEmpty()) return false;
+        final int maxOrdersPerLevel = makerBook.getMaxOrdersPerLevel();
+        int makers = 0;
+        int priceIdx = makerBook.getBestPriceIndex();
+        while (priceIdx >= 0) {
+            final long levelPrice = makerBook.getBasePrice() + (long) priceIdx * makerBook.getTickSize();
+            if (isBuy ? levelPrice > price : levelPrice < price) return false;
+            final int live = makerBook.getOrderCount(priceIdx);
+            int seen = 0;
+            int slot = makerBook.levelHeadSlot(priceIdx);
+            int guard = maxOrdersPerLevel + 1;
+            while (seen < live && slot >= 0 && slot < maxOrdersPerLevel && --guard > 0) {
+                final long qty = makerBook.slotQuantity(priceIdx, slot);
+                if (qty > 0) {
+                    if (makers == maxMatchesPerOrder) return false;
+                    makers++;
+                    seen++;
+                    need -= qty;
+                    if (need <= 0) return true;
+                }
+                slot = makerBook.slotNext(priceIdx, slot);
             }
+            priceIdx = makerBook.nextPriceIndex(priceIdx);
         }
-
-        return matchCount;
+        return false;
     }
 
     /**
@@ -183,9 +239,15 @@ public class DirectMatchingEngine implements MatchingEngine {
         if (isBuy) {
             // Market buy - spend budget
             takerRemainingBudget = budget;
+            // RC2 S5 (contract section 4): quantity > 0 bounds the buy (behaviour 2); quantity <= 0
+            // is the behaviour-1 budget-only sweep, structurally unchanged (the bound never reads).
+            buyBounded = quantity > 0;
+            if (buyBounded) {
+                takerRemainingQty = quantity;
+            }
             int priceIdx = makerBook.getBestPriceIndex();
 
-            while (priceIdx >= 0 && takerRemainingBudget > 0) {
+            while (priceIdx >= 0 && takerRemainingBudget > 0 && (!buyBounded || takerRemainingQty > 0)) {
                 long levelPrice = makerBook.getBasePrice() +
                     (long) priceIdx * makerBook.getTickSize();
 
@@ -255,7 +317,8 @@ public class DirectMatchingEngine implements MatchingEngine {
      * Match market buy at a price level (budget-based)
      */
     private void matchMarketBuyAtLevel(DirectIndexOrderBook book, int priceIdx, long price) {
-        while (takerRemainingBudget > 0 && book.getOrderCount(priceIdx) > 0) {
+        // RC2 S5 FIX-6: with a bound, the cap check below is reached only while quantity remains.
+        while (takerRemainingBudget > 0 && (!buyBounded || takerRemainingQty > 0) && book.getOrderCount(priceIdx) > 0) {
             // Stop matching if limit reached to prevent unbounded execution
             if (matchCount >= maxMatchesPerOrder) {
                 // match#93: cap fired mid-sweep with crossing liquidity still here — terminate at cap.
@@ -282,6 +345,9 @@ public class DirectMatchingEngine implements MatchingEngine {
                 break;
             }
             long matchQty = Math.min(maxBuyQty, makerQty);
+            if (buyBounded) {
+                matchQty = Math.min(matchQty, takerRemainingQty);
+            }
 
             if (matchQty <= 0) break;
 
@@ -299,6 +365,9 @@ public class DirectMatchingEngine implements MatchingEngine {
 
             // Update
             takerRemainingBudget -= cost;
+            if (buyBounded) {
+                takerRemainingQty -= matchQty;
+            }
             book.reduceOrderQuantity(makerOrderId, matchQty);
         }
     }
@@ -314,6 +383,11 @@ public class DirectMatchingEngine implements MatchingEngine {
     @Override
     public long restingUserId(long orderId, boolean isBuy) {
         return (isBuy ? bidBook : askBook).restingUserId(orderId);
+    }
+
+    @Override
+    public long restingRemaining(long orderId, boolean isBuy) {
+        return (isBuy ? bidBook : askBook).restingRemaining(orderId);
     }
 
     /**
