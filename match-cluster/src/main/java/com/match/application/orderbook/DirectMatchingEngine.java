@@ -512,6 +512,15 @@ public class DirectMatchingEngine implements MatchingEngine {
         // intentionally empty
     }
 
+    /**
+     * RC2 S13 W-ME3: empty. The flush thread reads the live book and the live book version here, so the
+     * version fix of the restore (Engine.republishRestoredBooks) is all a restored direct book needs.
+     */
+    @Override
+    public void republishTopOfBook() {
+        // intentionally empty
+    }
+
     public void collectTopLevels(int maxLevels) {
         synchronized (snapshotLock) {
             int levels = Math.min(maxLevels, MAX_PUBLISH_LEVELS);

@@ -1590,6 +1590,30 @@ public class Engine {
         return engines.get(marketId);
     }
 
+    /**
+     * RC2 S13 W-ME3 (contract 8.3): after a snapshot restore, label every configured market's restored
+     * state with the snapshot position {@code p} and publish it past the dirty gate. Without it a market
+     * with no command since the restore publishes book version 0 (the version is not in the snapshot)
+     * and, on the array engine, an empty top, so every resnapshot of that market sends nothing.
+     *
+     * <p>Egress only. The book version has no reader other than {@link #acceptOrder}'s
+     * {@code max(current + 1, logPosition)} and the publish path; every command after the restore sits
+     * at a log position above {@code p}, so that {@code max} gives it the command's position on every
+     * replica, restored or not. Neither the version nor the published top is serialised by the
+     * snapshot codec.</p>
+     *
+     * @return the number of market engines republished
+     */
+    public int republishRestoredBooks(long p) {
+        int n = 0;
+        for (MatchingEngine e : engines.values()) {
+            e.setBookVersion(Math.max(e.getBookVersion(), p));
+            e.republishTopOfBook();
+            n++;
+        }
+        return n;
+    }
+
     public void close() {
         // No resources to close
     }
