@@ -17,6 +17,7 @@ import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * Regression test for match#115: the emitted Book* stream must be chain-continuous — every
@@ -48,6 +49,7 @@ public class MarketPublisherBookChainTest {
         bc = new BookFrameCapturingBroadcaster();
         pub.setMatchingEngine(engine);
         pub.setBroadcaster(bc);
+        S13Seams.apply(pub);
     }
 
     /** Rest a bid at {@code BASE + ticksAboveBase * TICK} (no asks in the test, so nothing matches). */
@@ -127,10 +129,137 @@ public class MarketPublisherBookChainTest {
         }
     }
 
+    // ---- RC2 S13 W-ME2 (contract 8.2, F-S13-1; RC-B2, CL-B-1 item 4) ----
+
+    private static String describe(List<BookFrame> frames) {
+        return frames.isEmpty() ? "length 0" : frames.toString();
+    }
+
+    @Test
+    public void emptiedBookPublishesAllDeleteDelta() {
+        restBid(6);
+        restBid(7);
+        restBid(8);
+        commit(1000);
+        pub.flushBuffers();
+        assertEquals("initial full snapshot expected", 1, bc.frames.size());
+        engine.cancelOrder(1, true);
+        engine.cancelOrder(2, true);
+        engine.cancelOrder(3, true);
+        commit(2000);
+        bc.frames.clear();
+        pub.flushBuffers();
+        if (bc.frames.size() != 1 || !bc.frames.get(0).isDelta) {
+            fail("expected a BookDelta after the last level went, got " + describe(bc.frames));
+        }
+        final BookFrame d = bc.frames.get(0);
+        assertEquals(2000, d.bookVersion);
+        assertEquals("chains to the last emitted frame", 1000, d.fromVersion);
+        assertEquals("one DELETE per vanished level", List.of(2, 2, 2), d.updateTypes);
+        // and the chain continues from the empty state
+        restBid(9);
+        commit(3000);
+        bc.frames.clear();
+        pub.flushBuffers();
+        assertEquals(1, bc.frames.size());
+        assertEquals(2000, bc.frames.get(0).fromVersion);
+        assertEquals(List.of(0), bc.frames.get(0).updateTypes);
+        // second cycle of the reset (FIX-2): empty again, then silent
+        engine.cancelOrder(4, true);
+        commit(4000);
+        bc.frames.clear();
+        pub.flushBuffers();
+        if (bc.frames.size() != 1 || !bc.frames.get(0).isDelta) {
+            fail("expected a BookDelta after the last level went again, got " + describe(bc.frames));
+        }
+        assertEquals(4000, bc.frames.get(0).bookVersion);
+        assertEquals("chains to the NEW frame", 3000, bc.frames.get(0).fromVersion);
+        assertEquals("one DELETE for the one vanished level", List.of(2), bc.frames.get(0).updateTypes);
+        bc.frames.clear();
+        pub.flushBuffers();
+        assertEquals("the emptied state was published, the next flush is silent", "length 0", describe(bc.frames));
+    }
+
+    @Test
+    public void emptyBookAfterResnapshotSendsEmptySnapshot() {
+        restBid(6);
+        commit(1000);
+        pub.flushBuffers();
+        engine.cancelOrder(1, true);
+        commit(2000);
+        pub.flushBuffers();
+        bc.requestResnapshot();
+        bc.frames.clear();
+        pub.flushBuffers();
+        if (bc.frames.size() != 1 || bc.frames.get(0).isDelta) {
+            fail("expected an empty BookSnapshot after the resnapshot, got " + describe(bc.frames));
+        }
+        assertEquals(2000, bc.frames.get(0).bookVersion);
+        assertEquals(0, bc.frames.get(0).levels);
+        // a consumer holding the empty snapshot (FIX-2): the returning level chains from it
+        restBid(7);
+        commit(3000);
+        bc.frames.clear();
+        pub.flushBuffers();
+        if (bc.frames.size() != 1 || !bc.frames.get(0).isDelta) {
+            fail("expected a BookDelta from the empty snapshot, got " + describe(bc.frames));
+        }
+        assertEquals("chains to the empty snapshot", 2000, bc.frames.get(0).fromVersion);
+        assertEquals(3000, bc.frames.get(0).bookVersion);
+        assertEquals("one NEW", List.of(0), bc.frames.get(0).updateTypes);
+        // the reset's second cycle, from the non-empty side
+        bc.requestResnapshot();
+        bc.frames.clear();
+        pub.flushBuffers();
+        if (bc.frames.size() != 1 || bc.frames.get(0).isDelta) {
+            fail("expected a BookSnapshot after the second resnapshot, got " + describe(bc.frames));
+        }
+        assertEquals(3000, bc.frames.get(0).bookVersion);
+        assertEquals(1, bc.frames.get(0).levels);
+    }
+
+    @Test
+    public void emptyBookWithNothingPublishedStaysSilent() {
+        // a versioned empty book: the published state is empty (W-ME2 sends it once after a reset) ...
+        restBid(6);
+        engine.cancelOrder(1, true);
+        commit(1000);
+        pub.flushBuffers();
+        final int afterFirst = bc.frames.size();
+        assertEquals("the empty state was published once", 1, afterFirst);
+        // ... and an add + cancel between two flushes changes the side versions, not the empty state
+        restBid(7);
+        engine.cancelOrder(2, true);
+        commit(2000);
+        pub.flushBuffers();
+        pub.flushBuffers();
+        assertEquals("no frame while the published state is empty and stays empty", afterFirst, bc.frames.size());
+    }
+
+    @Test
+    public void emptyNeverMutatedMarketStaysSilentAfterResnapshot() {
+        pub.flushBuffers();
+        bc.requestResnapshot();
+        pub.flushBuffers();
+        if (!bc.frames.isEmpty()) {
+            final BookFrame f = bc.frames.get(0);
+            fail("expected no frame for a never-mutated market, got " + (f.isDelta ? "BookDelta" : "BookSnapshot")
+                    + " bookVersion " + f.bookVersion);
+        }
+    }
+
     private static final class BookFrame {
         boolean isDelta;
         long bookVersion;
         long fromVersion;
+        int levels;                                   // snapshot: bid + ask levels
+        final List<Integer> updateTypes = new ArrayList<>(); // delta: raw update type per change
+
+        @Override
+        public String toString() {
+            return (isDelta ? "BookDelta{from=" + fromVersion + " " : "BookSnapshot{levels=" + levels + " ")
+                    + "bookVersion=" + bookVersion + "}";
+        }
     }
 
     /** Captures broadcast() BookSnapshot/BookDelta frames, decoding versions immediately. */
@@ -139,10 +268,21 @@ public class MarketPublisherBookChainTest {
         final BookSnapshotDecoder snapshotDecoder = new BookSnapshotDecoder();
         final BookDeltaDecoder deltaDecoder = new BookDeltaDecoder();
         final List<BookFrame> frames = new ArrayList<>();
+        long generation;
 
         @Override
         public boolean hasSubscribers() {
             return true;
+        }
+
+        @Override
+        public void requestResnapshot() {
+            generation++;
+        }
+
+        @Override
+        public long resnapshotGeneration() {
+            return generation;
         }
 
         @Override
@@ -158,11 +298,20 @@ public class MarketPublisherBookChainTest {
                 f.isDelta = false;
                 f.bookVersion = snapshotDecoder.bookVersion();
                 f.fromVersion = -1;
+                for (BookSnapshotDecoder.BidsDecoder ignored : snapshotDecoder.bids()) {
+                    f.levels++; // a group is read in order: walk the bids before the asks
+                }
+                for (BookSnapshotDecoder.AsksDecoder ignored : snapshotDecoder.asks()) {
+                    f.levels++;
+                }
             } else if (header.templateId() == BookDeltaDecoder.TEMPLATE_ID) {
                 deltaDecoder.wrap(buf, header.encodedLength(), header.blockLength(), header.version());
                 f.isDelta = true;
                 f.bookVersion = deltaDecoder.bookVersion();
                 f.fromVersion = deltaDecoder.fromVersion();
+                for (BookDeltaDecoder.ChangesDecoder c : deltaDecoder.changes()) {
+                    f.updateTypes.add((int) c.updateTypeRaw());
+                }
             } else {
                 return; // TradesBatch etc. — not under test
             }

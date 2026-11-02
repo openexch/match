@@ -521,6 +521,18 @@ public final class ArrayMatchingEngine implements MatchingEngine {
         publishTopOfBook();
     }
 
+    /**
+     * RC2 S13 W-ME3: reset the dirty gate (as {@link #clear()} does) and publish. A plain
+     * {@link #publishTopOfBook()} is gated on the side versions, so it could skip a restored book whose
+     * side versions happen to equal the last published ones, and it never re-stamps the book version.
+     */
+    @Override
+    public void republishTopOfBook() {
+        lastPubBidVersion = -1;
+        lastPubAskVersion = -1;
+        publishTopOfBook();
+    }
+
     // ==================== Book access (diagnostics / tests) ====================
 
     public ArrayOrderBook getAskBook() { return askBook; }

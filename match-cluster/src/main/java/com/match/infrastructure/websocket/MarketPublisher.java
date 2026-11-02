@@ -169,6 +169,9 @@ public class MarketPublisher implements MarketEventHandler {
     private int lastAskCount = 0;
     private boolean sentInitialSnapshot = false;
     private long lastResnapshotGen = 0;
+    // RC2 S13 test seam EMPTY_BOOK_VERSION_GUARD (contract 11.7): package-private, never written by main code.
+    // Off = an empty book with book version 0 is published too (a BookSnapshot with version 0).
+    boolean emptyBookVersionGuard = true;
 
     // Diagnostic counters
     private long flushCount = 0;
@@ -702,9 +705,21 @@ public class MarketPublisher implements MarketEventHandler {
         int bidCount = engine.getTopBidCount();
         int askCount = engine.getTopAskCount();
 
-        // Skip when book is empty
+        // RC2 S13 W-ME2 (contract 8.2, F-S13-1): an emptied book is published. Before, an empty book
+        // returned here with no frame, also on a resnapshot, so every consumer kept the last levels of a
+        // book whose last bid and ask had gone. Now, with both sides empty:
+        //  - right after a generation reset (nothing sent yet) and with a known state (book version > 0):
+        //    a BookSnapshot with both groups empty;
+        //  - after a non-empty published state: the BookDelta of the diff (one DELETE per vanished level);
+        //  - otherwise silent, as before: an empty published state that stays empty, and any empty book with
+        //    book version 0 (never touched since this node started). The version guard keeps a node whose
+        //    top is not yet known (a restore without W-ME3) from blanking a real book at every consumer.
         if (bidCount == 0 && askCount == 0) {
-            return 0;
+            final boolean known = !emptyBookVersionGuard || engine.getCollectedBookVersion() > 0;
+            final boolean shows = !sentInitialSnapshot || lastBidCount + lastAskCount > 0;
+            if (!known || !shows) {
+                return 0;
+            }
         }
 
         long[] bidPrices = engine.getTopBidPrices();

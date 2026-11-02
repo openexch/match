@@ -632,9 +632,11 @@ public class AppClusteredService implements ClusteredService {
         System.out.println("SERVICE onStart: role=" + cluster.role() + ", memberId=" + cluster.memberId());
         System.out.flush();
 
-        // Load snapshot if available
+        // Load snapshot if available. cluster.logPosition() is the snapshot's position here (see
+        // startDurability), the P of the RC2 S13 W-ME3 republish.
         if (snapshotImage != null) {
-            loadSnapshot(com.openexchange.cluster.SnapshotImageReader.of(snapshotImage), cluster.idleStrategy());
+            restoreSnapshot(com.openexchange.cluster.SnapshotImageReader.of(snapshotImage), cluster.idleStrategy(),
+                    cluster.logPosition());
         }
 
         // RC2 S6 (contract 5.4): the container restored the sessions open at the snapshot before onStart,
@@ -1518,6 +1520,35 @@ public class AppClusteredService implements ClusteredService {
     }
 
     /**
+     * The onStart restore step: {@link #loadSnapshot}, then (RC2 S13 W-ME3, contract 8.3) every configured
+     * market's book version is raised to {@code snapshotPosition} and its top of book published past the
+     * dirty gate. Without the republish a restored node publishes book version 0 and, on the array engine,
+     * an empty top for every market without a command since the restore, so its resnapshots send nothing
+     * for a quiet market. Egress only: no replicated state, no snapshot bytes, no log entry. Not reached at
+     * genesis (no snapshot: every version derives from commands). Package-private for the restore tests.
+     */
+    void restoreSnapshot(final com.openexchange.cluster.SnapshotImageReader.Source snapshotImage,
+                         final org.agrona.concurrent.IdleStrategy idleStrategy, final long snapshotPosition) {
+        loadSnapshot(snapshotImage, idleStrategy);
+        if (restoreRepublish) {
+            final int markets = engine.republishRestoredBooks(snapshotPosition);
+            System.out.println("[SNAPSHOT] republished the restored top of book of " + markets
+                    + " market(s) at bookVersion >= " + snapshotPosition);
+        }
+    }
+
+    // RC2 S13 test seams (contract 11.7), package-private, never written by main code: true in production.
+    // RESTORE_REPUBLISH off = the W-ME3 republish is skipped.
+    boolean restoreRepublish = true;
+    // RESNAPSHOT_ON_LEADER off = no resnapshot request on a role change to LEADER (W-ME1).
+    boolean resnapshotOnLeader = true;
+    // RESNAPSHOT_BEFORE_IS_LEADER on = the withdrawn draft order (bump, then isLeader); CL-F-1.
+    boolean resnapshotBeforeIsLeader = false;
+    // Runs between the isLeader write and the resnapshot request of a promotion (null in production), so a
+    // test can interleave a publisher flush exactly there (generationBumpAfterIsLeaderNeverLosesTheSnapshot).
+    Runnable roleChangeProbe;
+
+    /**
      * Process a complete (reassembled) snapshot payload.
      * Separated from loadSnapshot for clarity — this expects the FULL snapshot
      * data, not individual fragments.
@@ -2048,7 +2079,22 @@ public class AppClusteredService implements ClusteredService {
                 + " flushFires=" + flushTimerFireCount + "]");
         System.out.flush();
         nodeMetrics.setRole(newRole.code());
-        isLeader = newRole == Cluster.Role.LEADER;
+        final boolean promoted = newRole == Cluster.Role.LEADER;
+        if (promoted && resnapshotOnLeader && resnapshotBeforeIsLeader) {
+            aeronBroadcaster.requestResnapshot(); // test seam only: the withdrawn order
+            runRoleChangeProbe();
+        }
+        isLeader = promoted;
+        // RC2 S13 W-ME1 (contract 8.1, Q7): a new leader resnapshots every market at once. Its publishers' chains
+        // are their own (a follower encodes and advances while broadcast() discards, F-S13-2), and the periodic
+        // bump would wait up to 10 s on a node that led recently (lastPeriodicResnapshotMs is node-local,
+        // F-S13-3). The request comes AFTER the volatile isLeader write (CL-F-1): a publisher flush that sees the
+        // new generation also sees isLeader == true, so the snapshot it encodes is enqueued, never discarded.
+        // Node-local egress state only: the generation is not in the snapshot or the log.
+        if (promoted && resnapshotOnLeader && !resnapshotBeforeIsLeader) {
+            runRoleChangeProbe();
+            aeronBroadcaster.requestResnapshot();
+        }
         // A live role is also the signal that recovery is behind us; CANDIDATE
         // withdraws readiness, which is exactly when a rolling restart must wait.
         readiness.roleChanged(newRole);
@@ -2064,6 +2110,13 @@ public class AppClusteredService implements ClusteredService {
             epochHelloPending.clear(); // RC2 S12 W9: only the leader sends hellos
         }
         flushTimerScheduled = false;
+    }
+
+    private void runRoleChangeProbe() {
+        final Runnable probe = roleChangeProbe;
+        if (probe != null) {
+            probe.run();
+        }
     }
 
     @Override
