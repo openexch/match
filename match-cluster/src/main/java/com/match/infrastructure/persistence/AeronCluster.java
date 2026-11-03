@@ -8,9 +8,8 @@ import io.aeron.archive.Archive;
 import io.aeron.cluster.ClusteredMediaDriver;
 import io.aeron.cluster.ConsensusModule;
 import io.aeron.cluster.service.ClusteredServiceContainer;
-import io.aeron.exceptions.AeronException;
+import com.openexchange.cluster.EngineLifecycle;
 import org.agrona.ErrorHandler;
-import org.agrona.concurrent.ShutdownSignalBarrier;
 import org.agrona.concurrent.SystemEpochClock;
 
 import java.io.File;
@@ -29,9 +28,8 @@ public class AeronCluster {
     private static final Logger log = Logger.getLogger(AeronCluster.class);
     /** Counts errors surfaced by the Aeron error handler. Exposed for monitoring. */
     public static final AtomicLong AERON_ERROR_COUNT = new AtomicLong();
-    /** Ensures the fatal-error exit path (EXTERNAL driver mode) is only started once. */
-    private static final java.util.concurrent.atomic.AtomicBoolean FATAL_EXIT_STARTED =
-            new java.util.concurrent.atomic.AtomicBoolean();
+    /** Exit status of the hot-loop fail-fast (distinct from the lifecycle's fatal 1). */
+    static final int EXIT_HOT_LOOP = 2;
 
     // P1.3 (match#35): fail-fast on the archive-replay hot-loop. The 2026-07-02
     // and 2026-07-04 incidents each threw the IDENTICAL ArchiveException thousands
@@ -44,8 +42,24 @@ public class AeronCluster {
             new java.util.concurrent.atomic.AtomicReference<>("");
     private static final AtomicLong IDENTICAL_ERROR_COUNT = new AtomicLong();
 
+    /**
+     * Runs the node until it stops, then exits through the kit's {@link EngineLifecycle} (RC2 S16 W9, the same code
+     * the AE runs): a fatal fault or a failed start exits non-zero, SIGTERM closes within
+     * {@code ENGINE_SHUTDOWN_TIMEOUT_MS}, a cluster termination exits 0. Never returns normally while the node is
+     * running.
+     */
     public AeronCluster() {
-        final ShutdownSignalBarrier barrier = new ShutdownSignalBarrier();
+        final EngineLifecycle lifecycle = EngineLifecycle.install("Match Engine node", msg -> log.error(msg));
+        try {
+            run(lifecycle);
+        } catch (final Throwable t) {
+            lifecycle.startupFailed(t);
+            return;
+        }
+        lifecycle.finish();
+    }
+
+    private static void run(final EngineLifecycle lifecycle) {
         final int portBase = getBasePort();
         final int nodeId = getClusterNode();
         final String hosts = getClusterAddresses();
@@ -83,36 +97,15 @@ public class AeronCluster {
             final long streak = signature.equals(LAST_ERROR_SIGNATURE.getAndSet(signature))
                     ? IDENTICAL_ERROR_COUNT.incrementAndGet()
                     : resetIdenticalErrorCount();
-            if (streak >= IDENTICAL_ERROR_EXIT_THRESHOLD
-                    && FATAL_EXIT_STARTED.compareAndSet(false, true)) {
-                log.error("FAIL-FAST: %d consecutive identical Aeron errors (hot-loop, match#35): %s "
-                        + "- node exiting in 5s; local state likely needs reseed/recovery", streak, signature);
-                barrier.signal();
-                final Thread hotLoopExit = new Thread(() -> {
-                    quietSleep(5000);
-                    Runtime.getRuntime().halt(2);
-                }, "hot-loop-exit");
-                hotLoopExit.setDaemon(true);
-                hotLoopExit.start();
+            if (streak >= IDENTICAL_ERROR_EXIT_THRESHOLD) {
+                lifecycle.fatal(EXIT_HOT_LOOP, "FAIL-FAST: " + streak + " consecutive identical Aeron errors "
+                        + "(hot-loop, match#35): " + signature + "; local state likely needs reseed/recovery");
             }
-            // In EXTERNAL mode a dead media driver surfaces as a FATAL AeronException
-            // (e.g. DriverTimeoutException). Signal the barrier so the Aeron components
-            // close, then guarantee process death: non-daemon application threads
-            // (market publishers, disruptors) would otherwise keep the JVM alive with no
-            // driver behind the IPC files, and the process manager would never restart it.
-            if (driverMode == DriverMode.EXTERNAL
-                    && t instanceof AeronException ae
-                    && ae.category() == AeronException.Category.FATAL
-                    && FATAL_EXIT_STARTED.compareAndSet(false, true)) {
-                log.error("FATAL Aeron error in EXTERNAL driver mode - node exiting in 5s for restart");
-                barrier.signal();
-                final Thread exitBackstop = new Thread(() -> {
-                    quietSleep(5000); // grace period for the components to close
-                    Runtime.getRuntime().halt(1);
-                }, "driver-death-exit");
-                exitBackstop.setDaemon(true);
-                exitBackstop.start();
-            }
+            // In EXTERNAL mode a dead media driver surfaces as a FATAL AeronException (e.g.
+            // DriverTimeoutException); an agent can also terminate unexpectedly. The lifecycle closes the
+            // components and then halts with 1, never 0: non-daemon application threads (market
+            // publishers, disruptors) cannot keep the JVM alive and the process manager restarts it.
+            lifecycle.onError(t, driverMode == DriverMode.EXTERNAL);
         };
         clusterConfig.errorHandler(errorHandler);
 
@@ -157,9 +150,9 @@ public class AeronCluster {
         hostAddresses.forEach(AeronCluster::awaitDnsResolution);
 
         if (driverMode == DriverMode.EXTERNAL) {
-            launchWithExternalDriver(clusterConfig, nodeId, barrier, journalRuntime);
+            launchWithExternalDriver(clusterConfig, nodeId, lifecycle, journalRuntime);
         } else {
-            launchWithEmbeddedDriver(clusterConfig, barrier, journalRuntime);
+            launchWithEmbeddedDriver(clusterConfig, lifecycle, journalRuntime);
         }
     }
 
@@ -173,11 +166,13 @@ public class AeronCluster {
      * lifecycle, so no dirDeleteOnStart/Shutdown here.
      */
     private static void launchWithExternalDriver(
-            final ClusterConfig clusterConfig, final int nodeId, final ShutdownSignalBarrier barrier,
+            final ClusterConfig clusterConfig, final int nodeId, final EngineLifecycle lifecycle,
             final com.match.infrastructure.journal.SettlementJournalRuntime journalRuntime) {
         final String aeronDir = TransportConfig.aeronDir(nodeId);
         log.info("Driver mode EXTERNAL: connecting to media driver at %s", aeronDir);
-        TransportConfig.awaitExternalDriver(aeronDir, TransportConfig.EXTERNAL_DRIVER_TIMEOUT_MS);
+        final long driverWaitMs = EngineLifecycle.driverWaitMs();
+        lifecycle.awaitExternalDriver(aeronDir, driverWaitMs);
+        log.info("External media driver detected at %s", aeronDir);
         // Must be set on ALL contexts: ClusteredMediaDriver.launch used to propagate the
         // driver's dir to the consensus module; launched separately, a context without it
         // would silently connect to the default /dev/shm/aeron-<user> dir.
@@ -192,14 +187,11 @@ public class AeronCluster {
                                 : journalRuntime.start(aeronDir, clusterConfig.archiveContext().errorHandler());
                 Archive ignored = Archive.launch(clusterConfig.archiveContext());
                 ConsensusModule ignored1 = ConsensusModule.launch(
-                        clusterConfig.consensusModuleContext().terminationHook(barrier::signal));
+                        clusterConfig.consensusModuleContext().terminationHook(lifecycle::onClusterTermination));
                 ClusteredServiceContainer ignored2 = ClusteredServiceContainer.launch(
-                        clusterConfig.clusteredServiceContext().terminationHook(barrier::signal)))
+                        clusterConfig.clusteredServiceContext().terminationHook(lifecycle::onClusterTermination)))
         {
-            barrier.await();
-        } catch (Exception e) {
-            System.err.println("FATAL: Cluster node failed: " + e.getMessage());
-            e.printStackTrace();
+            lifecycle.awaitStop();
         }
     }
 
@@ -209,7 +201,7 @@ public class AeronCluster {
      * deploy/media-driver/driver.properties: keep the two in sync.
      */
     private static void launchWithEmbeddedDriver(
-            final ClusterConfig clusterConfig, final ShutdownSignalBarrier barrier,
+            final ClusterConfig clusterConfig, final EngineLifecycle lifecycle,
             final com.match.infrastructure.journal.SettlementJournalRuntime journalRuntime) {
         try (
                 ClusteredMediaDriver ignored = ClusteredMediaDriver.launch(
@@ -235,7 +227,7 @@ public class AeronCluster {
                             // MTU for reduced system calls
                             .mtuLength(8192),  // 8KB MTU
                         clusterConfig.archiveContext(),
-                        clusterConfig.consensusModuleContext().terminationHook(barrier::signal));
+                        clusterConfig.consensusModuleContext().terminationHook(lifecycle::onClusterTermination));
                 // Journal archive is a driver client: start only after ClusteredMediaDriver is up.
                 com.match.infrastructure.journal.SettlementJournalRuntime ignoredJournal =
                         journalRuntime == null ? null
@@ -243,12 +235,9 @@ public class AeronCluster {
                                         clusterConfig.mediaDriverContext().aeronDirectoryName(),
                                         clusterConfig.archiveContext().errorHandler());
                 ClusteredServiceContainer ignored1 = ClusteredServiceContainer.launch(
-                        clusterConfig.clusteredServiceContext().terminationHook(barrier::signal)))
+                        clusterConfig.clusteredServiceContext().terminationHook(lifecycle::onClusterTermination)))
         {
-            barrier.await();
-        } catch (Exception e) {
-            System.err.println("FATAL: Cluster node failed: " + e.getMessage());
-            e.printStackTrace();
+            lifecycle.awaitStop();
         }
     }
 
