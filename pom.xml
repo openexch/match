@@ -32,7 +32,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
-        <cluster-kit.version>0.1.9-runtime.20261103.rc2s16.g6b0b8e6</cluster-kit.version>
+        <cluster-kit.version>0.1.10-runtime.20261103.rc2s16w9b.ga8a30d8</cluster-kit.version>
         <aeron.version>1.53.1</aeron.version>
         <agrona.version>2.6.0</agrona.version>
         <sbe.version>1.40.1</sbe.version>
