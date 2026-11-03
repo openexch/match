@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -49,15 +50,40 @@ public class EngineDriverLifecycleProcessTest {
 
     @Test
     public void mediaDriverDeathAfterStartExitsOneNeverZero() throws Exception {
-        final Node node = startNodeOnDriver(Map.of());
+        assertDriverDeathExitsOne(startNodeOnDriver(false), "W9 driver kill -9");
+    }
+
+    /**
+     * W9b (S16 W6 C13: ME exit 139 in 3/3): with the settlement journal on, the node runs a second, SHARED-mode archive
+     * recording the journal publication, and the journal writer's archive client had Aeron's default error handler.
+     * On driver death that client called {@code Runtime.exit(-1)} (a signal stop, so the FATAL was never recorded),
+     * and the journal archive's own client closed and unmapped the CnC before its conductor decremented the
+     * recording-session counter in it: SIGSEGV in {@code UnsafeApi.getLong} on "archive-conductor".
+     */
+    @Test
+    public void mediaDriverDeathWithTheSettlementJournalExitsOneWithoutACrash() throws Exception {
+        final Node node = startNodeOnDriver(true);
+        awaitJournalRecording(node, 30_000); // the journal archive has an active recording (INFO is not logged)
+        assertDriverDeathExitsOne(node, "W9b driver kill -9, journal on");
+    }
+
+    private static void assertDriverDeathExitsOne(final Node node, final String label) throws Exception {
         node.driver.destroyForcibly(); // kill -9 of the media driver
         final long t0 = System.nanoTime();
         final Exit exit = awaitExit(node.engine, 45_000, t0);
-        System.out.println("W9 driver kill -9: exit=" + exit.code + " after " + exit.ms + " ms");
+        System.out.println(label + ": exit=" + exit.code + " after " + exit.ms + " ms");
         final String out = node.log();
         assertEquals("driver death must exit 1 (took " + exit.ms + " ms): " + out, 1, exit.code);
-        assertTrue("within the 10 s client driver timeout plus the close: " + exit.ms, exit.ms < 18_000);
-        assertTrue("the lifecycle closed the node after the fault: " + out, out.contains("closed after FATAL"));
+        assertTrue("within the 10 s client driver timeout plus the halt: " + exit.ms, exit.ms < 18_000);
+        assertTrue("the lifecycle halted on the driver loss: " + out,
+                out.contains("media driver lost in EXTERNAL driver mode")
+                        && out.contains("halting now, no component close"));
+        assertFalse("no JVM crash: " + out, out.contains("A fatal error has been detected by the Java Runtime"));
+        assertFalse("no Aeron default error handler exit: " + out, out.contains("exiting client..."));
+        try (Stream<Path> files = Files.list(node.base)) {
+            assertEquals("no hs_err file", List.of(), files.filter(f -> f.getFileName().toString().startsWith("hs_err"))
+                    .toList());
+        }
     }
 
     @Test
@@ -78,7 +104,7 @@ public class EngineDriverLifecycleProcessTest {
 
     @Test
     public void sigtermShutsDownCleanlyWithinTheShutdownTimeout() throws Exception {
-        final Node node = startNodeOnDriver(Map.of());
+        final Node node = startNodeOnDriver(false);
         final long t0 = System.nanoTime();
         node.engine.destroy(); // SIGTERM
         final Exit exit = awaitExit(node.engine, 20_000, t0);
@@ -94,14 +120,37 @@ public class EngineDriverLifecycleProcessTest {
 
     private record Exit(int code, long ms) { }
 
-    private record Node(Process driver, Process engine, Path logFile) {
+    private record Node(Process driver, Process engine, Path logFile, Path base) {
         String log() throws IOException {
             return Files.readString(logFile);
         }
     }
 
-    private Node startNodeOnDriver(final Map<String, String> extraEnv) throws Exception {
+    /** The writer's recorded publication makes the journal archive open a segment file (*.rec). */
+    private static void awaitJournalRecording(final Node node, final long timeoutMs) throws Exception {
+        final Path archive = node.base.resolve("journal").resolve("node0").resolve("archive");
+        final long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        while (true) {
+            if (Files.isDirectory(archive)) {
+                try (Stream<Path> files = Files.list(archive)) {
+                    if (files.anyMatch(f -> f.getFileName().toString().endsWith(".rec"))) {
+                        return;
+                    }
+                }
+            }
+            assertTrue("no journal recording in " + archive + " within " + timeoutMs + " ms: " + node.log(),
+                    System.nanoTime() < deadline && node.engine.isAlive());
+            Thread.sleep(100);
+        }
+    }
+
+    private Node startNodeOnDriver(final boolean settlementJournal) throws Exception {
         final Path base = dir("match-w9-");
+        final Map<String, String> extraEnv = settlementJournal
+                ? Map.of("SETTLEMENT_JOURNAL_ENABLED", "true",
+                        "SETTLEMENT_JOURNAL_DIR", base.resolve("journal").toString(),
+                        "SETTLEMENT_JOURNAL_RING_BYTES", String.valueOf(1 << 20))
+                : Map.of();
         final Path aeronDir = shmDir("match-w9-aeron-");
         final Process driver = driver(aeronDir, base.resolve("driver.log"));
         final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
@@ -114,7 +163,7 @@ public class EngineDriverLifecycleProcessTest {
         final Path log = base.resolve("engine.log");
         final Process engine = engine(base, aeronDir, probePort, log, extraEnv);
         awaitReady(engine, probePort, log, 90_000);
-        return new Node(driver, engine, log);
+        return new Node(driver, engine, log, base);
     }
 
     private static String childClasspath() {
@@ -144,7 +193,7 @@ public class EngineDriverLifecycleProcessTest {
     private Process engine(final Path base, final Path aeronDir, final int probePort, final Path log,
                            final Map<String, String> extraEnv) throws IOException {
         final List<String> cmd = java();
-        cmd.addAll(List.of("-cp", childClasspath(), ENGINE_MAIN));
+        cmd.addAll(List.of("-XX:ErrorFile=" + base.resolve("hs_err_pid%p.log"), "-cp", childClasspath(), ENGINE_MAIN));
         final ProcessBuilder pb = new ProcessBuilder(cmd);
         final Map<String, String> env = pb.environment();
         env.put("BASE_DIR", base.resolve("state").toString());
