@@ -186,8 +186,8 @@ public class AeronCluster {
                         journalRuntime == null ? null
                                 : journalRuntime.start(aeronDir, clusterConfig.archiveContext().errorHandler());
                 Archive ignored = Archive.launch(clusterConfig.archiveContext());
-                ConsensusModule ignored1 = ConsensusModule.launch(
-                        clusterConfig.consensusModuleContext().terminationHook(lifecycle::onClusterTermination));
+                ConsensusModule ignored1 = watchQuorum(lifecycle, ConsensusModule.launch(
+                        clusterConfig.consensusModuleContext().terminationHook(lifecycle::onClusterTermination)));
                 ClusteredServiceContainer ignored2 = ClusteredServiceContainer.launch(
                         clusterConfig.clusteredServiceContext().terminationHook(lifecycle::onClusterTermination)))
         {
@@ -204,7 +204,7 @@ public class AeronCluster {
             final ClusterConfig clusterConfig, final EngineLifecycle lifecycle,
             final com.match.infrastructure.journal.SettlementJournalRuntime journalRuntime) {
         try (
-                ClusteredMediaDriver ignored = ClusteredMediaDriver.launch(
+                ClusteredMediaDriver ignored = watchQuorum(lifecycle, ClusteredMediaDriver.launch(
                         clusterConfig.mediaDriverContext()
                             // Directory management
                             .dirDeleteOnStart(true)
@@ -227,7 +227,7 @@ public class AeronCluster {
                             // MTU for reduced system calls
                             .mtuLength(8192),  // 8KB MTU
                         clusterConfig.archiveContext(),
-                        clusterConfig.consensusModuleContext().terminationHook(lifecycle::onClusterTermination));
+                        clusterConfig.consensusModuleContext().terminationHook(lifecycle::onClusterTermination)));
                 // Journal archive is a driver client: start only after ClusteredMediaDriver is up.
                 com.match.infrastructure.journal.SettlementJournalRuntime ignoredJournal =
                         journalRuntime == null ? null
@@ -239,6 +239,22 @@ public class AeronCluster {
         {
             lifecycle.awaitStop();
         }
+    }
+
+    /**
+     * RC2 S17 W12 (R-KIT-Q): the kit's quorum watchdog, started the moment the consensus module has launched
+     * (after the DNS wait and the external-driver wait, before the service container): exit 1 when no leader is
+     * ever known within ENGINE_QUORUM_WAIT_MS. Returns the module so it stays in the try-with-resources.
+     */
+    private static ConsensusModule watchQuorum(final EngineLifecycle lifecycle, final ConsensusModule module) {
+        lifecycle.watchQuorum(module.context());
+        return module;
+    }
+
+    /** Embedded mode: the consensus module inside the clustered media driver. */
+    private static ClusteredMediaDriver watchQuorum(final EngineLifecycle lifecycle, final ClusteredMediaDriver driver) {
+        lifecycle.watchQuorum(driver.consensusModule().context());
+        return driver;
     }
 
     /***

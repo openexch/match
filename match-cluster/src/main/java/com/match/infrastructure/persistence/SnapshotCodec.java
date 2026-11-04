@@ -53,7 +53,7 @@ import java.util.Arrays;
  *     [genesisId            : long]     // wrapped in the durable envelope; with an empty ledger
  *     [meEpoch              : long]     // no marker-2 block follows (the payload ends here).
  *     [nextJournalSeq       : long]
- *   [ledger marker : byte = 2] ...     // DurableCommandLedger, only when the ledger is non-empty
+ *   [ledger marker : byte = 2] ...     // DurableCommandLedger v1, at behaviour 1 ALWAYS (RC2 S17 W12), 0 entries allowed
  * </pre>
  *
  * <p><b>Note for future tails:</b> every optional block starts with a distinct marker byte:
@@ -62,12 +62,13 @@ import java.util.Arrays;
  * <p><b>RC2 S4 (contract section 7):</b> at a recorded behaviour >= 2 the image is ALWAYS envelope
  * version 2 and its payload is the positional body (omsMap section included), the config block,
  * the identity block and the ledger v2 block (marker 4, also when empty), and nothing after it.
- * Behaviour 1 keeps envelope version 1 exactly as before (only with a non-empty v1 ledger). The
+ * Behaviour 1 is envelope version 1 with the v1 ledger block, ALWAYS (RC2 S17 W12: also with 0 entries and
+ * before any config, so no bare image is written and the reader refuses one). The
  * reader accepts envelope 1 only without markers 3 and 4, and envelope 2 only with 1, 3, 4 in that
  * order, and then checks R1-R11 (R11: the omsMap keys and the resting legs are in bijection).</p>
  *
  * <pre>
- *   Durable envelope (behaviour 1: whenever the ledger is non-empty; behaviour >= 2: always):
+ *   Durable envelope (always; a payload without it is refused, RC2 S17 W12 R-ME-1):
  *   [DURABLE_MAGIC : long][envelope version : int = 1 | 2][payload length : int][CRC32C : int][payload]</pre>
  *
  * <p>All scalars use the buffer's native byte order (Agrona default), identical to the
@@ -77,7 +78,7 @@ public final class SnapshotCodec {
 
     // Negative magic cannot be a valid historical order-id generator. Whole-frame length + CRC
     // prevents a truncated ledger suffix being mistaken for a valid legacy snapshot.
-    private static final long DURABLE_MAGIC = -0x434d444c45444745L;
+    static final long DURABLE_MAGIC = -0x434d444c45444745L;
 
     /** RC2 S2: marker byte of the identity block (contract 2.2). */
     static final byte IDENTITY_MARKER = 3;
@@ -290,10 +291,12 @@ public final class SnapshotCodec {
                         + " engine holds " + engine.commandLedger().size() + " ledger v1 entries");
             }
             pos = ledger.write(dst, pos);
-        } else if (engine.commandLedger().size() > 0) {
+        } else {
+            // RC2 S17 W12 (R-ME-1): the v1 ledger block is ALWAYS written at behaviour 1 (0 entries included),
+            // and so is the envelope: a bare image is never written, so the reader can refuse one.
             pos = engine.commandLedger().write(dst, pos);
         }
-        if (engine.commandLedger().size() > 0 || identityBlock) {
+        {
             byte[] payload = new byte[pos]; dst.getBytes(0,payload);
             var crc = new java.util.zip.CRC32C(); crc.update(payload,0,payload.length);
             dst.putLong(0,DURABLE_MAGIC); dst.putInt(8, identityBlock ? ENVELOPE_V2 : ENVELOPE_V1); dst.putInt(12,pos);
@@ -327,7 +330,13 @@ public final class SnapshotCodec {
         if (offset<0 || length<20 || offset>src.capacity() || length>src.capacity()-offset)
             throw new IllegalStateException("Invalid snapshot frame");
         final int originalOffset = offset;
-        boolean durableEnvelope = src.getLong(offset)==DURABLE_MAGIC;
+        // RC2 S17 W12 (R-ME-1): the envelope is mandatory. A bare image (the v0.5.0-beta tag layout, or an S16-era
+        // RC2 image with an empty ledger) is byte-identical in shape to a foreign one: refuse it, read nothing.
+        if (src.getLong(offset) != DURABLE_MAGIC) {
+            throw new IllegalStateException("snapshot envelope magic missing (length=" + length
+                    + "): refusing a bare or foreign snapshot image");
+        }
+        final boolean durableEnvelope = true;
         // RC2 S4: envelope 2 = a behaviour >= 2 image (ledger v2, R1-R11).
         final boolean envelopeV2 = durableEnvelope && src.getInt(offset + 8) == ENVELOPE_V2;
         if (durableEnvelope) {
