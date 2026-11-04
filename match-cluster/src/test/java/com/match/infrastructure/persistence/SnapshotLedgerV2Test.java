@@ -50,6 +50,21 @@ public class SnapshotLedgerV2Test {
         return new UnsafeBuffer(image).getInt(8);
     }
 
+    /**
+     * RC2 S17 W12 (R-ME-1): the behaviour-1 body of an envelope-1 image (the payload without its trailing empty
+     * v1 ledger block, which the writer now always emits): the bytes a behaviour-2 payload starts with.
+     */
+    static byte[] body1(byte[] image) {
+        final UnsafeBuffer b = new UnsafeBuffer(image);
+        assertEquals("envelope 1", 1, b.getInt(8));
+        final byte[] p = Arrays.copyOfRange(image, 20, image.length);
+        final UnsafeBuffer t = new UnsafeBuffer(p);
+        assertEquals("the empty v1 ledger block ends the payload", 2, t.getByte(p.length - 9));
+        assertEquals(1, t.getInt(p.length - 8));
+        assertEquals(0, t.getInt(p.length - 4));
+        return Arrays.copyOf(p, p.length - 9);
+    }
+
     static byte[] payload(byte[] image) {
         final UnsafeBuffer b = new UnsafeBuffer(image);
         assertTrue("a durable envelope", image.length >= 20 && b.getLong(0) < 0 && b.getInt(12) == image.length - 20);
@@ -161,7 +176,7 @@ public class SnapshotLedgerV2Test {
         try (Run r = reference(); Replica one = new Replica()) {
             good = r.r.snapshot();
             one.apply(new Entry(engineConfig(1, 1, 0, 0, 100_000), 64L, 1_000L));
-            behaviourOne = one.snapshot();
+            behaviourOne = body1(one.snapshot());
         }
         assertEquals("the reference image is envelope 2", 2, envelopeVersion(good));
         final byte[] p = payload(good);

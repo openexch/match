@@ -51,6 +51,21 @@ public class SnapshotIdentityBlockTest {
         return h;
     }
 
+    /**
+     * RC2 S17 W12 (R-ME-1): the behaviour-1 body of an envelope-1 image (the payload without its trailing empty
+     * v1 ledger block, which the writer now always emits): the bytes a behaviour-2 payload starts with.
+     */
+    static byte[] body1(byte[] image) {
+        final UnsafeBuffer b = new UnsafeBuffer(image);
+        assertEquals("envelope 1", 1, b.getInt(8));
+        final byte[] p = Arrays.copyOfRange(image, 20, image.length);
+        final UnsafeBuffer t = new UnsafeBuffer(p);
+        assertEquals("the empty v1 ledger block ends the payload", 2, t.getByte(p.length - 9));
+        assertEquals(1, t.getInt(p.length - 8));
+        assertEquals(0, t.getInt(p.length - 4));
+        return Arrays.copyOf(p, p.length - 9);
+    }
+
     private static boolean enveloped(byte[] image) {
         final UnsafeBuffer b = new UnsafeBuffer(image);
         return image.length >= 20 && b.getLong(0) < 0 && (b.getInt(8) == 1 || b.getInt(8) == 2)
@@ -131,8 +146,10 @@ public class SnapshotIdentityBlockTest {
     public void emptyLedgerImageIsEnvelopedAndEndsWithTheIdentityBlock() {
         try (BehaviourTwoHarness two = at(fresh2(), false);
              BehaviourTwoHarness one = at(config(1, 1, 0, 0, 100_000), false)) {
-            final byte[] b1 = image(one);
-            assertFalse("behaviour 1, empty ledger: no envelope (S1 shape)", enveloped(b1));
+            // RC2 S17 W12: behaviour 1 with an empty ledger is envelope 1 with an empty v1 ledger block
+            assertTrue("behaviour 1, empty ledger: enveloped", enveloped(image(one)));
+            assertEquals(1, envelopeVersion(image(one)));
+            final byte[] b1 = body1(image(one));
             final byte[] i2 = image(two);
             assertEquals("RC2 S4: behaviour 2 is envelope 2", 2, envelopeVersion(i2));
             final byte[] p2 = payload(i2);
@@ -191,7 +208,7 @@ public class SnapshotIdentityBlockTest {
              BehaviourTwoHarness one = at(config(1, 1, 0, 0, 100_000), false)) {
             final byte[] good = image(two);
             final byte[] p = payload(good);
-            final byte[] prefix = image(one);
+            final byte[] prefix = body1(image(one));
             // RC2 S4: every case carries the (valid, empty) ledger v2 block after the identity block,
             // so each is refused for its identity-block defect, not for a missing marker 4.
             final byte[] tail = emptyLedgerV2(50_000);
@@ -216,8 +233,8 @@ public class SnapshotIdentityBlockTest {
             // No config block before it: a config-less image followed by the block.
             final Engine legacy = new Engine("direct");
             try {
-                final byte[] noConfig = image(legacy);
-                assertFalse(enveloped(noConfig));
+                // RC2 S17 W12: the config-less image is envelope 1; its body is what the block would follow
+                final byte[] noConfig = body1(image(legacy));
                 assertRefused("no config block precedes it",
                         envelope(good, concat(concat(noConfig, identityBlock(1, 2, 50_000, 12, G, G, 2)), tail)));
             } finally {

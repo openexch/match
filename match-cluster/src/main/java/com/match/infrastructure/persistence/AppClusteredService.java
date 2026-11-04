@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.match.infrastructure.persistence;
 
+import com.openexchange.cluster.auth.PrincipalGate;
+import com.openexchange.cluster.auth.PrincipalLessSessionException;
+
 import com.match.application.engine.Engine;
 import com.match.application.engine.MarketConfig;
 import com.match.application.publisher.MarketDataBroadcaster;
@@ -222,23 +225,19 @@ public class AppClusteredService implements ClusteredService {
      * container session or a message. Authentication is always on, so only a pre-S6 log or snapshot (or a
      * session id Aeron does not know) can produce one. The decision reads replicated bytes only, so every
      * member halts at the same log position instead of replaying a divergent, engine-less state.
+     * RC2 S17 W12: the class-code decision and the message are the kit's {@link PrincipalGate}, one rule for
+     * both engines; this node prints the CRITICAL line, fences its callbacks and fail-fasts.
      */
-    static final class PrincipalLessSessionException extends IllegalStateException {
-        PrincipalLessSessionException(final String message) {
-            super(message);
+    private void requirePrincipal(final byte[] encodedPrincipal, final String where, final long sessionId,
+                                  final long logPosition) {
+        try {
+            PrincipalGate.requireClass(encodedPrincipal, where, sessionId, logPosition);
+        } catch (final PrincipalLessSessionException principalLess) {
+            System.err.println(principalLess.getMessage());
+            failApplicationCallback();
+            failFast.run();
+            throw principalLess; // test hooks may return; production halt does not
         }
-    }
-
-    static final String PRINCIPAL_LESS_MESSAGE =
-            "principal-less session in log: pre-S6 history, clean genesis required";
-
-    private void haltPrincipalLess(final String where, final long sessionId, final long logPosition) {
-        final String critical = "CRITICAL: " + PRINCIPAL_LESS_MESSAGE + " (" + where + ", clusterSessionId="
-                + sessionId + ", logPosition=" + logPosition + ")";
-        System.err.println(critical);
-        failApplicationCallback();
-        failFast.run();
-        throw new PrincipalLessSessionException(critical); // test hooks may return; production halt does not
     }
 
     // What makes this cluster snapshot itself with no admin gateway running.
@@ -1450,9 +1449,7 @@ public class AppClusteredService implements ClusteredService {
     void registerRestoredSessions(final Cluster cluster) {
         final int[] restored = {0};
         cluster.forEachClientSession(session -> {
-            if (com.openexchange.cluster.auth.ClusterPrincipal.classCodeOf(session.encodedPrincipal()) == 0) {
-                haltPrincipalLess("restored session", session.id(), cluster.logPosition());
-            }
+            requirePrincipal(session.encodedPrincipal(), "restored session", session.id(), cluster.logPosition());
             clientSessions.addSession(session);
             restored[0]++;
         });
@@ -1593,9 +1590,13 @@ public class AppClusteredService implements ClusteredService {
             }
         }
 
+        // RC2 S17 W12 (R-ME-2): a restore that dropped an order never serves. Node-local fail-fast of the A-9 /
+        // checkAfterRestore kind: rejectedOrders depends on this node's launch mode and env-built geometry, so a
+        // member that cannot hold the replicated books exits; it never serves a different state. loadSnapshot turns
+        // the throw into the CRITICAL refusal, readiness 503 and failFast.
         if (decoded.rejectedOrders > 0) {
-            System.err.println("[SNAPSHOT] ERROR: " + decoded.rejectedOrders
-                    + " orders DROPPED during restore (geometry mismatch?) — state loss!");
+            throw new IllegalStateException("[SNAPSHOT] " + decoded.rejectedOrders + " order(s) dropped during restore"
+                    + " (geometry mismatch or no engineConfig block): state loss, refusing to serve");
         }
 
         System.out.println("[SNAPSHOT] Snapshot load complete. Consumed "
@@ -1631,9 +1632,8 @@ public class AppClusteredService implements ClusteredService {
     private void applyOnSessionOpen(final ClientSession session, final long timestamp) {
         context.setClusterTime(timestamp);
         // RC2 S6 R0: a SessionOpen without a valid principal is pre-S6 history (authentication is always on).
-        if (com.openexchange.cluster.auth.ClusterPrincipal.classCodeOf(session.encodedPrincipal()) == 0) {
-            haltPrincipalLess("session open", session.id(), cluster == null ? -1L : cluster.logPosition());
-        }
+        requirePrincipal(session.encodedPrincipal(), "session open", session.id(),
+                cluster == null ? -1L : cluster.logPosition());
         clientSessions.addSession(session);
         if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
             epochHelloPending.add(session.id()); // RC2 S12 W9: sent from the next leader flush
@@ -1731,10 +1731,10 @@ public class AppClusteredService implements ClusteredService {
         // RC2 S6 (contract 3.1): the class from the replicated principal Aeron hands with the session
         // (SessionOpen on every member, the container snapshot on a restored one), read in place with no
         // allocation. A null session (an id Aeron does not know) reads as class 0: R0 halts.
-        final int classCode = com.openexchange.cluster.auth.ClusterPrincipal.classCodeOf(
-                session == null ? null : session.encodedPrincipal());
+        final byte[] principal = session == null ? null : session.encodedPrincipal();
+        final int classCode = com.openexchange.cluster.auth.ClusterPrincipal.classCodeOf(principal);
         if (classCode == 0) {
-            haltPrincipalLess("ingress frame", session == null ? -1L : session.id(), header.position());
+            requirePrincipal(principal, "ingress frame", session == null ? -1L : session.id(), header.position());
         }
 
         // Demuxer drops malformed wire input before application. Every escaping failure

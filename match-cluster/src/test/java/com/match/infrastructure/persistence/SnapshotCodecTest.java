@@ -88,6 +88,31 @@ public class SnapshotCodecTest {
         assertArrayEquals("re-serialized snapshot must be stable", bytes(r1, lr1), bytes(r2, lr2));
     }
 
+    /**
+     * RC2 S17 W12 (R-ME-1, M1): the envelope is mandatory. An image whose first long is not the durable magic
+     * (the v0.5.0-beta tag's raw layout, byte-identical in shape to an S16-era bare RC2 image) is refused at the
+     * codec, before a single field is read from it.
+     */
+    @Test
+    public void imageWithoutDurableMagicIsRefused() {
+        ExpandableArrayBuffer raw = new ExpandableArrayBuffer();
+        int p = 0;
+        raw.putLong(p, 9);  p += 8;   // orderIdGen (the tag layout starts here, no envelope)
+        raw.putLong(p, 3);  p += 8;   // tradeIdGen
+        raw.putInt(p, 0);   p += 4;   // numMarkets = 0
+        raw.putLong(p, 0);  p += 8;   // timerCorrelationId
+        raw.putInt(p, 0);   p += 4;   // omsMapCount = 0
+        final int length = p;
+
+        Engine e = new Engine();
+        final long before = e.getOrderIdGenerator();
+        IllegalStateException refused = org.junit.Assert.assertThrows(IllegalStateException.class,
+                () -> SnapshotCodec.deserialize(raw, 0, length, e));
+        assertEquals("snapshot envelope magic missing (length=" + length
+                + "): refusing a bare or foreign snapshot image", refused.getMessage());
+        assertEquals("nothing applied from the refused image", before, e.getOrderIdGenerator());
+    }
+
     /** An order that can't be restored (out-of-range price) must be reported — state loss is never silent. */
     @Test
     public void geometryMismatchIsLoud() {
@@ -104,30 +129,36 @@ public class SnapshotCodecTest {
         bad.putLong(p, FixedPoint.fromDouble(1.0)); p += 8;       // qty
         bad.putInt(p, 0);   p += 4;   // numAskOrders = 0
         bad.putLong(p, 0);  p += 8;   // timerCorrelationId
+        bad.putInt(p, 0);   p += 4;   // omsMapCount = 0
+        // RC2 S17 W12: framed as the RC2 writer frames it (empty v1 ledger, envelope 1).
+        final byte[] image = S2Services.envelopeV1(Arrays.copyOf(bad.byteArray(), p));
 
         Engine e = new Engine();
-        SnapshotCodec.Decoded d = SnapshotCodec.deserialize(bad, 0, p, e);
+        SnapshotCodec.Decoded d = SnapshotCodec.deserialize(new org.agrona.concurrent.UnsafeBuffer(image), 0,
+                image.length, e);
 
         assertTrue("out-of-range order must be counted as a dropped order (loud state loss)",
                 d.rejectedOrders >= 1);
         assertTrue("the dropped order must NOT be on the book", e.getEngine(Engine.MARKET_BTC_USD).isBidEmpty());
     }
 
-    /** A pre-match#25 snapshot without the trailing timer counter decodes without error. */
+    /**
+     * A pre-match#25 snapshot without the trailing timer counter used to decode; RC2 S17 W12 (R-ME-1): it is a
+     * bare image and is refused like every other magic-less one (no RC2 writer produces it).
+     */
     @Test
-    public void decodesSnapshotWithoutTrailingTimer() {
+    public void bareSnapshotWithoutTrailingTimerIsRefused() {
         ExpandableArrayBuffer b = new ExpandableArrayBuffer();
         int p = 0;
         b.putLong(p, 9);  p += 8;   // orderIdGen
         b.putLong(p, 3);  p += 8;   // tradeIdGen
         b.putInt(p, 0);   p += 4;   // numMarkets = 0 (and NO trailing timer field)
+        final int length = p;
 
         Engine e = new Engine();
-        SnapshotCodec.Decoded d = SnapshotCodec.deserialize(b, 0, p, e);
-
-        assertEquals(9, e.getOrderIdGenerator());
-        assertEquals(3, d.tradeIdGenerator);
-        assertTrue("timer counter must be absent, not garbage", !d.timerCorrelationIdPresent);
+        IllegalStateException refused = org.junit.Assert.assertThrows(IllegalStateException.class,
+                () -> SnapshotCodec.deserialize(b, 0, length, e));
+        assertTrue(refused.getMessage(), refused.getMessage().startsWith("snapshot envelope magic missing"));
     }
 
     /** A-1: the orderId -> omsOrderId correlation map round-trips exactly and stays byte-deterministic. */
@@ -186,7 +217,7 @@ public class SnapshotCodecTest {
 
     /** Walk the snapshot byte format and return the oms-map section's orderIds in wire order. */
     private static long[] extractOmsMapOrderIds(ExpandableArrayBuffer b) {
-        int pos = 0;
+        int pos = 20; // RC2 S17 W12: the envelope (magic, version, length, CRC32C) is always there
         pos += 8; // orderIdGenerator
         pos += 8; // tradeIdGenerator
         int numMarkets = b.getInt(pos); pos += 4;

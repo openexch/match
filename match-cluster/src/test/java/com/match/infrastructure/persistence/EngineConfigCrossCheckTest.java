@@ -126,4 +126,36 @@ public class EngineConfigCrossCheckTest {
             assertTrue(check + " logged: " + err, err.contains("CRITICAL (snapshot-restore): " + check));
         }
     }
+
+    /**
+     * RC2 S17 W12 (R-ME-2, M3): a restore that dropped an order never serves. An envelope-1 image whose BTC bid sits
+     * above the legacy-mode node's price ceiling (SnapshotCodecTest.geometryMismatchIsLoud's order) restores with
+     * one rejected order: the node refuses the image and fail-fasts once (text not pinned: a V2 image may meet the
+     * R11 bijection check first).
+     */
+    @Test
+    public void aRestoreThatDroppedAnOrderIsRefusedOnALegacyNode() {
+        final ExpandableArrayBuffer body = new ExpandableArrayBuffer();
+        int p = 0;
+        body.putLong(p, 5); p += 8;                                   // orderIdGen
+        body.putLong(p, 1); p += 8;                                   // tradeIdGen
+        body.putInt(p, 1); p += 4;                                    // numMarkets
+        body.putInt(p, Engine.MARKET_BTC_USD); p += 4;
+        body.putInt(p, 1); p += 4;                                    // one bid
+        body.putLong(p, 1); p += 8;                                   // orderId
+        body.putLong(p, 1); p += 8;                                   // userId
+        body.putLong(p, com.match.domain.FixedPoint.fromDouble(200_000.0)); p += 8; // above the $150k ceiling
+        body.putLong(p, com.match.domain.FixedPoint.fromDouble(1.0)); p += 8;       // qty
+        body.putInt(p, 0); p += 4;                                    // no asks
+        body.putLong(p, 0); p += 8;                                   // timerCorrelationId
+        body.putInt(p, 0); p += 4;                                    // omsMapCount
+        final byte[] image = S2Services.envelopeV1(Arrays.copyOf(body.byteArray(), p));
+
+        final S2Services.Service legacy = new S2Services.Service(false);
+        final boolean[] served = new boolean[1];
+        final String err = stderrOf(() -> served[0] = legacy.load(image));
+        assertFalse("a node that dropped an order never serves: " + err, served[0]);
+        assertEquals("failFast once", 1, legacy.failFast.get());
+        assertTrue(err, err.contains("CRITICAL: snapshot refused:"));
+    }
 }
