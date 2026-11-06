@@ -12,15 +12,74 @@ package com.match.application.publisher;
  * calls in its hot path — no lifecycle or snapshot concerns belong here.</p>
  */
 public interface MatchEventSink {
+    /**
+     * Journal-only side output of a durable command (ME journal record 3). Whether a node
+     * journals is node configuration, never replicated state, so the command is applied either
+     * way.
+     *
+     * <p>RC2 S3 compile fence (review FIX-9): the pre-S3 {@code (long, DurableCommandOutcome, int)}
+     * form is gone with no bridge, and every implementor carries {@code @Override}, so a sink left
+     * on the old signature fails to compile instead of silently journaling nothing.</p>
+     *
+     * @param egressSeq       the entry's log position
+     * @param journalSeq      the engine's allocation for this record (0 under behaviour 1)
+     * @param ledgerSizeAfter the command ledger size after this outcome is recorded (unchanged
+     *                        for a conflict, capacity or invalid outcome); record 3 {@code ledgerSize}
+     */
+    default void publishCommandOutcome(long egressSeq, long journalSeq,
+                                       com.match.domain.commands.DurableCommandOutcome outcome,
+                                       int ledgerSizeAfter) {
+    }
 
     /**
-     * Publish a single trade execution. Called once per match, in match order.
+     * RC2 S4 (contract section 8, delta 12.14): the behaviour-2 form of record 3. The outcome is the
+     * engine's single mutable scratch, a view: implementations must not retain it after the call (a
+     * recorder copies). Behaviour 1 keeps the record form above.
      *
+     * @param ledgerSizeAfter the ledger v2 size after this outcome (+1 only for B5-B7)
+     * @param ledgerCapacity  the recorded commandLedgerCapacity C
+     */
+    default void publishCommandOutcome(long egressSeq, long journalSeq,
+                                       com.match.domain.commands.DurableOutcomeView outcome,
+                                       int ledgerSizeAfter, int ledgerCapacity) {
+    }
+
+    /**
+     * RC2 S4 (contract 4.3, section 8): journal-only side output of one {@code ReleaseCommandIds}
+     * frame with at least one APPLIED or LEG_LIVE entry (ME journal record 4). The arrays are the
+     * engine's preallocated scratch (first {@code count} used): never retain them.
+     */
+    default void publishCommandRelease(long egressSeq, long journalSeq, long releaseSeq, int ledgerSize,
+                                       int ledgerCapacity, int tombstoneRanges, int count,
+                                       long[] commandIdHigh, long[] idLowFloor, int[] scope,
+                                       int[] result, int[] removed) {
+    }
+
+    /**
+     * RC2 S2: journal-only side output of a FRESH or BUMP EngineConfig decision (ME journal
+     * record 5). Node configuration decides whether it is journaled, never replicated state.
+     *
+     * @param egressSeq  the entry's log position
+     * @param journalSeq the journalSeq the state machine allocated for this record
+     * @param decision   ConfigDecision wire value: FRESH 0 or BUMP 3
+     */
+    default void publishEngineConfig(long egressSeq, long journalSeq,
+                                     com.match.application.engine.EngineConfigState recorded, int decision) {
+    }
+
+    /**
+     * Publish a single trade execution. Called once per match, in match order. RC2 S3: the
+     * engine owns both ids (contract section 3); the sink holds no counter.
+     *
+     * @param tradeId    the engine-allocated trade id (1, +1 per trade in match order)
+     * @param journalSeq the engine-allocated journalSeq of record 1 (0 under behaviour 1)
      * @return true if accepted by the sink, false if the market is unknown
      */
     boolean publishTradeExecution(
             int marketId,
             long timestamp,
+            long tradeId,
+            long journalSeq,
             long takerOrderId,
             long takerUserId,
             long makerOrderId,
@@ -33,7 +92,8 @@ public interface MatchEventSink {
             long egressSeq);
 
     /**
-     * Publish an order status update (NEW / PARTIALLY_FILLED / FILLED / CANCELLED / REJECTED).
+     * Publish an order status update (NEW / PARTIALLY_FILLED / FILLED / CANCELLED / REJECTED) to
+     * egress only; this form never journals.
      *
      * @param rejectReason raw {@link com.match.application.orderbook.OrderRejectReason} code explaining
      *                     WHY a REJECTED (or reason-carrying CANCELLED) status fired;
@@ -59,11 +119,12 @@ public interface MatchEventSink {
             long egressSeq);
 
     /**
-     * Variant with journal-terminal suppression. {@code suppressJournalTerminal} is set ONLY for
-     * the old-leg CANCELLED of an accepted cancel-replace: it shares the live replacement's
-     * omsOrderId (the AE money key), so a journaled terminal would feed the AE a TerminalRelease
-     * that strips the still-open order's hold. Sinks without a settlement journal can ignore the
-     * flag — this default delegates to the 12-arg form.
+     * RC2 S3: the engine's terminal journal decision travels with the status. The engine sets
+     * {@code journalTerminal} for every FILLED / CANCELLED / REJECTED it publishes through its
+     * plain status path, and clears it for the pre-cancel amend rejection and the replace
+     * old-leg CANCELLED (neither closes the OMS order, the AE money key). A sink journals a
+     * terminal iff the engine says so, at the engine's {@code journalSeq}. Sinks without a
+     * settlement journal can ignore both: this default delegates to the egress-only form.
      */
     default boolean publishOrderStatusUpdate(
             int marketId,
@@ -78,7 +139,8 @@ public interface MatchEventSink {
             long omsOrderId,
             int rejectReason,
             long egressSeq,
-            boolean suppressJournalTerminal) {
+            boolean journalTerminal,
+            long journalSeq) {
         return publishOrderStatusUpdate(marketId, timestamp, orderId, userId, orderStatus,
             remainingQty, filledQty, orderPrice, orderIsBuy, omsOrderId, rejectReason, egressSeq);
     }

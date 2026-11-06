@@ -251,7 +251,16 @@ public class AeronGateway implements EgressListener, AutoCloseable {
             cluster = null;
         }
 
+        // RC2 S6: an S6 ME authenticates every session; the market gateway is a GATEWAY (egress only at
+        // behaviour 2). Refuse to start without ME_AUTH_CREDENTIAL or with another class. The names are the
+        // ME policy's (match-cluster MatchAuth.POLICY).
+        final com.openexchange.cluster.auth.ClusterCredentials credentials =
+            com.openexchange.cluster.auth.ClusterCredentials.requireFromEnvironment(
+                "match.auth.credential", "ME_AUTH_CREDENTIAL", "match",
+                com.openexchange.cluster.auth.ClusterSessionClass.GATEWAY);
+
         final AeronCluster.Context clusterCtx = new AeronCluster.Context()
+            .credentialsSupplier(credentials.supplier())
             .egressListener(this)
             .egressChannel(egressChannel)
             // mtu=8k requires loopback or jumbo-frame path (MTU >= 8192). Drop to 1408

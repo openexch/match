@@ -24,6 +24,12 @@ node0..2 (archives on tmpfs)          ClusterBackupApp ("backup" PM service)
   retrieved snapshot every backup query cycle. Effective worst case ≈
   `BACKUP_INTERVAL_SEC` + replication lag. **RTO**: restore copy time + normal
   node recovery (snapshot load + log replay).
+- RC2 S6: the ME authenticates every BackupQuery, and only the `REPLICA` class may send one (it may do
+  nothing else: no HeartbeatRequest, StandbySnapshot, AdminRequest or ingress). The process manager MUST
+  pass `ME_AUTH_CREDENTIAL=<keyId>:REPLICA:<secretHex>` to the backup, and every ME node's
+  `ME_AUTH_KEYS` must hold that key as `<keyId>:REPLICA:<secretHex>::users=*`. Without it the app refuses
+  to start; with another class every query is answered `Not authorised for BackupQuery` and the backup
+  makes no progress (the stall watchdog below then halts it).
 - The process manager MUST pass `CLUSTER_ADDRESSES` (all three members) and
   `BASE_DIR` to the app. Running it with defaults gives it a single consensus
   endpoint, and Aeron's ClusterBackup wedges in an infinite loop whenever the

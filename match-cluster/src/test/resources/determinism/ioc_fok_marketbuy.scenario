@@ -1,0 +1,31 @@
+# RC2 S5 (behaviour 2): native IOC and FOK on LIMIT creates, the bounded market buy and its status map.
+GENESIS behaviour=2 cap=3
+MARKET BTC_USD
+CLOCK 1000
+DCREATE u=100 side=ASK px=60000.0 qty=1.0 oms=1 attempt=0                     # order 1 rests
+DCREATE u=101 side=ASK px=60001.0 qty=1.0 oms=2 attempt=0                     # order 2 rests
+DCREATE u=200 side=BID px=60001.0 qty=3.0 oms=3 attempt=0 tif=IOC             # order 3: 2 trades, CANCELLED IOC_REMAINDER
+DCREATE u=200 side=BID px=60001.0 qty=1.0 oms=4 attempt=0 tif=IOC             # order 4: no match, CANCELLED (not REJECTED)
+CLOCK 2000
+DCREATE u=100 side=ASK px=60000.0 qty=1.0 oms=5 attempt=0                     # order 5
+DCREATE u=101 side=ASK px=60001.0 qty=1.0 oms=6 attempt=0                     # order 6
+DCREATE u=102 side=ASK px=60002.0 qty=1.0 oms=7 attempt=0                     # order 7
+DCREATE u=103 side=ASK px=60003.0 qty=1.0 oms=8 attempt=0                     # order 8
+DCREATE u=200 side=BID px=60001.0 qty=3.0 oms=9 attempt=0 tif=FOK             # order 9: FOK infeasible by quantity
+DCREATE u=200 side=BID px=60003.0 qty=4.0 oms=10 attempt=0 tif=FOK            # order 10: FOK infeasible by the cap (3)
+DCREATE u=200 side=BID px=60003.0 qty=3.0 oms=11 attempt=0 tif=FOK            # order 11: FILLED by exactly 3 makers
+CLOCK 3000
+DCREATE u=104 side=ASK px=60010.0 qty=1.0 oms=12 attempt=0                    # order 12
+DCREATE u=105 side=ASK px=60011.0 qty=1.0 oms=13 attempt=0                    # order 13
+DCREATE u=106 side=ASK px=60012.0 qty=1.0 oms=14 attempt=0                    # order 14
+DCREATE u=201 side=BID type=MARKET qty=1.0 budget=1000000.0 oms=15 attempt=0  # order 15: bound 1 filled (order 8)
+DCREATE u=201 side=BID type=MARKET qty=2.0 budget=1000000.0 oms=16 attempt=0 tif=IOC  # order 16: bound 2 filled
+DCREATE u=201 side=BID type=MARKET qty=1.0 budget=30000.0 oms=17 attempt=0    # order 17: budget first, CANCELLED BUDGET_EXHAUSTED
+DCREATE u=201 side=BID type=MARKET qty=2.0 budget=1000000.0 oms=18 attempt=0  # order 18: book exhausted, CANCELLED IOC_REMAINDER
+DCREATE u=201 side=BID type=MARKET qty=1.0 budget=1000.0 oms=19 attempt=0     # order 19: empty book, REJECTED NO_LIQUIDITY
+DCREATE u=202 side=BID type=MARKET qty=0.0 budget=1000.0 oms=20 attempt=0     # order 20: no bound, REJECTED INVALID_QUANTITY
+CLOCK 4000
+DCREATE u=300 side=BID px=59000.0 qty=1.0 oms=21 attempt=0                    # order 21 rests
+DCREATE u=301 side=ASK type=MARKET qty=2.0 oms=22 attempt=0                   # order 22: sell on a thin book, CANCELLED IOC_REMAINDER
+DCREATE u=100 side=ASK type=LIMIT_MAKER px=61000.0 qty=1.0 oms=23 attempt=0 tif=IOC  # INVALID (tif on LIMIT_MAKER)
+DCREATE u=100 side=BID type=MARKET qty=1.0 budget=100.0 oms=24 attempt=0 tif=FOK     # INVALID (FOK on MARKET)

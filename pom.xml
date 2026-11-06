@@ -6,7 +6,7 @@
 
     <groupId>com.match</groupId>
     <artifactId>match-engine</artifactId>
-    <version>1.0</version>
+    <version>1.0-runtime.20260929.r02h</version>
     <packaging>pom</packaging>
 
     <name>Match Engine Parent</name>
@@ -32,17 +32,21 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
-        <cluster-kit.version>0.1.7</cluster-kit.version>
-        <agrona.version>2.6.1</agrona.version>
-        <aeron.version>1.53.2</aeron.version>
-        <sbe.version>1.40.2</sbe.version>
+        <cluster-kit.version>0.1.12-runtime.20261104.rc2s17w12.g43847fb</cluster-kit.version>
+        <aeron.version>1.53.1</aeron.version>
+        <agrona.version>2.6.0</agrona.version>
+        <sbe.version>1.40.1</sbe.version>
         <disruptor.version>4.0.0</disruptor.version>
-        <netty.version>4.2.19.Final</netty.version>
+        <netty.version>4.2.18.Final</netty.version>
         <gson.version>2.14.0</gson.version>
         <!-- Market-data persistence (mirror the OMS repo's versions) -->
-        <postgresql.version>42.7.14</postgresql.version>
+        <postgresql.version>42.7.13</postgresql.version>
         <hikaricp.version>7.1.0</hikaricp.version>
-        <slf4j.version>2.0.20</slf4j.version>
+        <slf4j.version>2.0.19</slf4j.version>
+        <!-- RC2 S17 W11 (PO-12 (a)): reproducible jars (maven-jar / shade entry times), so the match jar's source sha
+             is derived by rebuilding the committed tree, as for the assets jars. The Maven convention: a literal
+             ISO-8601 instant, bumped at release. -->
+        <project.build.outputTimestamp>2026-11-01T00:00:00Z</project.build.outputTimestamp>
     </properties>
 
     <dependencyManagement>
@@ -181,7 +185,7 @@
                 <plugin>
                     <groupId>org.codehaus.mojo</groupId>
                     <artifactId>exec-maven-plugin</artifactId>
-                    <version>3.6.4</version>
+                    <version>3.6.3</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>

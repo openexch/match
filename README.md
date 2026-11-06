@@ -226,6 +226,23 @@ Key parameters in `InfrastructureConstants.java`:
 | Session Timeout | 10s |
 | Gateway Heartbeat | 100ms |
 
+### Session authority (RC2 S6)
+
+Every cluster session authenticates; there is no anonymous mode. Each ME node reads its key table
+from `ME_AUTH_KEYS` (or `-Dmatch.auth.keys`); every client presents `ME_AUTH_CREDENTIAL` (or
+`-Dmatch.auth.credential`). An empty table rejects every session (logged once); a malformed table stops
+the node at boot.
+
+- Key table: `keyId:CLASS:secretHex::users=*` entries joined by `;`. The ME has no user scope, so the
+  users field is always `users=*`; a missing or empty users field and an id list are refused at boot.
+- Classes: `GATEWAY` (market gateway, egress only at behaviour 2), `FORWARDER` (the durable lane,
+  templates 9 and 10), `ADMIN` (EngineConfig in every state, open-order reads), `REPLICA` (the backup:
+  BackupQuery only, no ingress).
+- Credential: `keyId:CLASS:secretHex` (64 hex digits). The backup refuses to start without a `REPLICA`
+  credential, the market gateway without a `GATEWAY` one.
+- A pre-S6 log or snapshot carries principal-less sessions: the node halts with
+  `principal-less session in log: pre-S6 history, clean genesis required`.
+
 ## Contributing
 
 Contributions are welcome! Please:

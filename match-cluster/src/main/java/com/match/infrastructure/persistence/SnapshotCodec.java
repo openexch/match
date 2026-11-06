@@ -45,28 +45,62 @@ import java.util.Arrays;
  *       [minPrice : long][maxPrice : long][tickSize : long]
  * </pre>
  *
- * <p><b>Slice C note for future tails:</b> because the engineConfig block is written only when
- * present, any FUTURE trailing block must begin with a marker distinguishable from this block's
- * present byte (1) or make the config block unconditional first.</p>
+ *   [identity marker      : byte = 3]  // RC2 S2: ONLY when the recorded behaviorVersion >= 2,
+ *     [identityBlockVersion : int = 1]  // immediately after the config block and BEFORE the
+ *     [behaviorVersion      : int]      // ledger block (the ledger read consumes to the payload
+ *     [commandLedgerCapacity: int]      // end). uint32 values: low 32 bits written, read
+ *     [maxWireVersion       : int]      // unsigned. 41 bytes. An image carrying it is ALWAYS
+ *     [genesisId            : long]     // wrapped in the durable envelope; with an empty ledger
+ *     [meEpoch              : long]     // no marker-2 block follows (the payload ends here).
+ *     [nextJournalSeq       : long]
+ *   [ledger marker : byte = 2] ...     // DurableCommandLedger v1, at behaviour 1 ALWAYS (RC2 S17 W12), 0 entries allowed
+ * </pre>
+ *
+ * <p><b>Note for future tails:</b> every optional block starts with a distinct marker byte:
+ * 1 config, 3 identity, 2 ledger v1, 4 ledger v2 (RC2 S4).</p>
+ *
+ * <p><b>RC2 S4 (contract section 7):</b> at a recorded behaviour >= 2 the image is ALWAYS envelope
+ * version 2 and its payload is the positional body (omsMap section included), the config block,
+ * the identity block and the ledger v2 block (marker 4, also when empty), and nothing after it.
+ * Behaviour 1 is envelope version 1 with the v1 ledger block, ALWAYS (RC2 S17 W12: also with 0 entries and
+ * before any config, so no bare image is written and the reader refuses one). The
+ * reader accepts envelope 1 only without markers 3 and 4, and envelope 2 only with 1, 3, 4 in that
+ * order, and then checks R1-R11 (R11: the omsMap keys and the resting legs are in bijection).</p>
+ *
+ * <pre>
+ *   Durable envelope (always; a payload without it is refused, RC2 S17 W12 R-ME-1):
+ *   [DURABLE_MAGIC : long][envelope version : int = 1 | 2][payload length : int][CRC32C : int][payload]</pre>
  *
  * <p>All scalars use the buffer's native byte order (Agrona default), identical to the
  * historical inline encode/decode.</p>
  */
 public final class SnapshotCodec {
 
+    // Negative magic cannot be a valid historical order-id generator. Whole-frame length + CRC
+    // prevents a truncated ledger suffix being mistaken for a valid legacy snapshot.
+    static final long DURABLE_MAGIC = -0x434d444c45444745L;
+
+    /** RC2 S2: marker byte of the identity block (contract 2.2). */
+    static final byte IDENTITY_MARKER = 3;
+    /** RC2 S2: the only identity block version. */
+    static final int IDENTITY_BLOCK_VERSION = 1;
+    /** RC2 S2: marker + version + 3 ints + 3 longs. */
+    static final int IDENTITY_BLOCK_LENGTH = 1 + 4 + 4 + 4 + 4 + 8 + 8 + 8;
+    /** RC2 S4: envelope versions. 1 = behaviour 1 (ledger v1); 2 = behaviour >= 2 (ledger v2). */
+    static final int ENVELOPE_V1 = 1;
+    static final int ENVELOPE_V2 = 2;
     private SnapshotCodec() {
     }
 
     /**
-     * Scalars recovered from a snapshot that the caller must apply to its own collaborators
-     * (the {@code Engine}'s order-id generator is applied in-place by {@link #deserialize};
-     * {@code tradeIdGenerator} goes to the event publisher and {@code timerCorrelationId} to
-     * the timer manager).
+     * Scalars recovered from a snapshot. The {@code Engine}'s order-id and (RC2 S3) trade-id
+     * generators are applied in place by {@link #deserialize}; only {@code timerCorrelationId}
+     * is for the caller (the timer manager).
      */
     public static final class Decoded {
         /** Order-id generator value (already applied to the engine by {@link #deserialize}). */
         public final long orderIdGenerator;
-        /** Trade-id generator value — caller must apply to the event publisher. */
+        /** Trade-id generator value (already applied to the engine by {@link #deserialize}; for logs). */
         public final long tradeIdGenerator;
         /** Legacy timer correlation counter — caller applies only if {@link #timerCorrelationIdPresent}. */
         public final long timerCorrelationId;
@@ -79,10 +113,14 @@ public final class SnapshotCodec {
         /** Slice C: true when the snapshot carried an engineConfig block (already restored into
          *  the engine — {@code engine.getEngineConfig()}). False for legacy/config-less snapshots. */
         public final boolean engineConfigPresent;
+        /** RC2 S2: true when the image carried the identity block (recorded behaviour >= 2); the
+         *  identity is then already bound on {@code engine.meIdentity()}. */
+        public final boolean identityPresent;
 
         Decoded(long orderIdGenerator, long tradeIdGenerator, long timerCorrelationId,
                 boolean timerCorrelationIdPresent, int rejectedOrders, int bytesConsumed,
-                boolean engineConfigPresent) {
+                boolean engineConfigPresent, boolean identityPresent) {
+            this.identityPresent = identityPresent;
             this.orderIdGenerator = orderIdGenerator;
             this.tradeIdGenerator = tradeIdGenerator;
             this.timerCorrelationId = timerCorrelationId;
@@ -94,16 +132,19 @@ public final class SnapshotCodec {
     }
 
     /**
-     * Serialize engine state plus the two externally-held scalars into {@code dst}.
+     * Serialize engine state plus the externally-held timer counter into {@code dst}.
      *
-     * @param engine             matching engine whose order books + order-id generator are written
-     * @param tradeIdGenerator   current trade-id generator value (held by the event publisher)
+     * <p>RC2 S3: the trade-id generator is engine-owned and read from
+     * {@link Engine#getTradeIdGenerator()} (payload offset 8, layout unchanged); the pre-S3
+     * form that took it as an argument is gone, so no second copy can be written.</p>
+     *
+     * @param engine             matching engine whose order books + id generators are written
      * @param timerCorrelationId current timer correlation counter (held by the timer manager)
      * @param dst                destination buffer (an {@code ExpandableArrayBuffer} grows as needed)
      * @return number of bytes written — offer {@code dst, 0, length}
      */
-    public static int serialize(Engine engine, long tradeIdGenerator, long timerCorrelationId,
-                                MutableDirectBuffer dst) {
+    public static int serialize(Engine engine, long timerCorrelationId, MutableDirectBuffer dst) {
+        final long tradeIdGenerator = engine.getTradeIdGenerator();
         int pos = 0;
 
         dst.putLong(pos, engine.getOrderIdGenerator());
@@ -214,6 +255,53 @@ public final class SnapshotCodec {
             }
         }
 
+        // RC2 S2: the identity block, only at a recorded behaviour >= 2 (a behaviour-1 image is
+        // byte-identical to the S1 serializer). It forces the envelope, so an S1 jar meets byte 3
+        // where it expects the ledger marker and fails closed ("Durable snapshot ledger missing").
+        final boolean identityBlock = config != null && config.behaviorVersion >= 2;
+        if (identityBlock) {
+            final com.match.application.engine.MeIdentity identity = engine.meIdentity();
+            dst.putByte(pos, IDENTITY_MARKER);
+            pos += 1;
+            dst.putInt(pos, IDENTITY_BLOCK_VERSION);
+            pos += 4;
+            dst.putInt(pos, (int) config.behaviorVersion); // low 32 bits of the uint32
+            pos += 4;
+            dst.putInt(pos, (int) config.commandLedgerCapacity);
+            pos += 4;
+            dst.putInt(pos, (int) config.maxWireVersion);
+            pos += 4;
+            dst.putLong(pos, config.genesisId);
+            pos += 8;
+            dst.putLong(pos, identity.meEpoch());
+            pos += 8;
+            dst.putLong(pos, identity.nextJournalSeq());
+            pos += 8;
+        }
+
+        if (identityBlock) {
+            // RC2 S4 (contract 7.1): the ledger v2 block, always (empty too), and envelope 2.
+            final com.match.application.engine.DurableCommandLedgerV2 ledger = engine.ledgerV2();
+            if (ledger == null) {
+                throw new IllegalStateException("[SNAPSHOT] behaviour " + config.behaviorVersion
+                        + " engine without a ledger v2: refusing to write a snapshot");
+            }
+            if (engine.commandLedger().size() > 0) {
+                throw new IllegalStateException("[SNAPSHOT] behaviour " + config.behaviorVersion
+                        + " engine holds " + engine.commandLedger().size() + " ledger v1 entries");
+            }
+            pos = ledger.write(dst, pos);
+        } else {
+            // RC2 S17 W12 (R-ME-1): the v1 ledger block is ALWAYS written at behaviour 1 (0 entries included),
+            // and so is the envelope: a bare image is never written, so the reader can refuse one.
+            pos = engine.commandLedger().write(dst, pos);
+        }
+        {
+            byte[] payload = new byte[pos]; dst.getBytes(0,payload);
+            var crc = new java.util.zip.CRC32C(); crc.update(payload,0,payload.length);
+            dst.putLong(0,DURABLE_MAGIC); dst.putInt(8, identityBlock ? ENVELOPE_V2 : ENVELOPE_V1); dst.putInt(12,pos);
+            dst.putInt(16,(int)crc.getValue()); dst.putBytes(20,payload); pos+=20;
+        }
         return pos;
     }
 
@@ -230,8 +318,8 @@ public final class SnapshotCodec {
 
     /**
      * Decode a complete (reassembled) snapshot payload into {@code engine}, restoring its order
-     * books and order-id generator. The trade-id generator and timer correlation counter are
-     * returned in {@link Decoded} for the caller to apply to its publisher / timer manager.
+     * books and its order-id and trade-id generators in place. The timer correlation counter is
+     * returned in {@link Decoded} for the caller to apply to its timer manager.
      *
      * @param src    source buffer
      * @param offset start of the payload within {@code src}
@@ -239,6 +327,27 @@ public final class SnapshotCodec {
      * @param engine engine to restore into (its books are cleared and repopulated)
      */
     public static Decoded deserialize(DirectBuffer src, int offset, int length, Engine engine) {
+        if (offset<0 || length<20 || offset>src.capacity() || length>src.capacity()-offset)
+            throw new IllegalStateException("Invalid snapshot frame");
+        final int originalOffset = offset;
+        // RC2 S17 W12 (R-ME-1): the envelope is mandatory. A bare image (the v0.5.0-beta tag layout, or an S16-era
+        // RC2 image with an empty ledger) is byte-identical in shape to a foreign one: refuse it, read nothing.
+        if (src.getLong(offset) != DURABLE_MAGIC) {
+            throw new IllegalStateException("snapshot envelope magic missing (length=" + length
+                    + "): refusing a bare or foreign snapshot image");
+        }
+        final boolean durableEnvelope = true;
+        // RC2 S4: envelope 2 = a behaviour >= 2 image (ledger v2, R1-R11).
+        final boolean envelopeV2 = durableEnvelope && src.getInt(offset + 8) == ENVELOPE_V2;
+        if (durableEnvelope) {
+            final int envelopeVersion = src.getInt(offset + 8);
+            if ((envelopeVersion != ENVELOPE_V1 && envelopeVersion != ENVELOPE_V2) || src.getInt(offset+12)!=length-20)
+                throw new IllegalStateException("Unsupported/truncated durable snapshot");
+            byte[] payload = new byte[length-20]; src.getBytes(offset+20,payload);
+            var crc = new java.util.zip.CRC32C(); crc.update(payload,0,payload.length);
+            if ((int)crc.getValue()!=src.getInt(offset+16)) throw new IllegalStateException("Corrupt durable snapshot");
+            offset+=20; length-=20;
+        }
         int pos = offset;
         final int end = offset + length;
 
@@ -248,6 +357,7 @@ public final class SnapshotCodec {
 
         final long tradeIdGen = src.getLong(pos);
         pos += 8;
+        engine.setTradeIdGenerator(tradeIdGen);
 
         final int numMarkets = src.getInt(pos);
         pos += 4;
@@ -317,17 +427,39 @@ public final class SnapshotCodec {
         // so a hand-built partial buffer (unit tests) or a pre-v9 snapshot lacking this section
         // decodes cleanly; a real v9 snapshot always carries at least the 4-byte count. Restored
         // directly into the engine — no Decoded field is needed.
-        final Long2LongHashMap omsMap = engine.getOrderIdToOmsOrderId();
-        omsMap.clear();
+        // RC2 S4 (contract 5.2): written through LegIndex (clear + restore per pair), never into the
+        // raw map. Envelope 2 (R11): the section is mandatory, its keys strictly ascending and its
+        // values >= 1; the bijection with the resting legs is checked once the books are restored.
+        final com.match.application.engine.LegIndex legIndex = engine.legIndex();
+        legIndex.clear();
+        int omsMapCount = -1;
+        if (envelopeV2 && end - pos < 4) {
+            throw new IllegalStateException("[SNAPSHOT] R11: envelope 2 without the omsMap section (corrupt snapshot)");
+        }
         if (pos + 4 <= end) {
-            final int omsMapCount = src.getInt(pos);
+            omsMapCount = src.getInt(pos);
             pos += 4;
+            if (envelopeV2 && (omsMapCount < 0 || (long) omsMapCount * 16 > end - pos)) {
+                throw new IllegalStateException("[SNAPSHOT] R11: omsMap count " + omsMapCount + " out of range (corrupt snapshot)");
+            }
+            long previousKey = 0;
             for (int i = 0; i < omsMapCount; i++) {
                 final long orderId = src.getLong(pos);
                 pos += 8;
                 final long omsOrderId = src.getLong(pos);
                 pos += 8;
-                omsMap.put(orderId, omsOrderId);
+                if (envelopeV2) {
+                    if (i > 0 && orderId <= previousKey) {
+                        throw new IllegalStateException("[SNAPSHOT] R11: omsMap keys not strictly ascending at "
+                                + i + " (orderId " + orderId + ") (corrupt snapshot)");
+                    }
+                    if (omsOrderId < 1) {
+                        throw new IllegalStateException("[SNAPSHOT] R11: omsMap value " + omsOrderId + " for orderId "
+                                + orderId + " (corrupt snapshot)");
+                    }
+                    previousKey = orderId;
+                }
+                legIndex.restore(orderId, omsOrderId);
             }
         }
 
@@ -337,6 +469,16 @@ public final class SnapshotCodec {
         // block; a truncated block then fails loudly (buffer bounds), which is correct for a
         // corrupt snapshot.
         boolean engineConfigPresent = false;
+        boolean identityPresent = false;
+        boolean ledgerV2Restored = false;
+        if (envelopeV2 && !(pos + 1 <= end && src.getByte(pos) == 1)) {
+            throw new IllegalStateException("[SNAPSHOT] envelope 2 without the engineConfig block (marker 1)"
+                    + " (corrupt snapshot)");
+        }
+        if (pos + 1 <= end && src.getByte(pos) == IDENTITY_MARKER) {
+            throw new IllegalStateException("[SNAPSHOT] identity block without a preceding engineConfig"
+                    + " block (corrupt snapshot)");
+        }
         if (pos + 1 <= end && src.getByte(pos) == 1) {
             pos += 1;
             final long configVersion = src.getLong(pos);
@@ -367,24 +509,87 @@ public final class SnapshotCodec {
                 defs[i] = new com.match.application.engine.EngineConfigState.MarketDef(
                         marketId, symbol, minPrice, maxPrice, tickSize);
             }
+            // RC2 S2 reader order (contract 2.2): the identity block directly follows the config
+            // block and is parsed BEFORE the config is built, so the engines are created from the
+            // 10-field config and the identity is bound only after them.
+            long behaviorVersion = com.match.application.engine.EngineConfigState.DEFAULT_BEHAVIOR_VERSION;
+            long commandLedgerCapacity =
+                    com.match.application.engine.EngineConfigState.DEFAULT_COMMAND_LEDGER_CAPACITY;
+            long genesisId = com.match.application.engine.EngineConfigState.DEFAULT_GENESIS_ID;
+            long maxWireVersion = com.match.application.engine.EngineConfigState.DEFAULT_MAX_WIRE_VERSION;
+            long meEpoch = 0;
+            long nextJournalSeq = 0;
+            if (pos + 1 <= end && src.getByte(pos) == IDENTITY_MARKER) {
+                if (!durableEnvelope) {
+                    throw new IllegalStateException("[SNAPSHOT] identity block in an image without the"
+                            + " durable envelope (no CRC, no end check): corrupt snapshot");
+                }
+                if (!envelopeV2) {
+                    // RC2 S4 (7.1): an S2/S3-shape image (envelope 1 + identity) was never deployed.
+                    throw new IllegalStateException("[SNAPSHOT] identity block (marker 3) in an envelope-1"
+                            + " image: a behaviour >= 2 image is envelope 2 with a ledger v2 block (corrupt or"
+                            + " pre-S4 snapshot)");
+                }
+                if (end - pos < IDENTITY_BLOCK_LENGTH) {
+                    throw new IllegalStateException("[SNAPSHOT] truncated identity block: "
+                            + (end - pos) + " of " + IDENTITY_BLOCK_LENGTH + " bytes");
+                }
+                pos += 1;
+                final int blockVersion = src.getInt(pos);
+                pos += 4;
+                behaviorVersion = src.getInt(pos) & 0xFFFFFFFFL;
+                pos += 4;
+                commandLedgerCapacity = src.getInt(pos) & 0xFFFFFFFFL;
+                pos += 4;
+                maxWireVersion = src.getInt(pos) & 0xFFFFFFFFL;
+                pos += 4;
+                genesisId = src.getLong(pos);
+                pos += 8;
+                meEpoch = src.getLong(pos);
+                pos += 8;
+                nextJournalSeq = src.getLong(pos);
+                pos += 8;
+                if (blockVersion != IDENTITY_BLOCK_VERSION) {
+                    throw new IllegalStateException("[SNAPSHOT] unsupported identity block version "
+                            + blockVersion);
+                }
+                if (behaviorVersion < 2) {
+                    throw new IllegalStateException("[SNAPSHOT] identity block with behaviorVersion "
+                            + behaviorVersion + " < 2 (corrupt snapshot)");
+                }
+                if (meEpoch != genesisId) {
+                    throw new IllegalStateException("[SNAPSHOT] identity block meEpoch " + meEpoch
+                            + " != genesisId " + genesisId + " (corrupt snapshot)");
+                }
+                if (nextJournalSeq < 2) {
+                    throw new IllegalStateException("[SNAPSHOT] identity block nextJournalSeq "
+                            + nextJournalSeq + " < 2 (corrupt snapshot)");
+                }
+                identityPresent = true;
+            }
+
             final com.match.application.engine.EngineConfigState config =
                     com.match.application.engine.EngineConfigState.of(configVersion,
                             implByte == 1 ? com.match.application.engine.EngineConfigState.IMPL_DIRECT
                                           : com.match.application.engine.EngineConfigState.IMPL_ARRAY,
-                            bookCapacity, maxMatchesPerOrder, maxOrdersPerLevel, defs);
+                            bookCapacity, maxMatchesPerOrder, maxOrdersPerLevel, defs,
+                            behaviorVersion, commandLedgerCapacity, genesisId, maxWireVersion);
             engineConfigPresent = true;
+
+            // A recorded config was validated at accept time (S-a..S-c), so an invalid one here
+            // means snapshot corruption: fail the boot loudly in both launch modes rather than
+            // build or record a half-wrong engine. A structurally valid but unsupported value
+            // (behaviour 3, ceiling 13) is restored; the node-local check then halts the node.
+            final String invalid = config.invalidReason();
+            if (invalid != null) {
+                throw new IllegalStateException(
+                        "[SNAPSHOT] engineConfig block is invalid (corrupt snapshot?): " + invalid);
+            }
 
             if (enginesWereEmpty) {
                 // Config-mode fresh-from-snapshot: rebuild the engines from the recorded config —
                 // identically to the original creation (same normalized market order) — then
-                // restore the parked books. A recorded config was validated at accept time, so an
-                // invalid one here means snapshot corruption: fail the boot loudly rather than
-                // build a half-wrong engine.
-                final String invalid = config.invalidReason();
-                if (invalid != null) {
-                    throw new IllegalStateException(
-                            "[SNAPSHOT] engineConfig block is invalid (corrupt snapshot?): " + invalid);
-                }
+                // restore the parked books.
                 engine.createEnginesFromConfig(config);
                 for (int i = 0; i < parkedMarketIds.size(); i++) {
                     final int marketId = parkedMarketIds.get(i);
@@ -408,6 +613,22 @@ public final class SnapshotCodec {
                 // matches it is the caller's cross-check (AppClusteredService fail-fast).
                 engine.setEngineConfig(config);
             }
+            // Only now bind the identity, in both branches.
+            if (identityPresent) {
+                // RC2 S3: through the engine, which turns dense journalSeq allocation on.
+                engine.restoreIdentity(meEpoch, nextJournalSeq, behaviorVersion);
+            }
+            if (envelopeV2) {
+                if (!identityPresent) {
+                    throw new IllegalStateException("[SNAPSHOT] envelope 2 without the identity block (marker 3)"
+                            + " after the config block (corrupt snapshot)");
+                }
+                // RC2 S4 R1-R10: the ledger v2 block ends the payload.
+                engine.restoreLedgerV2(com.match.application.engine.DurableCommandLedgerV2.read(
+                        src, pos, end, commandLedgerCapacity));
+                pos = end;
+                ledgerV2Restored = true;
+            }
         } else if (enginesWereEmpty && !parkedMarketIds.isEmpty()) {
             // Config-mode node restoring a snapshot that has market books but NO config block:
             // nothing to build engines from — this is state loss and must be loud, never silent.
@@ -423,8 +644,57 @@ public final class SnapshotCodec {
                     + " snapshot?");
         }
 
+        if (ledgerV2Restored) {
+            engine.commandLedger().clear();
+            checkLegBijection(engine, omsMapCount, rejected);
+        } else if (durableEnvelope && pos < end && src.getByte(pos) == com.match.application.engine.DurableCommandLedgerV2.MARKER) {
+            throw new IllegalStateException("[SNAPSHOT] ledger v2 block (marker 4) in an envelope-1 image (corrupt snapshot)");
+        } else if (pos < end && src.getByte(pos) == 2) pos = engine.commandLedger().read(src,pos,end);
+        else {
+            // Inside envelope 1 the v1 ledger block is mandatory (it is why the envelope exists).
+            if (durableEnvelope) throw new IllegalStateException("Durable snapshot ledger missing");
+            engine.commandLedger().clear();
+        }
+        if (durableEnvelope && pos!=end) throw new IllegalStateException("Durable snapshot has trailing bytes");
         return new Decoded(orderIdGen, tradeIdGen, timerCorrelationId, timerPresent,
-                rejected, pos - offset, engineConfigPresent);
+                rejected, pos - originalOffset, engineConfigPresent, identityPresent);
+    }
+
+    /**
+     * RC2 S4 R11 (envelope 2, both directions of I6): every book restored every order, the number
+     * of resting orders over all books equals the omsMap count, and every key rests on some book,
+     * so keys and resting legs are in bijection (the keys are already strictly ascending).
+     */
+    private static void checkLegBijection(Engine engine, int omsMapCount, int rejectedOrders) {
+        if (rejectedOrders != 0) {
+            throw new IllegalStateException("[SNAPSHOT] R11: " + rejectedOrders + " order(s) refused by a book at"
+                    + " restore (corrupt snapshot)");
+        }
+        long resting = 0;
+        final Int2ObjectHashMap<MatchingEngine> engines = engine.getEngines();
+        final Int2ObjectHashMap<MatchingEngine>.ValueIterator values = engines.values().iterator();
+        while (values.hasNext()) {
+            final MatchingEngine me = values.next();
+            resting += me.getBidOrders().length / 4 + me.getAskOrders().length / 4;
+        }
+        if (resting != omsMapCount) {
+            throw new IllegalStateException("[SNAPSHOT] R11: " + resting + " resting order(s) but " + omsMapCount
+                    + " omsMap key(s): a resting leg without a key or a key without a leg (corrupt snapshot)");
+        }
+        final Long2LongHashMap.KeyIterator keys = engine.getOrderIdToOmsOrderId().keySet().iterator();
+        while (keys.hasNext()) {
+            final long orderId = keys.nextValue();
+            boolean rests = false;
+            final Int2ObjectHashMap<MatchingEngine>.ValueIterator it = engines.values().iterator();
+            while (it.hasNext() && !rests) {
+                final MatchingEngine me = it.next();
+                rests = me.restingUserId(orderId, true) != -1L || me.restingUserId(orderId, false) != -1L;
+            }
+            if (!rests) {
+                throw new IllegalStateException("[SNAPSHOT] R11: omsMap key " + orderId + " rests on no book"
+                        + " (orphan key) (corrupt snapshot)");
+            }
+        }
     }
 
     /** Slice C: read the fixed 16-byte NUL-padded ASCII symbol written by {@link #putPaddedSymbol}. */

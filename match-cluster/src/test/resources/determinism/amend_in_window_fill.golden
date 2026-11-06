@@ -1,0 +1,46 @@
+STATUS m=1 ts=1000 order=1 user=100 status=NEW rem=1000000000 filled=0 px=6000000000000 buy=0 oms=1 reason=NONE
+OUTCOME id=1/0 result=0 status=0 reason=0 old=0 order=1
+TRADE  m=1 ts=1000 tradeId=1 taker=2 takerUser=200 maker=1 makerUser=100 px=6000000000000 qty=300000000 takerBuy=1 takerOms=2 makerOms=1
+STATUS m=1 ts=1000 order=2 user=200 status=FILLED rem=0 filled=300000000 px=6000000000000 buy=1 oms=2 reason=NONE
+OUTCOME id=2/0 result=0 status=2 reason=0 old=0 order=2
+STATUS m=1 ts=1000 order=1 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=0 oms=1 reason=NONE
+STATUS m=1 ts=1000 order=3 user=100 status=NEW rem=500000000 filled=0 px=6000000000000 buy=0 oms=1 reason=NONE
+OUTCOME id=1/6 result=0 status=0 reason=0 old=1 order=3
+TRADE  m=1 ts=1000 tradeId=2 taker=4 takerUser=201 maker=3 makerUser=100 px=6000000000000 qty=300000000 takerBuy=1 takerOms=4 makerOms=1
+STATUS m=1 ts=1000 order=4 user=201 status=FILLED rem=0 filled=300000000 px=6000000000000 buy=1 oms=4 reason=NONE
+OUTCOME id=4/0 result=0 status=2 reason=0 old=0 order=4
+STATUS m=1 ts=1000 order=3 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=0 oms=1 reason=NONE
+STATUS m=1 ts=1000 order=3 user=100 status=REJECTED rem=0 filled=0 px=6000000000000 buy=0 oms=1 reason=AMEND_NO_REMAINDER
+OUTCOME id=1/10 result=1 status=4 reason=15 old=1 order=3
+STATUS m=1 ts=2000 order=5 user=100 status=NEW rem=1000000000 filled=0 px=6000500000000 buy=0 oms=5 reason=NONE
+OUTCOME id=5/0 result=0 status=0 reason=0 old=0 order=5
+STATUS m=1 ts=2000 order=5 user=100 status=REJECTED rem=0 filled=0 px=6000600000000 buy=0 oms=5 reason=AMEND_REMAINING_MISMATCH
+OUTCOME id=5/6 result=1 status=4 reason=16 old=0 order=5
+STATUS m=1 ts=2000 order=5 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=0 oms=5 reason=NONE
+STATUS m=1 ts=2000 order=6 user=100 status=NEW rem=800000000 filled=0 px=6000600000000 buy=0 oms=5 reason=NONE
+OUTCOME id=5/10 result=0 status=0 reason=0 old=1 order=6
+OUTCOME id=5/14 result=8 status=-1 reason=0 old=0 order=0
+OUTCOME id=5/18 result=8 status=-1 reason=0 old=0 order=0
+STATUS m=1 ts=3000 order=7 user=100 status=NEW rem=600000000 filled=0 px=6001000000000 buy=0 oms=7 reason=NONE
+OUTCOME id=7/0 result=0 status=0 reason=0 old=0 order=7
+TRADE  m=1 ts=3000 tradeId=3 taker=8 takerUser=202 maker=6 makerUser=100 px=6000600000000 qty=800000000 takerBuy=1 takerOms=8 makerOms=5
+STATUS m=1 ts=3000 order=6 user=100 status=FILLED rem=0 filled=0 px=0 buy=0 oms=5 reason=NONE
+TRADE  m=1 ts=3000 tradeId=4 taker=8 takerUser=202 maker=7 makerUser=100 px=6001000000000 qty=200000000 takerBuy=1 takerOms=8 makerOms=7
+STATUS m=1 ts=3000 order=8 user=202 status=FILLED rem=0 filled=1000000000 px=6001000000000 buy=1 oms=8 reason=NONE
+OUTCOME id=8/0 result=0 status=2 reason=0 old=0 order=8
+STATUS m=1 ts=3000 order=9 user=300 status=NEW rem=800000000 filled=0 px=5999000000000 buy=1 oms=9 reason=NONE
+OUTCOME id=9/0 result=0 status=0 reason=0 old=0 order=9
+STATUS m=1 ts=3000 order=7 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=0 oms=7 reason=NONE
+STATUS m=1 ts=3000 order=10 user=100 status=NEW rem=400000000 filled=0 px=6001100000000 buy=0 oms=7 reason=NONE
+OUTCOME id=7/6 result=0 status=0 reason=0 old=1 order=10
+STATUS m=1 ts=3000 order=11 user=100 status=NEW rem=800000000 filled=0 px=6000800000000 buy=0 oms=10 reason=NONE
+OUTCOME id=10/0 result=0 status=0 reason=0 old=0 order=11
+TRADE  m=1 ts=3000 tradeId=5 taker=12 takerUser=203 maker=11 makerUser=100 px=6000800000000 qty=200000000 takerBuy=1 takerOms=11 makerOms=10
+STATUS m=1 ts=3000 order=12 user=203 status=FILLED rem=0 filled=200000000 px=6000800000000 buy=1 oms=11 reason=NONE
+OUTCOME id=11/0 result=0 status=2 reason=0 old=0 order=12
+STATUS m=1 ts=3000 order=11 user=100 status=CANCELLED rem=0 filled=0 px=0 buy=0 oms=10 reason=NONE
+TRADE  m=1 ts=3000 tradeId=6 taker=13 takerUser=100 maker=9 makerUser=300 px=5999000000000 qty=600000000 takerBuy=0 takerOms=10 makerOms=9
+STATUS m=1 ts=3000 order=13 user=100 status=FILLED rem=0 filled=600000000 px=5999000000000 buy=0 oms=10 reason=NONE
+OUTCOME id=10/6 result=0 status=2 reason=0 old=1 order=13
+STATUS m=1 ts=3000 order=9 user=300 status=CANCELLED rem=0 filled=0 px=0 buy=1 oms=9 reason=NONE
+OUTCOME id=9/5 result=0 status=3 reason=0 old=0 order=9

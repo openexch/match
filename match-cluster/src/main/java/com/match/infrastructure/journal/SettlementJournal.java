@@ -1,12 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.match.infrastructure.journal;
 
+import com.match.application.engine.MeIdentity;
+import com.match.application.engine.DurableCommandLedger;
+import com.match.domain.commands.DurableOutcomeView;
 import com.match.infrastructure.Logger;
-import com.match.infrastructure.journal.generated.BooleanType;
-import com.match.infrastructure.journal.generated.JournalTerminalEncoder;
-import com.match.infrastructure.journal.generated.JournalTradeEncoder;
-import com.match.infrastructure.journal.generated.MessageHeaderEncoder;
-import com.match.infrastructure.journal.generated.TerminalStatus;
+import com.match.infrastructure.mejournal.generated.BooleanType;
+import com.match.infrastructure.mejournal.generated.CommandOutcomeEncoder;
+import com.match.infrastructure.mejournal.generated.CommandReleaseEncoder;
+import com.match.infrastructure.mejournal.generated.ConfigDecision;
+import com.match.infrastructure.mejournal.generated.EngineConfigEncoder;
+import com.match.infrastructure.mejournal.generated.MessageHeaderEncoder;
+import com.match.infrastructure.mejournal.generated.ReleaseResult;
+import com.match.infrastructure.mejournal.generated.ReleaseScope;
+import com.match.infrastructure.mejournal.generated.TerminalEncoder;
+import com.match.infrastructure.mejournal.generated.TerminalStatus;
+import com.match.infrastructure.mejournal.generated.TradeEncoder;
 import org.agrona.concurrent.UnsafeBuffer;
 import org.agrona.concurrent.ringbuffer.OneToOneRingBuffer;
 import org.agrona.concurrent.ringbuffer.RingBufferDescriptor;
@@ -27,6 +36,16 @@ import java.nio.ByteBuffer;
  * has stalled; blocking degrades this node to a lagging replica while the other replicas'
  * journals continue — the correct trade for money integrity.
  *
+ * Wire: ME journal schemaId 4 version 1 ({@code me-journal-schema.xml}, RC2 S1 contract
+ * section 2). Every record is encoded whole into {@link #scratch} and offered as ONE ring
+ * message, which the writer agent offers as ONE unfragmented frame; the largest legal frame is
+ * {@link #MAX_FRAME_LENGTH} (a 48-entry {@code CommandRelease}), below the 1376 B payload of the
+ * {@code aeron:ipc} default MTU. Schema 3 and the schema 1 template 28 are never written again.
+ * {@code meEpoch} is read on every append from the bound {@link MeIdentity} (RC2 S2 section 5):
+ * 0 until a FRESH at behaviour >= 2 binds it, then the recorded genesisId. {@code journalSeq} is
+ * the ENGINE's allocation on every record (RC2 S3): one dense sequence from FRESH = 1 under
+ * behaviour 2, 0 under behaviour 1; this class never allocates or checks it.
+ *
  * Single-writer: all methods are called only from the cluster service thread. The counters
  * are volatile so a metrics/diagnostics thread can read them without tearing.
  */
@@ -37,17 +56,39 @@ public final class SettlementJournal {
     /** Ring message type ids (journal-internal; the SBE header inside the payload is authoritative). */
     public static final int MSG_TYPE_TRADE = 1;
     public static final int MSG_TYPE_TERMINAL = 2;
+    public static final int MSG_TYPE_OUTCOME = 3;
+    public static final int MSG_TYPE_RELEASE = 4;
+    public static final int MSG_TYPE_CONFIG = 5;
+
+    /** Entry cap of a {@code CommandRelease} group (contract section 2, decision 10.6). */
+    public static final int MAX_RELEASE_ENTRIES = 48;
+
+    /** Largest legal journal frame: header 8 + root 44 + group header 4 + 48 x 22 = 1112 B. */
+    public static final int MAX_FRAME_LENGTH = MessageHeaderEncoder.ENCODED_LENGTH
+            + CommandReleaseEncoder.BLOCK_LENGTH + 4
+            + MAX_RELEASE_ENTRIES * CommandReleaseEncoder.ReleasesEncoder.sbeBlockLength();
+
+    /**
+     * RC2 S2: the engine-owned identity (one reference, never a copy, so a later bind is seen).
+     * Defaults to an unbound identity for a journal that is never bound (meEpoch 0, behaviour 1).
+     * RC2 S3 (S2 review NOTE-2): a plain field, bound once at bootstrap before the cluster
+     * service thread starts (thread start publishes it); read on the service thread.
+     */
+    private MeIdentity identity = new MeIdentity();
 
     /** Spin count between escalating "journal stalled" logs while blocked on a full ring. */
     private static final long SPINS_PER_STALL_LOG = 50_000_000L;
 
     private final OneToOneRingBuffer ringBuffer;
 
-    // Scratch encode buffer: max message = header(8) + JournalTrade block (101) < 128.
-    private final UnsafeBuffer scratch = new UnsafeBuffer(ByteBuffer.allocateDirect(128));
+    // Scratch encode buffer: max message = MAX_FRAME_LENGTH (1112 B) < 2048.
+    private final UnsafeBuffer scratch = new UnsafeBuffer(ByteBuffer.allocateDirect(2048));
     private final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
-    private final JournalTradeEncoder tradeEncoder = new JournalTradeEncoder();
-    private final JournalTerminalEncoder terminalEncoder = new JournalTerminalEncoder();
+    private final TradeEncoder tradeEncoder = new TradeEncoder();
+    private final TerminalEncoder terminalEncoder = new TerminalEncoder();
+    private final CommandOutcomeEncoder outcomeEncoder = new CommandOutcomeEncoder();
+    private final CommandReleaseEncoder releaseEncoder = new CommandReleaseEncoder();
+    private final EngineConfigEncoder configEncoder = new EngineConfigEncoder();
 
     private volatile long appendedTrades;
     private volatile long appendedTerminals;
@@ -60,12 +101,165 @@ public final class SettlementJournal {
         this.ringBuffer = new OneToOneRingBuffer(new UnsafeBuffer(byteBuffer));
     }
 
+    /**
+     * RC2 S2: bind the engine's {@link MeIdentity}; every later append stamps its meEpoch (and
+     * record 3 its behaviour). Called once at bootstrap (AppClusteredService.setSettlementJournal).
+     */
+    public void bindIdentity(final MeIdentity engineIdentity) {
+        if (engineIdentity == null) {
+            throw new IllegalArgumentException("MeIdentity must not be null");
+        }
+        this.identity = engineIdentity;
+    }
+
     /** The ring the {@link JournalWriterAgent} drains. */
     public OneToOneRingBuffer ringBuffer() {
         return ringBuffer;
     }
 
+    /**
+     * Record 3 ({@code CommandOutcome}): the 20 template-28 fields of the outcome, then the tail.
+     * {@code timeInForce} and {@code expectedOldRemaining} come from the outcome's intent (0/0 for
+     * a v11 frame); {@code ledgerSizeAfter} is the command ledger size after this outcome is
+     * recorded (the caller knows whether it will be).
+     *
+     * <p>RC2 S4 (contract 3.3): {@code ledgerCapacity} is a parameter on both paths: the recorded
+     * C at behaviour 2, the ledger v1 cap {@link DurableCommandLedger#MAX_ENTRIES} at behaviour 1.
+     * The outcome is read through the view (the engine's scratch at behaviour 2, the record at
+     * behaviour 1); nothing is retained.</p>
+     */
+    public void appendCommandOutcome(final long journalSeq, final long egressSeq, final DurableOutcomeView o,
+                                     final int ledgerSizeAfter, final int ledgerCapacity) {
+        final DurableOutcomeView c = o;
+        final MeIdentity id = identity;
+        outcomeEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
+                .journalSeq(journalSeq)
+                .meEpoch(id.meEpoch())
+                .egressSeq(egressSeq)
+                .commandIdHigh(c.idHigh())
+                .commandIdLow(c.idLow())
+                .userId(c.userId())
+                .omsOrderId(c.omsOrderId())
+                .oldOrderId(c.oldOrderId())
+                .price(c.price())
+                .quantity(c.quantity())
+                .budget(c.budget())
+                .marketId(c.marketId())
+                .commandKind((short) c.kind())
+                .orderType((short) c.type())
+                .orderSide((short) c.side())
+                .appliedPosition(o.appliedPosition())
+                .timestamp(o.timestamp())
+                .orderId(o.orderId())
+                .status(o.status())
+                .reason(o.reason())
+                .oldCancelled((short) (o.oldCancelled() ? 1 : 0))
+                .result(o.result())
+                .timeInForce((short) c.timeInForce())
+                .expectedOldRemaining(c.expectedOldRemaining())
+                .ledgerSize(ledgerSizeAfter)
+                .ledgerCapacity(ledgerCapacity)
+                .behaviorVersion(id.behaviorVersion());
+        blockingWrite(MSG_TYPE_OUTCOME,
+                MessageHeaderEncoder.ENCODED_LENGTH + outcomeEncoder.encodedLength(), c.idLow());
+    }
+
+    /**
+     * Behaviour-1 form of record 3: {@code ledgerCapacity} is the ledger v1 cap
+     * ({@link DurableCommandLedger#MAX_ENTRIES}, 100000), the cap that ledger enforces.
+     */
+    public void appendCommandOutcome(final long journalSeq, final long egressSeq, final DurableOutcomeView o,
+                                     final int ledgerSizeAfter) {
+        appendCommandOutcome(journalSeq, egressSeq, o, ledgerSizeAfter, DurableCommandLedger.MAX_ENTRIES);
+    }
+
+    /**
+     * Record 4 ({@code CommandRelease}). Written by the {@code ReleaseCommandIds} apply from S4;
+     * exists from S1 so the layout is round-trip tested. Entries are passed as parallel arrays
+     * (first {@code count} used) so the S4 apply can reuse preallocated storage. More than
+     * {@link #MAX_RELEASE_ENTRIES} entries is refused: the frame would outgrow the IPC MTU.
+     */
+    public void appendCommandRelease(final long journalSeq, final long egressSeq, final long releaseSeq,
+                                     final int ledgerSize, final int ledgerCapacity,
+                                     final int tombstoneRanges, final int count,
+                                     final long[] commandIdHigh, final long[] idLowFloor,
+                                     final int[] scope, final int[] result, final int[] removed) {
+        if (count < 0 || count > MAX_RELEASE_ENTRIES) {
+            throw new IllegalArgumentException("CommandRelease carries " + count
+                    + " entries; the cap is " + MAX_RELEASE_ENTRIES);
+        }
+        final CommandReleaseEncoder.ReleasesEncoder group = releaseEncoder
+                .wrapAndApplyHeader(scratch, 0, headerEncoder)
+                .journalSeq(journalSeq)
+                .meEpoch(identity.meEpoch())
+                .egressSeq(egressSeq)
+                .releaseSeq(releaseSeq)
+                .ledgerSize(ledgerSize)
+                .ledgerCapacity(ledgerCapacity)
+                .tombstoneRanges(tombstoneRanges)
+                .releasesCount(count);
+        for (int i = 0; i < count; i++) {
+            group.next()
+                    .commandIdHigh(commandIdHigh[i])
+                    .idLowFloor(idLowFloor[i])
+                    .scope(releaseScope(scope[i]))
+                    .result(releaseResult(result[i]))
+                    .removed(removed[i]);
+        }
+        blockingWrite(MSG_TYPE_RELEASE,
+                MessageHeaderEncoder.ENCODED_LENGTH + releaseEncoder.encodedLength(), releaseSeq);
+    }
+
+    /**
+     * Record 5 ({@code EngineConfig}): the journaled state-machine decision (FRESH or BUMP at
+     * behaviour >= 2, RC2 S2). {@code journalSeq} is the state machine's allocation; meEpoch is
+     * stamped from the bound identity.
+     */
+    public void appendEngineConfig(final long journalSeq, final long egressSeq, final long configVersion,
+                                   final long behaviorVersion, final long ledgerCapacity,
+                                   final int maxWireVersion, final int decision) {
+        configEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
+                .journalSeq(journalSeq)
+                .meEpoch(identity.meEpoch())
+                .egressSeq(egressSeq)
+                .configVersion(configVersion)
+                .behaviorVersion(behaviorVersion)
+                .ledgerCapacity(ledgerCapacity)
+                .maxWireVersion(maxWireVersion)
+                .decision(configDecision(decision));
+        blockingWrite(MSG_TYPE_CONFIG,
+                MessageHeaderEncoder.ENCODED_LENGTH + configEncoder.encodedLength(), configVersion);
+    }
+
+    private static ReleaseScope releaseScope(final int raw) {
+        switch (raw) {
+            case 0: return ReleaseScope.UP_TO;
+            case 1: return ReleaseScope.ORDER;
+            default: throw new IllegalArgumentException("ReleaseScope " + raw);
+        }
+    }
+
+    private static ReleaseResult releaseResult(final int raw) {
+        switch (raw) {
+            case 0: return ReleaseResult.APPLIED;
+            case 1: return ReleaseResult.NOOP;
+            case 2: return ReleaseResult.LEG_LIVE;
+            default: throw new IllegalArgumentException("ReleaseResult " + raw);
+        }
+    }
+
+    private static ConfigDecision configDecision(final int raw) {
+        switch (raw) {
+            case 0: return ConfigDecision.FRESH;
+            case 1: return ConfigDecision.ADOPT;
+            case 2: return ConfigDecision.SWITCH;
+            case 3: return ConfigDecision.BUMP;
+            default: throw new IllegalArgumentException("ConfigDecision " + raw);
+        }
+    }
+
     public void appendTrade(
+            final long journalSeq,
             final long egressSeq,
             final long tradeId,
             final int marketId,
@@ -81,6 +275,8 @@ public final class SettlementJournal {
             final long makerOmsOrderId) {
 
         tradeEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
+                .journalSeq(journalSeq)
+                .meEpoch(identity.meEpoch())
                 .egressSeq(egressSeq)
                 .tradeId(tradeId)
                 .marketId(marketId)
@@ -101,22 +297,32 @@ public final class SettlementJournal {
     }
 
     public void appendTerminal(
+            final long journalSeq,
             final long egressSeq,
             final long orderId,
             final long userId,
             final int marketId,
             final int orderStatus,
             final long timestamp,
-            final long omsOrderId) {
+            final long omsOrderId,
+            final int rejectReason) {
 
+        // The ME OrderRejectReason code verbatim (NONE = 0 on FILLED/CANCELLED); 255 is the SBE
+        // null and is never written.
+        if (rejectReason < 0 || rejectReason > 254) {
+            throw new IllegalArgumentException("Terminal rejectReason " + rejectReason + " is not a uint8 code");
+        }
         terminalEncoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
+                .journalSeq(journalSeq)
+                .meEpoch(identity.meEpoch())
                 .egressSeq(egressSeq)
                 .orderId(orderId)
                 .userId(userId)
                 .marketId(marketId)
                 .status(TerminalStatus.get((short) orderStatus))
                 .timestamp(timestamp)
-                .omsOrderId(omsOrderId);
+                .omsOrderId(omsOrderId)
+                .rejectReason((short) rejectReason);
 
         blockingWrite(MSG_TYPE_TERMINAL,
                 MessageHeaderEncoder.ENCODED_LENGTH + terminalEncoder.encodedLength(), orderId);

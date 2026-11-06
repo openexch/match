@@ -45,6 +45,20 @@ public final class SettlementJournalRuntime implements AutoCloseable {
     private final SettlementJournal journal;
     private final JournalCheckpointFile checkpoints;
 
+    /** Constant true: what production always passes to the writer's drain gate. */
+    private static final java.util.function.BooleanSupplier ALWAYS_DRAIN = () -> true;
+
+    /**
+     * RC2 S3 drill seam (contract 11, A5): the writer's drain gate. Package-private and
+     * constant-true by default; only the test-scope drill child main replaces it, before
+     * bootstrap. No env var or system property reaches it.
+     */
+    private static volatile java.util.function.BooleanSupplier drainGate = ALWAYS_DRAIN;
+
+    static void installDrainGateForDrill(final java.util.function.BooleanSupplier gate) {
+        drainGate = gate == null ? ALWAYS_DRAIN : gate;
+    }
+
     private Archive journalArchive;
     private AgentRunner writerRunner;
 
@@ -131,17 +145,23 @@ public final class SettlementJournalRuntime implements AutoCloseable {
 
         journalArchive = Archive.launch(ctx);
 
+        // The writer's archive client owns its Aeron client: it must carry the node's error handler. Without one
+        // Aeron installs Aeron.Configuration.DEFAULT_ERROR_HANDLER, which answers a driver timeout with
+        // Runtime.exit(-1) on a "runtime-exit-runner" thread: the node took a signal stop (status 255, the FATAL
+        // never recorded) while its archives tore down under an unmapped CnC (RC2 S16 W6 C13: exit 139 3/3).
         final JournalWriterAgent agent = new JournalWriterAgent(
                 journal.ringBuffer(),
                 () -> new AeronArchive.Context()
+                        .errorHandler(errorHandler)
                         .aeronDirectoryName(aeronDirectoryName)
                         .controlRequestChannel(controlChannel)
                         .controlRequestStreamId(InfrastructureConstants.JOURNAL_ARCHIVE_CONTROL_STREAM_ID)
                         .controlResponseChannel("aeron:udp?endpoint=localhost:0"),
-                InfrastructureConstants.SETTLEMENT_JOURNAL_CHANNEL,
+                InfrastructureConstants.settlementJournalChannel(),
                 InfrastructureConstants.SETTLEMENT_JOURNAL_STREAM_ID,
                 checkpoints,
-                SEGMENT_FILE_LENGTH);
+                SEGMENT_FILE_LENGTH,
+                drainGate);
 
         writerRunner = new AgentRunner(new BackoffIdleStrategy(), errorHandler, null, agent);
         AgentRunner.startOnThread(writerRunner);

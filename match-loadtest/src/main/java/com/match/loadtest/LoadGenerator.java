@@ -144,7 +144,17 @@ public class LoadGenerator {
             ClusterConfig.CLIENT_FACING_PORT_OFFSET
         );
 
+        // RC2 S6: an S6 ME authenticates every session. The legacy lane (CreateOrder) is served at behaviour 1
+        // to GATEWAY, FORWARDER and ADMIN; refuse to start without ME_AUTH_CREDENTIAL (names of MatchAuth.POLICY).
+        final com.openexchange.cluster.auth.ClusterCredentials credentials =
+            com.openexchange.cluster.auth.ClusterCredentials.requireFromEnvironment(
+                "match.auth.credential", "ME_AUTH_CREDENTIAL", "match",
+                com.openexchange.cluster.auth.ClusterSessionClass.GATEWAY,
+                com.openexchange.cluster.auth.ClusterSessionClass.FORWARDER,
+                com.openexchange.cluster.auth.ClusterSessionClass.ADMIN);
+
         final AeronCluster.Context clusterCtx = new AeronCluster.Context()
+            .credentialsSupplier(credentials.supplier())
             .egressListener(new LoadTestEgressListener(metrics, inFlight))
             .egressChannel(config.getEgressChannel())
             .ingressChannel(config.getIngressChannel())

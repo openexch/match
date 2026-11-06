@@ -20,35 +20,30 @@ import java.util.function.Consumer;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-/**
- * cluster-kit#15 regression: Aeron fires {@code onRoleChange} only on role
- * TRANSITIONS, so a node that boots straight into FOLLOWER and stays there (a
- * rolling restart into a live cluster) never got the callback. NodeReadiness
- * then never observed a role: /ready answered "catching up" forever and
- * SnapshotLogPruner never pruned on that node (observed live 2026-08-12).
- *
- * <p>The fix polls {@code cluster.role()} in {@code doBackgroundWork} and feeds
- * ONLY readiness on change. This test drives the tick path with a stub Cluster
- * and never invokes {@code onRoleChange} — exactly the boot-and-stay-FOLLOWER
- * shape — and asserts the node still becomes ready.</p>
- */
+/** Initial FOLLOWER needs real consensus/application evidence even without a role callback. */
 public class FollowerReadinessTest {
 
     @Test
     public void bootTimeFollowerBecomesReadyWithoutOnRoleChange() throws Exception {
         final AppClusteredService service = new AppClusteredService();
-        inject(service, "cluster", new StubCluster(Cluster.Role.FOLLOWER));
+        final StubCluster cluster = new StubCluster(Cluster.Role.FOLLOWER);
+        inject(service, "cluster", cluster);
         final NodeReadiness readiness = readinessOf(service);
-        readiness.started(); // what onStart signals; onRoleChange is never fired
-
-        assertFalse("started but no role observed yet must NOT be ready ("
-                + readiness.describe() + ")", readiness.ready());
-
-        service.doBackgroundWork(System.nanoTime());
-
-        assertTrue("one duty cycle must observe FOLLOWER via cluster.role() and become ready, "
-                + "with onRoleChange never fired (cluster-kit#15); was: " + readiness.describe(),
-                readiness.ready());
+        readiness.started();
+        try (ConsensusFixture fixture = new ConsensusFixture()) {
+            inject(service, "consensusReadiness", new com.openexchange.cluster.ConsensusReadiness(
+                    fixture.context, readiness, time -> new com.openexchange.cluster.ConsensusReadiness.LeaderCheckpoint(
+                        fixture.context.leadershipTermIdCounter().get(), 999, fixture.context.commitPositionCounter().get(), time)));
+            long now = System.nanoTime();
+            service.doBackgroundWork(now);
+            assertFalse("role alone must not hide lag", readiness.ready());
+            cluster.applied = 100;
+            service.doBackgroundWork(now + 20_000_000);
+            assertTrue("caught up initial FOLLOWER without callback: " + readiness.describe(), readiness.ready());
+            fixture.context.electionStateCounter().set(io.aeron.cluster.ElectionState.CANVASS.code());
+            service.doBackgroundWork(now + 40_000_000);
+            assertFalse("consensus election wins over stale service role", readiness.ready());
+        }
     }
 
     @Test
@@ -62,6 +57,63 @@ public class FollowerReadinessTest {
 
         assertFalse("an election in flight must never report ready; was: "
                 + readiness.describe(), readiness.ready());
+    }
+
+    private static final class ConsensusFixture implements AutoCloseable {
+        final java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("follower-readiness-");
+        final org.agrona.concurrent.status.CountersManager counters = new org.agrona.concurrent.status.CountersManager(
+                new org.agrona.concurrent.UnsafeBuffer(java.nio.ByteBuffer.allocateDirect(8192)),
+                new org.agrona.concurrent.UnsafeBuffer(java.nio.ByteBuffer.allocateDirect(2048)));
+        final io.aeron.cluster.service.ClusterMarkFile mark = new io.aeron.cluster.service.ClusterMarkFile(
+                dir.resolve(io.aeron.cluster.service.ClusterMarkFile.FILENAME).toFile(),
+                io.aeron.cluster.codecs.mark.ClusterComponentType.CONSENSUS_MODULE,
+                io.aeron.cluster.service.ClusterMarkFile.ERROR_BUFFER_MIN_LENGTH,
+                System::currentTimeMillis, 0, 4096);
+        final io.aeron.cluster.ConsensusModule.Context context = new io.aeron.cluster.ConsensusModule.Context()
+                .clusterMarkFile(mark).clusterClock(new io.aeron.cluster.MillisecondClusterClock())
+                .commitPositionCounter(counter(100)).leadershipTermIdCounter(counter(7))
+                .electionCounter(counter(2))
+                .electionStateCounter(counter(io.aeron.cluster.ElectionState.CLOSED.code()))
+                .moduleStateCounter(counter(io.aeron.cluster.ConsensusModule.State.ACTIVE.code()))
+                .clusterNodeRoleCounter(counter(Cluster.Role.FOLLOWER.code()));
+        ConsensusFixture() throws Exception { mark.updateActivityTimestamp(System.currentTimeMillis()); }
+        private io.aeron.Counter counter(long value) {
+            int id = counters.allocate("readiness test"); counters.setCounterRegistrationId(id, 100 + id);
+            var c = new io.aeron.Counter(counters, id); c.set(value); return c;
+        }
+        public void close() throws Exception {
+            mark.close();
+            try (var paths = java.nio.file.Files.walk(dir)) {
+                for (var p : paths.sorted(java.util.Comparator.reverseOrder()).toList()) { java.nio.file.Files.delete(p); }
+            }
+        }
+    }
+
+    @Test
+    public void idleInsideUnfinishedCallbackCannotPublishAppliedPosition() throws Exception {
+        final AppClusteredService service = new AppClusteredService();
+        final StubCluster cluster = new StubCluster(Cluster.Role.FOLLOWER);
+        cluster.applied = 100; // Aeron sets logPosition before invoking the callback.
+        inject(service, "cluster", cluster);
+        final NodeReadiness readiness = readinessOf(service); readiness.started();
+        try (ConsensusFixture fixture = new ConsensusFixture()) {
+            fixture.context.clusterNodeRoleCounter().set(Cluster.Role.FOLLOWER.code());
+            inject(service, "consensusReadiness", new com.openexchange.cluster.ConsensusReadiness(
+                    fixture.context, readiness, time -> new com.openexchange.cluster.ConsensusReadiness.LeaderCheckpoint(
+                        fixture.context.leadershipTermIdCounter().get(), 999, fixture.context.commitPositionCounter().get(), time)));
+            final int[] reentries = {0};
+            cluster.onIdle = () -> {
+                reentries[0]++;
+                service.doBackgroundWork(System.nanoTime());
+                assertFalse("unfinished callback was advertised as applied: " + readiness.describe(), readiness.ready());
+            };
+            // RC2 S6 (5.3): a follower no longer re-arms from its flush timer; the callback that still schedules
+            // (and so idles inside itself on a back-pressured scheduleTimer) on every member is the term event.
+            service.onNewLeadershipTermEvent(1, 100, 0, 0, 0, 7, TimeUnit.MILLISECONDS, 0);
+            assertTrue("actual idle reentry is required", reentries[0] > 0);
+            service.doBackgroundWork(System.nanoTime() + 20_000_000);
+            assertTrue("completed callback may establish evidence: " + readiness.describe(), readiness.ready());
+        }
     }
 
     // ==================== helpers ====================
@@ -86,6 +138,9 @@ public class FollowerReadinessTest {
      */
     private static final class StubCluster implements Cluster {
         private final Role role;
+        private long applied;
+        private Runnable onIdle;
+        private int schedules;
 
         StubCluster(final Role role) {
             this.role = role;
@@ -96,7 +151,7 @@ public class FollowerReadinessTest {
         }
 
         public long logPosition() {
-            return 0;
+            return applied;
         }
 
         public int memberId() {
@@ -116,7 +171,7 @@ public class FollowerReadinessTest {
         }
 
         public Collection<ClientSession> clientSessions() {
-            throw new UnsupportedOperationException();
+            return java.util.List.of();
         }
 
         public void forEachClientSession(final Consumer<? super ClientSession> action) {
@@ -128,15 +183,15 @@ public class FollowerReadinessTest {
         }
 
         public long time() {
-            throw new UnsupportedOperationException();
+            return 0;
         }
 
         public TimeUnit timeUnit() {
-            throw new UnsupportedOperationException();
+            return TimeUnit.MILLISECONDS;
         }
 
         public boolean scheduleTimer(final long correlationId, final long deadline) {
-            throw new UnsupportedOperationException();
+            return ++schedules > 1;
         }
 
         public boolean cancelTimer(final long correlationId) {
@@ -156,7 +211,12 @@ public class FollowerReadinessTest {
         }
 
         public IdleStrategy idleStrategy() {
-            throw new UnsupportedOperationException();
+            return new IdleStrategy() {
+                public void idle() { onIdle.run(); }
+                public void idle(int workCount) { if (workCount <= 0) idle(); }
+                public void reset() { }
+                public String alias() { return "reentrant-test"; }
+            };
         }
     }
 }

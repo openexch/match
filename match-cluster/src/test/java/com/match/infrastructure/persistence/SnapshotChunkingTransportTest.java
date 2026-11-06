@@ -107,7 +107,7 @@ public class SnapshotChunkingTransportTest {
         orig.setOrderIdGenerator(ORDER_ID_GEN_IN);
 
         final ExpandableArrayBuffer payload = new ExpandableArrayBuffer();
-        final int pos = SnapshotCodec.serialize(orig, TRADE_ID_IN, TIMER_ID_IN, payload);
+        orig.setTradeIdGenerator(TRADE_ID_IN); final int pos = SnapshotCodec.serialize(orig, TIMER_ID_IN, payload);
         final byte[] expectedBytes = Arrays.copyOf(payload.byteArray(), pos);
 
         // ---- 2. Open a REAL Aeron IPC pub/sub whose small term forces multi-chunk + multi-fragment ----

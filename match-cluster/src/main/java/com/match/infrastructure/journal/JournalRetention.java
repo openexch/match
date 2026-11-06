@@ -12,7 +12,7 @@ import java.util.List;
  * Watermark-gated disk reclamation for the settlement journal's per-node archive.
  *
  * <p>The journal is a per-node SECOND archive (see {@link SettlementJournalRuntime}) recording a
- * publication on {@link InfrastructureConstants#SETTLEMENT_JOURNAL_CHANNEL} stream
+ * publication on {@link InfrastructureConstants#settlementJournalChannel()} stream
  * {@link InfrastructureConstants#SETTLEMENT_JOURNAL_STREAM_ID}. It is the money-settlement record and
  * the Assets-Engine rebuild input, so purging it is dangerous: deleting a byte whose {@code egressSeq}
  * a rebuild still needs is an UNRECOVERABLE lost settlement. This tool therefore purges ONLY below a

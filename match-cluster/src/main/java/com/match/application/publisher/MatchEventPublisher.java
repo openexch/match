@@ -72,8 +72,8 @@ public class MatchEventPublisher implements MatchEventSink {
     private final Int2ObjectHashMap<RingBuffer<PublishEvent>> ringBuffers;
     private final Int2ObjectHashMap<MarketEventHandler> handlers;
 
-    // Trade ID generator (atomic for snapshot consistency)
-    private final AtomicLong tradeIdGenerator = new AtomicLong(1);
+    // RC2 S3: no trade-id counter here. The engine allocates tradeId and journalSeq before any
+    // sink call (contract section 3); this publisher only carries them.
 
     // P1.5 diag counter (match#32): terminal OrderStatus events (FILLED/CANCELLED/
     // REJECTED) published by the engine, counted BEFORE the Disruptor so egress
@@ -105,6 +105,86 @@ public class MatchEventPublisher implements MatchEventSink {
      * Arm the settlement journal. Called once at node bootstrap (before the cluster starts
      * processing) when SETTLEMENT_JOURNAL_ENABLED; never called on the hot path.
      */
+    // Durable command outcomes this node could not journal because journaling is off here.
+    // The command itself was applied like on every other replica; only this node's output is dark.
+    private final AtomicLong darkCommandOutcomeCount = new AtomicLong();
+
+    @Override public void publishCommandOutcome(long position, long journalSeq,
+                                                com.match.domain.commands.DurableCommandOutcome outcome,
+                                                int ledgerSizeAfter) {
+        final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
+        if (journal == null) {
+            if (darkCommandOutcomeCount.getAndIncrement() == 0) {
+                logger.error("DURABLE COMMAND OUTCOME NOT JOURNALED: settlement journal is off on this node;"
+                        + " counted as match_dark_command_outcomes_total");
+            }
+            return;
+        }
+        // Behaviour 1: the ledger v1 cap is the capacity record 3 reports.
+        journal.appendCommandOutcome(journalSeq, position, outcome, ledgerSizeAfter,
+                com.match.application.engine.DurableCommandLedger.MAX_ENTRIES);
+    }
+
+    /** RC2 S4: the behaviour-2 view form; the journal copies the fields into the frame. */
+    @Override public void publishCommandOutcome(long position, long journalSeq,
+                                                com.match.domain.commands.DurableOutcomeView outcome,
+                                                int ledgerSizeAfter, int ledgerCapacity) {
+        final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
+        if (journal == null) {
+            if (darkCommandOutcomeCount.getAndIncrement() == 0) {
+                logger.error("DURABLE COMMAND OUTCOME NOT JOURNALED: settlement journal is off on this node;"
+                        + " counted as match_dark_command_outcomes_total");
+            }
+            return;
+        }
+        journal.appendCommandOutcome(journalSeq, position, outcome, ledgerSizeAfter, ledgerCapacity);
+    }
+
+    // RC2 S4: record 4 release frames this node could not journal because journaling is off here.
+    // The release itself applied like on every other replica.
+    private final AtomicLong darkCommandReleaseCount = new AtomicLong();
+
+    @Override public void publishCommandRelease(long egressSeq, long journalSeq, long releaseSeq, int ledgerSize,
+                                                int ledgerCapacity, int tombstoneRanges, int count,
+                                                long[] commandIdHigh, long[] idLowFloor, int[] scope,
+                                                int[] result, int[] removed) {
+        final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
+        if (journal == null) {
+            if (darkCommandReleaseCount.getAndIncrement() == 0) {
+                logger.error("COMMAND RELEASE NOT JOURNALED: settlement journal is off on this node;"
+                        + " counted as match_dark_command_releases_total");
+            }
+            return;
+        }
+        journal.appendCommandRelease(journalSeq, egressSeq, releaseSeq, ledgerSize, ledgerCapacity,
+                tombstoneRanges, count, commandIdHigh, idLowFloor, scope, result, removed);
+    }
+
+    public long getDarkCommandReleaseCount() { return darkCommandReleaseCount.get(); }
+
+    public long getDarkCommandOutcomeCount() { return darkCommandOutcomeCount.get(); }
+
+    // RC2 S2: EngineConfig record 5 decisions this node could not journal because journaling is
+    // off here. The decision itself applied like on every other replica.
+    private final AtomicLong darkEngineConfigCount = new AtomicLong();
+
+    @Override public void publishEngineConfig(long egressSeq, long journalSeq,
+                                              com.match.application.engine.EngineConfigState recorded,
+                                              int decision) {
+        final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
+        if (journal == null) {
+            if (darkEngineConfigCount.getAndIncrement() == 0) {
+                logger.error("ENGINE CONFIG DECISION NOT JOURNALED: settlement journal is off on this node;"
+                        + " counted as match_dark_engine_config_records_total");
+            }
+            return;
+        }
+        journal.appendEngineConfig(journalSeq, egressSeq, recorded.configVersion, recorded.behaviorVersion,
+                recorded.commandLedgerCapacity, (int) recorded.maxWireVersion, decision);
+    }
+
+    public long getDarkEngineConfigCount() { return darkEngineConfigCount.get(); }
+
     public void setSettlementJournal(final com.match.infrastructure.journal.SettlementJournal journal) {
         this.settlementJournal = journal;
     }
@@ -248,11 +328,18 @@ public class MatchEventPublisher implements MatchEventSink {
      * Publish trade execution event.
      * ZERO allocations - uses pre-allocated ring buffer slot.
      *
-     * @return true if published, false if market not found or buffer full
+     * <p>RC2 S3 (G2, K7): the journal append comes FIRST, before the ring lookup, so a member
+     * without an egress ring for the market still journals the trade; a missing ring costs
+     * egress only.</p>
+     *
+     * @return true if published to egress, false if the market has no egress ring
      */
+    @Override
     public boolean publishTradeExecution(
             int marketId,
             long timestamp,
+            long tradeId,
+            long journalSeq,
             long takerOrderId,
             long takerUserId,
             long makerOrderId,
@@ -264,18 +351,16 @@ public class MatchEventPublisher implements MatchEventSink {
             long makerOmsOrderId,
             long egressSeq) {
 
-        RingBuffer<PublishEvent> ringBuffer = ringBuffers.get(marketId);
-        if (ringBuffer == null) {
-            return false; // Market not initialized
-        }
-
-        long tradeId = tradeIdGenerator.getAndIncrement();
-
         final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
         if (journal != null) {
-            journal.appendTrade(egressSeq, tradeId, marketId, takerOrderId, takerUserId,
+            journal.appendTrade(journalSeq, egressSeq, tradeId, marketId, takerOrderId, takerUserId,
                     makerOrderId, makerUserId, price, quantity, takerIsBuy, timestamp,
                     takerOmsOrderId, makerOmsOrderId);
+        }
+
+        RingBuffer<PublishEvent> ringBuffer = ringBuffers.get(marketId);
+        if (ringBuffer == null) {
+            return false; // Market not initialized: egress only, the journal already has it
         }
 
         // Early-warning log when the egress ring is running low. The full-ring case
@@ -372,11 +457,12 @@ public class MatchEventPublisher implements MatchEventSink {
     }
 
     /**
-     * Publish order status update.
+     * Publish order status update to egress only (never journals).
      * ZERO allocations.
      *
      * @return true if published, false if market not found
      */
+    @Override
     public boolean publishOrderStatusUpdate(
             int marketId,
             long timestamp,
@@ -392,15 +478,21 @@ public class MatchEventPublisher implements MatchEventSink {
             long egressSeq) {
         return publishOrderStatusUpdate(marketId, timestamp, orderId, userId, orderStatus,
             remainingQty, filledQty, orderPrice, orderIsBuy, omsOrderId, rejectReason, egressSeq,
-            false);
+            false, 0L);
     }
 
     /**
-     * @param suppressJournalTerminal true ONLY for the old-leg CANCELLED of an accepted
-     *        cancel-replace: it shares the live replacement's omsOrderId (the AE money key), so
-     *        journaling it would feed a TerminalRelease that strips the still-open order's hold.
-     *        The wire status itself is unchanged — the OMS's replace leg-routing depends on it.
+     * RC2 S3: the engine decides which terminals are journaled. {@code journalTerminal} is false
+     * for a pre-cancel amend rejection and the old-leg CANCELLED of an accepted cancel-replace
+     * (neither closes the OMS order, the AE money key); the wire status itself is unchanged —
+     * the OMS's replace leg-routing depends on it. The journal append comes FIRST, before the
+     * ring lookup (finding F-2), so a missing egress ring costs egress only.
+     *
+     * @param journalTerminal true iff the engine journals this status (only ever with
+     *                        {@code orderStatus >= FILLED}; anything else is a programming error)
+     * @param journalSeq      the engine-allocated journalSeq of record 2 (0 under behaviour 1)
      */
+    @Override
     public boolean publishOrderStatusUpdate(
             int marketId,
             long timestamp,
@@ -414,19 +506,27 @@ public class MatchEventPublisher implements MatchEventSink {
             long omsOrderId,
             int rejectReason,
             long egressSeq,
-            boolean suppressJournalTerminal) {
+            boolean journalTerminal,
+            long journalSeq) {
+
+        if (journalTerminal && orderStatus < OrderStatusType.FILLED) {
+            throw new IllegalArgumentException("journalTerminal on a non-terminal status " + orderStatus
+                    + " (orderId=" + orderId + "): the engine journals FILLED/CANCELLED/REJECTED only");
+        }
+        if (orderStatus >= OrderStatusType.FILLED) {
+            terminalStatusCount++;
+        }
+        if (journalTerminal) {
+            final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
+            if (journal != null) {
+                journal.appendTerminal(journalSeq, egressSeq, orderId, userId, marketId, orderStatus, timestamp,
+                        omsOrderId, rejectReason);
+            }
+        }
 
         RingBuffer<PublishEvent> ringBuffer = ringBuffers.get(marketId);
         if (ringBuffer == null) {
             return false;
-        }
-
-        if (orderStatus >= OrderStatusType.FILLED) {
-            terminalStatusCount++;
-            final com.match.infrastructure.journal.SettlementJournal journal = settlementJournal;
-            if (journal != null && !suppressJournalTerminal) {
-                journal.appendTerminal(egressSeq, orderId, userId, marketId, orderStatus, timestamp, omsOrderId);
-            }
         }
 
         long sequence = claimSlotOrHalt(ringBuffer, marketId);
@@ -478,22 +578,6 @@ public class MatchEventPublisher implements MatchEventSink {
         }
 
         logger.info("MatchEventPublisher shutdown complete");
-    }
-
-    // ==================== Snapshot Support ====================
-
-    /**
-     * Get current trade ID generator value for snapshot.
-     */
-    public long getTradeIdGenerator() {
-        return tradeIdGenerator.get();
-    }
-
-    /**
-     * Set trade ID generator value (for snapshot restore).
-     */
-    public void setTradeIdGenerator(long value) {
-        tradeIdGenerator.set(value);
     }
 
     public long terminalStatusCount() {

@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.match.infrastructure;
 
-import io.aeron.CncFileDescriptor;
 import io.aeron.CommonContext;
 import org.agrona.concurrent.BackoffIdleStrategy;
 import org.agrona.concurrent.BusySpinIdleStrategy;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.SleepingMillisIdleStrategy;
 
-import java.io.File;
 import java.util.function.Supplier;
 
 /**
@@ -33,9 +31,12 @@ import java.util.function.Supplier;
  * | TRANSPORT_MTU          | transport.mtu          | 8192                             |
  * | TRANSPORT_TERM_LENGTH  | transport.term.length  | 16m                              |
  * | TRANSPORT_LOG_TERM_LENGTH | transport.log.term.length | 64m                       |
+ *
+ * The external driver wait (TRANSPORT_EXTERNAL_DRIVER_TIMEOUT_MS, default 30000) and the process lifecycle bounds
+ * (ENGINE_SHUTDOWN_TIMEOUT_MS, ENGINE_FATAL_EXIT_GRACE_MS) are read by cluster-kit's EngineLifecycle, the code both
+ * engines share.
  */
 public final class TransportConfig {
-    private static final Logger log = Logger.getLogger(TransportConfig.class);
 
     /** How the Aeron media driver is provided to this JVM. */
     public enum DriverMode {
@@ -68,9 +69,6 @@ public final class TransportConfig {
         SHARED,
         SHARED_NETWORK
     }
-
-    /** How long a client polls for an external driver's cnc.dat before giving up. */
-    public static final long EXTERNAL_DRIVER_TIMEOUT_MS = 30_000;
 
     private TransportConfig() {}
 
@@ -220,6 +218,21 @@ public final class TransportConfig {
     }
 
     /**
+     * Term buffer length for the settlement journal publication (aeron:ipc), in Aeron URI
+     * syntax. Journal records are encoded into a 256-byte scratch buffer and offered one per
+     * call, so the term only sets how far the writer may run ahead of the recorder. The cost is
+     * on the recording ME node: the publication and every Archive replay of it (bridge, execution
+     * projector, any other reader, plus a crashed reader's replay until the archive closes it)
+     * each map 3 terms in /dev/shm, 192MB apiece at 64m. The 64m default preserves the
+     * historical value for hosts that never set it.
+     *
+     * @return settlement journal channel term length string.
+     */
+    public static String journalTermLength() {
+        return envOrProp("TRANSPORT_JOURNAL_TERM_LENGTH", "transport.journal.term.length", "64m");
+    }
+
+    /**
      * Build a UDP channel URI with the configured term-length, MTU and optional interface
      * applied consistently. Accepts a base with or without existing URI params, e.g.
      * "aeron:udp" or "aeron:udp?endpoint=host:port".
@@ -237,35 +250,6 @@ public final class TransportConfig {
             sb.append("|interface=").append(iface);
         }
         return sb.toString();
-    }
-
-    /**
-     * Block until an external media driver is up (its cnc.dat exists) or the timeout
-     * elapses. Called before launching Aeron components in EXTERNAL mode so a missing
-     * driver produces one actionable error instead of a hang or a cryptic
-     * DriverTimeoutException.
-     *
-     * @param aeronDir  directory the driver was configured with.
-     * @param timeoutMs how long to wait.
-     */
-    public static void awaitExternalDriver(final String aeronDir, final long timeoutMs) {
-        final File cncFile = new File(aeronDir, CncFileDescriptor.CNC_FILE);
-        final long deadline = System.currentTimeMillis() + timeoutMs;
-        while (!cncFile.exists()) {
-            if (System.currentTimeMillis() > deadline) {
-                throw new IllegalStateException(
-                        "No external media driver found at " + aeronDir + " after " + timeoutMs +
-                        "ms. Start it with deploy/media-driver/launch-driver.sh --instance node<N>, " +
-                        "or unset TRANSPORT_DRIVER_MODE to run with an embedded driver.");
-            }
-            try {
-                Thread.sleep(100);
-            } catch (final InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("Interrupted waiting for external media driver at " + aeronDir, e);
-            }
-        }
-        log.info("External media driver detected at %s", aeronDir);
     }
 
     private static String envOrProp(final String envName, final String propName, final String defaultValue) {

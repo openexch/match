@@ -26,6 +26,22 @@ public class TransportConfigTest {
     public void tearDown() {
         System.clearProperty("transport.idle.mode");
         System.clearProperty("transport.driver.threading");
+        System.clearProperty("transport.journal.term.length");
+    }
+
+    @Test
+    public void settlementJournalChannelDefaultsTo64m() {
+        if (System.getenv("TRANSPORT_JOURNAL_TERM_LENGTH") != null) {
+            return; // env override in effect; the default can't be observed
+        }
+        assertEquals("aeron:ipc?term-length=64m", InfrastructureConstants.settlementJournalChannel());
+    }
+
+    @Test
+    public void settlementJournalChannelHonoursConfiguredTermLength() {
+        // Every Archive replay of the journal maps 3 terms on the recording host: 192 MiB at 64m.
+        System.setProperty("transport.journal.term.length", "8m");
+        assertEquals("aeron:ipc?term-length=8m", InfrastructureConstants.settlementJournalChannel());
     }
 
     @Test

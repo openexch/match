@@ -8,7 +8,7 @@ package com.match.determinism;
  * a single canonical line for golden-master comparison; record equality also backs the
  * run-twice / wall-clock-invariance determinism checks.</p>
  */
-public sealed interface EngineEvent permits EngineEvent.Trade, EngineEvent.Status {
+public sealed interface EngineEvent permits EngineEvent.Trade, EngineEvent.Status, EngineEvent.Outcome {
 
     /** Canonical one-line form for golden files. Fields are fixed-order; FixedPoint values are raw longs. */
     String render();
@@ -57,6 +57,20 @@ public sealed interface EngineEvent permits EngineEvent.Trade, EngineEvent.Statu
                     marketId, timestamp, orderId, userId, statusName(orderStatus), remainingQty,
                     filledQty, orderPrice, orderIsBuy ? 1 : 0, omsOrderId,
                     com.match.application.orderbook.OrderRejectReason.describe(rejectReason));
+        }
+    }
+
+    /**
+     * RC2 S5 (9.1): a behaviour-2 record 3 outcome (only the D* verbs produce one; legacy scenarios
+     * emit none, so their goldens are unchanged).
+     */
+    record Outcome(long idHigh, long idLow, int result, int status, int reason, boolean oldCancelled, long orderId)
+            implements EngineEvent {
+
+        @Override
+        public String render() {
+            return String.format("OUTCOME id=%d/%d result=%d status=%d reason=%d old=%d order=%d",
+                    idHigh, idLow, result, status, reason, oldCancelled ? 1 : 0, orderId);
         }
     }
 

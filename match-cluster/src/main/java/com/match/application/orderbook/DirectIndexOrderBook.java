@@ -242,6 +242,64 @@ public class DirectIndexOrderBook {
     /**
      * Cancel order by ID. O(1)
      */
+    /**
+     * RC2 S4 (contract 5.1): the owner of a resting order, or -1. The same guards as
+     * {@link #cancelOrder}: a location must exist (a tombstone has none) and the packed slot must
+     * still hold this order id.
+     */
+    public long restingUserId(long orderId) {
+        final long location = orderLocations.get(orderId);
+        if (location == EMPTY_LOCATION) return -1L;
+        final int orderBase = (unpackPriceIdx(location) * maxOrdersPerLevel + unpackSlot(location)) * ORDER_FIELDS;
+        if (orders[orderBase] != orderId) return -1L;
+        return orders[orderBase + 1];
+    }
+
+    /**
+     * RC2 S5 (contract 5.4): the remaining quantity of a resting order, or -1. The guards of
+     * {@link #restingUserId}. Read-only.
+     */
+    public long restingRemaining(long orderId) {
+        final long location = orderLocations.get(orderId);
+        if (location == EMPTY_LOCATION) return -1L;
+        final int orderBase = (unpackPriceIdx(location) * maxOrdersPerLevel + unpackSlot(location)) * ORDER_FIELDS;
+        if (orders[orderBase] != orderId) return -1L;
+        return orders[orderBase + 2];
+    }
+
+    // RC2 S5 (contract 3.3, FIX-2): pure accessors of the FOK pre-walk. Unlike getHeadOrder*, they
+    // never advance the head and never free a slot.
+
+    /** The head slot of level {@code priceIdx} as stored (it may be a tombstone). */
+    int levelHeadSlot(int priceIdx) {
+        return (int) levels[priceIdx * LEVEL_FIELDS];
+    }
+
+    /** Remaining quantity in {@code slot} of level {@code priceIdx} (0 = tombstone). */
+    long slotQuantity(int priceIdx, int slot) {
+        return orders[(priceIdx * maxOrdersPerLevel + slot) * ORDER_FIELDS + 2];
+    }
+
+    /** Next slot after {@code slot} in level {@code priceIdx}'s chain (-1 = tail). */
+    int slotNext(int priceIdx, int slot) {
+        return (int) orders[(priceIdx * maxOrdersPerLevel + slot) * ORDER_FIELDS + 3];
+    }
+
+    /** Free slots of level {@code priceIdx} (test access: the pre-walk must leave it unchanged). */
+    int freeSlotCount(int priceIdx) {
+        return freeSlotCounts[priceIdx];
+    }
+
+    /** The price index of {@code price} (test access). */
+    int priceIndexOf(long price) {
+        return priceToIndex(price);
+    }
+
+    /** The per-level node bound of this book. */
+    public int getMaxOrdersPerLevel() {
+        return maxOrdersPerLevel;
+    }
+
     public boolean cancelOrder(long orderId) {
         long location = orderLocations.get(orderId);
         if (location == EMPTY_LOCATION) return false;
@@ -550,7 +608,9 @@ public class DirectIndexOrderBook {
         int levelBase = priceIdx * LEVEL_FIELDS;
         int currentSlot = (int) levels[levelBase]; // head
         int slotStackBase = priceIdx * maxOrdersPerLevel;
-        int guard = maxOrdersPerLevel;
+        // +1 guard (as compactLevel): a fully-occupied level has exactly maxOrdersPerLevel nodes;
+        // the old bound visited one fewer and leaked the last slot of a full level.
+        int guard = maxOrdersPerLevel + 1;
         while (currentSlot >= 0 && currentSlot < maxOrdersPerLevel && --guard > 0) {
             int orderBase = (priceIdx * maxOrdersPerLevel + currentSlot) * ORDER_FIELDS;
             int nextSlot = (int) orders[orderBase + 3];
@@ -686,7 +746,9 @@ public class DirectIndexOrderBook {
 
             // Walk the linked list at this level (with cycle guard)
             int currentSlot = headSlot;
-            int guard = maxOrdersPerLevel;
+            // +1 guard (as compactLevel): a full level has maxOrdersPerLevel nodes; the old bound
+            // dropped the last live order of a full level from the snapshot export.
+            int guard = maxOrdersPerLevel + 1;
             while (currentSlot >= 0 && currentSlot < maxOrdersPerLevel && --guard > 0) {
                 int orderBase = (priceIdx * maxOrdersPerLevel + currentSlot) * ORDER_FIELDS;
                 long qty = orders[orderBase + 2];

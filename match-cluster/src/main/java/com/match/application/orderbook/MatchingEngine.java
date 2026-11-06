@@ -25,7 +25,28 @@ public interface MatchingEngine {
     /** Process a limit order against the opposing book, resting any remainder. Returns match count. */
     int processLimitOrder(long orderId, long userId, boolean isBuy, long price, long quantity);
 
-    /** Process a market order (buy uses budget, sell uses quantity). Returns match count. */
+    /**
+     * RC2 S5 (contract 3.3): the sweep of {@link #processLimitOrder}, unchanged (same level loop,
+     * same per-level match, same cap), and then NO rest: the taker side is never touched. Afterwards
+     * {@link #getLastRestRejectReason()} is MATCH_LIMIT when the cap fired with a remainder,
+     * IOC_REMAINDER for any other remainder, NONE when the taker filled. Returns match count.
+     */
+    int processLimitOrderNoRest(long orderId, long userId, boolean isBuy, long price, long quantity);
+
+    /**
+     * RC2 S5 (contract 3.3, 3.5): true iff {@link #processLimitOrderNoRest} with these arguments
+     * would fill {@code quantity} completely with the cap flag clear. Read-only and allocation-free:
+     * walks the crossing makers order by order in sweep order, at most {@code maxMatchesPerOrder} of
+     * them, and mutates nothing (no head advance, no slot freed, no version bump).
+     */
+    boolean canFillCompletely(boolean isBuy, long price, long quantity);
+
+    /**
+     * Process a market order. Sell: sized by {@code quantity}. Buy: spends {@code budget}; RC2 S5
+     * (contract section 4): a buy with {@code quantity > 0} is also bounded by that quantity, and a
+     * buy with {@code quantity <= 0} is unbounded (budget only, the behaviour-1 sweep). Returns
+     * match count.
+     */
     int processMarketOrder(long orderId, long userId, boolean isBuy, long quantity, long budget);
 
     /** Add an order directly without matching (LIMIT_MAKER). Returns an OrderRejectReason code. */
@@ -33,6 +54,19 @@ public interface MatchingEngine {
 
     /** Cancel a resting order on the given side. Returns true if it was present and removed. */
     boolean cancelOrder(long orderId, boolean isBuy);
+
+    /**
+     * RC2 S4 (contract 5.1): the owning userId of {@code orderId} if it rests on the given side, else
+     * -1. Uses the book's own collision guards (the location must still name this order), so a
+     * cancelled, filled or never-seen id and a reused slot all read -1. Read-only, allocation-free.
+     */
+    long restingUserId(long orderId, boolean isBuy);
+
+    /**
+     * RC2 S5 (contract 5.4): the remaining quantity of {@code orderId} if it rests on the given
+     * side, else -1. The guards of {@link #restingUserId}. Read-only, allocation-free.
+     */
+    long restingRemaining(long orderId, boolean isBuy);
 
     // ==================== Validation ====================
 
@@ -95,6 +129,18 @@ public interface MatchingEngine {
      */
     void publishTopOfBook();
 
+    /**
+     * RC2 S13 W-ME3: force one publish of the top of book past any dirty gate. Called once on the
+     * cluster thread right after a snapshot restore, after the book version was raised to the snapshot
+     * position, so the market-data flush thread sees the restored levels with a positive version
+     * before the market's first command. Egress only: neither the version nor the published top is in
+     * the snapshot or the log. The default is empty, which is right for an implementation whose flush
+     * thread reads the live book (the direct-index book).
+     */
+    default void republishTopOfBook() {
+        // intentionally empty
+    }
+
     /** Collect the top N levels of both books into the pre-allocated top-* buffers. */
     void collectTopLevels(int maxLevels);
 
@@ -119,6 +165,11 @@ public interface MatchingEngine {
      * Published together with the top-of-book snapshot; chains market-data snapshots and deltas
      * for client-side stitching (a client can buffer deltas, fetch a snapshot, and replay the
      * deltas whose {@code fromVersion} continues the snapshot's version).
+     *
+     * <p>The version is not in the snapshot. It is deterministic across replicas from the first command
+     * after a restore; until then a restored node labels the restored state with the snapshot position
+     * (RC2 S13 W-ME3, {@code Engine.republishRestoredBooks}), a node that ran through the log with the
+     * position of the market's last command, and no version labels two different states.</p>
      */
     void setBookVersion(long version);
 
