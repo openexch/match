@@ -3,8 +3,7 @@
 """
 Stranded-follower regression gate (match#32 triage item 1; gates match#35 / P1.3-iv).
 
-Deliberately reproduces the 2026-07-02 incident shape
-(docs/incidents/2026-07-02-follower-stranded-by-housekeeping.md):
+Deliberately reproduces the 2026-07-02 stranded-follower incident (match#35):
 
   1. stop a follower F
   2. advance the log under load

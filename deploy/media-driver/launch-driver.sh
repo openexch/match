@@ -36,7 +36,7 @@ set -euo pipefail
 
 # ==================== CORE PINNING (prod profile) ====================
 # Set these to pin the three DEDICATED driver threads to isolated cores
-# (see deploy/tuning/system-tuning.sh and docs/kernel-bypass.md for the layout).
+# (see deploy/tuning/system-tuning.sh for the layout).
 # Empty (default) = no pinning, a WARN is printed. Do not hardcode core IDs below.
 SENDER_CORE="${SENDER_CORE:-}"
 RECEIVER_CORE="${RECEIVER_CORE:-}"
