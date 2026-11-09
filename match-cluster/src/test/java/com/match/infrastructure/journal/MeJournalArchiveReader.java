@@ -16,10 +16,10 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * RC2 S3 test-scope reader of one node's ME journal archive (schema 4): every recording on the
+ * Test-scope reader of one node's ME journal archive (schema 4): every recording on the
  * settlement journal stream, replayed from its start to its current end over UDP into the
  * caller's media driver, through the journal archive's control port. One frame per Aeron
- * message, exactly as the writer agent offered it. Reusable by S14's {@code JournalProbe}.
+ * message, exactly as the writer agent offered it. Reusable by a {@code JournalProbe}.
  */
 public final class MeJournalArchiveReader {
 

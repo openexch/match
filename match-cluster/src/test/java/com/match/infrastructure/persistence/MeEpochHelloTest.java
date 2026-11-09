@@ -24,7 +24,7 @@ import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S12 W9 (D-S12-1, F-ME-1): the epoch hello. The keep-warm ClusterHeartbeat, the only egress frame that carries
+ * The epoch hello. The keep-warm ClusterHeartbeat, the only egress frame that carries
  * meEpoch, is sent only when no egress reached any session for 1 s, so a forwarder that connects to a busy ME never
  * learns the epoch it must bind before it registers with the core. The leader now sends every new session (and
  * every session present at its first flush of a term) one heartbeat from the flush branch; it is node-local egress
@@ -37,7 +37,7 @@ public class MeEpochHelloTest {
     /** A bound (epoch G) service restored from a G1 snapshot, attached to a stub cluster of the given role. */
     private static final class Node {
         final MeStubCluster cluster = new MeStubCluster();
-        final S2Services.Service svc = new S2Services.Service(true);
+        final LaunchModeServices.Service svc = new LaunchModeServices.Service(true);
         final AppClusteredService s = svc.service;
         final RecordingSession session = new RecordingSession(SESSION);
 
@@ -224,7 +224,7 @@ public class MeEpochHelloTest {
     @Test
     public void aSessionOpenedBeforeTheFreshGetsItsHelloOnceTheEpochIsBound() {
         final MeStubCluster cluster = new MeStubCluster();
-        final S2Services.Service svc = new S2Services.Service(true); // config mode, no EngineConfig yet: meEpoch 0
+        final LaunchModeServices.Service svc = new LaunchModeServices.Service(true); // config mode, no EngineConfig yet: meEpoch 0
         final AppClusteredService s = svc.service;
         MeStubCluster.attach(s, cluster);
         s.onNewLeadershipTermEvent(5, cluster.logPosition, cluster.time, 0, 0, 7, TimeUnit.MILLISECONDS, 0);

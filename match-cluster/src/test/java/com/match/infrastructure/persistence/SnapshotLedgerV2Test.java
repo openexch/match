@@ -18,7 +18,7 @@ import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S4 contract section 7: the snapshot v2 (envelope 2, ledger v2 block marker 4) layout, its
+ * The snapshot v2 (envelope 2, ledger v2 block marker 4) layout, its
  * round trip, the reader rules R1-R11 (each broken once and refused naming the rule) and the
  * cross-version refusals.
  */
@@ -51,7 +51,7 @@ public class SnapshotLedgerV2Test {
     }
 
     /**
-     * RC2 S17 W12 (R-ME-1): the behaviour-1 body of an envelope-1 image (the payload without its trailing empty
+     * The behaviour-1 body of an envelope-1 image (the payload without its trailing empty
      * v1 ledger block, which the writer now always emits): the bytes a behaviour-2 payload starts with.
      */
     static byte[] body1(byte[] image) {
@@ -150,9 +150,9 @@ public class SnapshotLedgerV2Test {
             assertArrayEquals("two replicas byte-equal", image, twin.r.snapshot());
             try (Replica restored = Replica.restoredFrom(image)) {
                 assertArrayEquals("serialize, restore, serialize", image, restored.snapshot());
-                assertEquals(N_INFLIGHT, S4Probe.ledgerSize(restored.h.engine));
-                assertArrayEquals(new long[]{20, 20, 30, 30}, S4Probe.ranges(restored.h.engine));
-                assertEquals(N_FLOOR, S4Probe.floorCount(restored.h.engine));
+                assertEquals(N_INFLIGHT, DurableLedgerProbe.ledgerSize(restored.h.engine));
+                assertArrayEquals(new long[]{20, 20, 30, 30}, DurableLedgerProbe.ranges(restored.h.engine));
+                assertEquals(N_FLOOR, DurableLedgerProbe.floorCount(restored.h.engine));
             }
         }
         try (Run empty = fresh(C)) {
@@ -265,19 +265,19 @@ public class SnapshotLedgerV2Test {
     @Test
     public void crossVersionImagesFailClosed() {
         try (Run r = reference()) {
-            final byte[] s4 = r.r.snapshot();
-            final byte[] p = payload(s4);
-            // The S2/S3 shape: envelope 1, identity block, no ledger v2 block.
-            final byte[] s2Shape = envelope(s4, Arrays.copyOf(p, p.length - BLOCK), 1);
+            final byte[] current = r.r.snapshot();
+            final byte[] p = payload(current);
+            // The envelope-1 shape: identity block, no ledger v2 block.
+            final byte[] envelope1Shape = envelope(current, Arrays.copyOf(p, p.length - BLOCK), 1);
             try {
-                restore(s2Shape);
-                fail("an S2-shape image (envelope 1 with the identity block) must be refused by S4");
+                restore(envelope1Shape);
+                fail("an envelope-1 image with the identity block must be refused");
             } catch (IllegalStateException expected) {
                 assertTrue(expected.getMessage(), expected.getMessage().contains("envelope-1"));
             }
-            // An S2 reader refuses every envelope version but 1 (SnapshotCodec.java:308 at 3b95c56:
+            // An earlier reader refuses every envelope version but 1 (SnapshotCodec.java:308 at 3b95c56:
             // "src.getInt(offset+8)!=1 -> Unsupported/truncated durable snapshot").
-            assertEquals("the S4 image is envelope 2, which the S2 reader refuses", 2, envelopeVersion(s4));
+            assertEquals("the image is envelope 2, which the earlier reader refuses", 2, envelopeVersion(current));
         }
     }
 

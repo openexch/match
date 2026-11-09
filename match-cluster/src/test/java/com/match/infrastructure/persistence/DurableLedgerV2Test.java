@@ -28,11 +28,11 @@ import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S4 contract sections 2-6 and 9 (W1, W2): the behaviour-2 ledger v2, the
+ * The behaviour-2 ledger v2, the
  * {@code ReleaseCommandIds} apply and record 4, derived ownership, the B0/B1 INVALID rows, the
  * recorded capacity C and its report. Every command goes through the real {@link SbeDemuxer}
  * (frames, log positions, the journal ring), and every assertion reads the journal, the books or
- * the engine's replicated state; S4-only APIs are read through {@link S4Probe}.
+ * the engine's replicated state; ledger-v2-only APIs are read through {@link DurableLedgerProbe}.
  */
 public class DurableLedgerV2Test {
 
@@ -112,9 +112,9 @@ public class DurableLedgerV2Test {
     }
 
     /**
-     * RC2 S5 (9.1): an UPDATE carries the core-shaped amend reference {@code expectedOldRemaining}, the
+     * An UPDATE carries the core-shaped amend reference {@code expectedOldRemaining}, the
      * named leg's remaining at that point of the script (fixed-point raw). With {@code expected ==
-     * actual} the placed quantity is the wire quantity, as before S5.
+     * actual} the placed quantity is the wire quantity, as before the amend correction.
      */
     static byte[] amend(long h, long attempt, long user, long leg, int side, double price, double qty, int type,
                         long expectedOldRemaining) {
@@ -180,9 +180,9 @@ public class DurableLedgerV2Test {
         return me.getBidOrders().length / 4 + me.getAskOrders().length / 4;
     }
 
-    // ==================== F2: release then duplicate ====================
+    // ==================== Release then duplicate ====================
 
-    /** The F2 assertions after the release step; shared by the test and its negative control. */
+    /** The duplicate-refusal assertions after the release step; shared by the test and its negative control. */
     private static void assertDuplicateCreateRefused(Run r, long h) {
         final long gen = r.engine().getOrderIdGenerator();
         final List<byte[]> dup = r.send(create(h, 0, 100, 0, 59_000, 1));
@@ -215,14 +215,14 @@ public class DurableLedgerV2Test {
             assertEquals(1_000, rel.ledgerCapacity());
 
             assertDuplicateCreateRefused(r, h);
-            assertEquals(1, S4Probe.released(r.engine()));
+            assertEquals(1, DurableLedgerProbe.released(r.engine()));
         }
         // Negative control: a release that removes WITHOUT a tombstone lets the duplicate apply as a
         // second order, and the same assertions must catch it.
         try (Run r = fresh(1_000)) {
             final long leg = appliedOrderId(r.send(create(h, 0, 100, 0, 59_000, 1)));
             appliedOrderId(r.send(cancel(h, 1, 100, leg)));
-            assertEquals(2, S4Probe.forgetWithoutTombstone(r.engine(), h));
+            assertEquals(2, DurableLedgerProbe.forgetWithoutTombstone(r.engine(), h));
             try {
                 assertDuplicateCreateRefused(r, h);
                 fail("the negative control must fail: without the tombstone the duplicate is a new order");
@@ -246,7 +246,7 @@ public class DurableLedgerV2Test {
             final CommandReleaseDecoder rel = only4(r.send(releaseFrame(2, upTo(h, (1 << 2) | UPDATE))));
             assertArrayEquals(new int[]{R_APPLIED, 2}, entries(rel).get(0));
             assertEquals(0, rel.ledgerSize());
-            assertEquals(1, S4Probe.floorCount(r.engine()));
+            assertEquals(1, DurableLedgerProbe.floorCount(r.engine()));
 
             final long gen = r.engine().getOrderIdGenerator();
             final List<byte[]> dup = r.send(amend(h, 1, 100, leg, 0, 58_000, 1, LIMIT, fp(1)));
@@ -272,7 +272,7 @@ public class DurableLedgerV2Test {
             assertEquals("(h, 5) stays inflight", 1, rel.ledgerSize());
 
             final long suppressed = r.engine().suppressedDuplicateCount();
-            assertTrue("an equal copy of (h, 5) is still suppressed (S3 X4)", r.send(cancel).isEmpty());
+            assertTrue("an equal copy of (h, 5) is still suppressed (equal-intent duplicate)", r.send(cancel).isEmpty());
             assertEquals(suppressed + 1, r.engine().suppressedDuplicateCount());
             assertEquals("a copy of (h, 0) is RELEASED", RELEASED, only3(r.send(create)).result());
         }
@@ -305,9 +305,9 @@ public class DurableLedgerV2Test {
             assertArrayEquals(new int[]{R_APPLIED, 0}, e.get(1));
             assertArrayEquals(new int[]{R_NOOP, 0}, e.get(2));
             assertEquals(8L, mixed.releaseSeq());
-            assertEquals("five all-NOOP frames counted", 5, S4Probe.releaseNoopFrames(r.engine()));
-            assertEquals(2, S4Probe.floorCount(r.engine()));
-            assertArrayEquals(new long[]{o, o}, S4Probe.ranges(r.engine()));
+            assertEquals("five all-NOOP frames counted", 5, DurableLedgerProbe.releaseNoopFrames(r.engine()));
+            assertEquals(2, DurableLedgerProbe.floorCount(r.engine()));
+            assertArrayEquals(new long[]{o, o}, DurableLedgerProbe.ranges(r.engine()));
         }
     }
 
@@ -321,17 +321,17 @@ public class DurableLedgerV2Test {
             assertEquals("no tombstone", 0, live.tombstoneRanges());
             assertEquals(1, live.ledgerSize());
             assertEquals("journaled again on a repeated copy", 1, entries(only4(r.send(releaseFrame(2, order(h))))).size());
-            assertEquals(2, S4Probe.releaseLegLive(r.engine()));
+            assertEquals(2, DurableLedgerProbe.releaseLegLive(r.engine()));
 
             // Two slices under h2, one still resting.
             final long h2 = 505;
             final long a = appliedOrderId(r.send(create(h2, 0, 100, 0, 59_000, 1)));
             final long b = appliedOrderId(r.send(create(h2, 1, 100, 0, 59_001, 1)));
             appliedOrderId(r.send(cancel(h2, 2, 100, a)));
-            assertEquals(1, S4Probe.legCount(r.engine(), h2));
+            assertEquals(1, DurableLedgerProbe.legCount(r.engine(), h2));
             assertArrayEquals(new int[]{R_LEG_LIVE, 0}, entries(only4(r.send(releaseFrame(3, order(h2))))).get(0));
             appliedOrderId(r.send(cancel(h2, 3, 100, b)));
-            assertEquals(0, S4Probe.legCount(r.engine(), h2));
+            assertEquals(0, DurableLedgerProbe.legCount(r.engine(), h2));
             assertArrayEquals(new int[]{R_APPLIED, 4}, entries(only4(r.send(releaseFrame(4, order(h2))))).get(0));
 
             // After the cancel ORDER(h) applies.
@@ -349,7 +349,7 @@ public class DurableLedgerV2Test {
             final long h = 506;
             final long leg = appliedOrderId(r.send(create(h, 0, 100, 0, 59_000, 1)));
             final long replacement = appliedOrderId(r.send(amend(h, 1, 100, leg, 0, 58_000, 1, LIMIT, fp(1))));
-            assertEquals("the replacement is keyed under h", 1, S4Probe.legCount(r.engine(), h));
+            assertEquals("the replacement is keyed under h", 1, DurableLedgerProbe.legCount(r.engine(), h));
             assertArrayEquals(new int[]{R_LEG_LIVE, 0}, entries(only4(r.send(releaseFrame(1, order(h))))).get(0));
             appliedOrderId(r.send(cancel(h, 2, 100, replacement)));
             assertArrayEquals(new int[]{R_APPLIED, 3}, entries(only4(r.send(releaseFrame(2, order(h))))).get(0));
@@ -363,7 +363,7 @@ public class DurableLedgerV2Test {
             final CommandOutcomeDecoder a = only3(r.send(amend(h, 1, 100, leg, 0, 58_000, 1, LIMIT_MAKER, fp(1))));
             assertEquals("the replacement could not rest: REJECTED", DurableCommandOutcome.REJECTED, a.result());
             assertEquals("the old leg is gone", 1, a.oldCancelled());
-            assertEquals("no leg names h", 0, S4Probe.legCount(r.engine(), h));
+            assertEquals("no leg names h", 0, DurableLedgerProbe.legCount(r.engine(), h));
             assertArrayEquals(new int[]{R_APPLIED, 2}, entries(only4(r.send(releaseFrame(1, order(h))))).get(0));
         }
     }
@@ -396,7 +396,7 @@ public class DurableLedgerV2Test {
             assertEquals("the CREATE id is gone while its leg rests", 0, rel.ledgerSize());
 
             final List<byte[]> f = r.send(cancel(h, 1, 100, leg));
-            assertEquals("ownership is read from the book (F3)", DurableCommandOutcome.APPLIED, only3(f).result());
+            assertEquals("ownership is read from the book", DurableCommandOutcome.APPLIED, only3(f).result());
             final List<byte[]> terminals = of(f, 2);
             assertEquals(1, terminals.size());
             final var t = new com.match.infrastructure.mejournal.generated.TerminalDecoder().wrapAndApplyHeader(
@@ -455,12 +455,12 @@ public class DurableLedgerV2Test {
                             && o.commandKind() <= 2 && o.timeInForce() <= 2);
                 }
             }
-            assertEquals(0, S4Probe.ledgerSize(r.engine()));
+            assertEquals(0, DurableLedgerProbe.ledgerSize(r.engine()));
             assertEquals(0, resting(r.engine()));
-            assertEquals("B0 twice", 2, S4Probe.invalidWire(r.engine()));
-            assertEquals("sign: idHigh 0 and idLow < 0, twice each", 4, S4Probe.invalidSign(r.engine()));
-            assertEquals(2, S4Probe.invalidKindBits(r.engine()));
-            assertEquals(2, S4Probe.invalidOwnerId(r.engine()));
+            assertEquals("B0 twice", 2, DurableLedgerProbe.invalidWire(r.engine()));
+            assertEquals("sign: idHigh 0 and idLow < 0, twice each", 4, DurableLedgerProbe.invalidSign(r.engine()));
+            assertEquals(2, DurableLedgerProbe.invalidKindBits(r.engine()));
+            assertEquals(2, DurableLedgerProbe.invalidOwnerId(r.engine()));
         }
     }
 
@@ -471,7 +471,7 @@ public class DurableLedgerV2Test {
                 durableRaw(h, 0, CREATE, 0, h, 0, 0, fp(59_000), fp(1), 0, LIMIT, 0, 0),       // userId 0
                 durableRaw(h, 3, 3, 100, h, 1, 0, fp(59_000), fp(1), 0, LIMIT, 0, 0),          // kind 3
                 durableRaw(h, 0, CREATE, 100, h, 0, 0, fp(59_000), fp(1), 0, LIMIT, 3, 0),     // tif 3
-                durableRaw(h, 0, CREATE, 100, h, 0, 0, fp(59_000), fp(1), 0, LIMIT, 0, 5),     // F1
+                durableRaw(h, 0, CREATE, 100, h, 0, 0, fp(59_000), fp(1), 0, LIMIT, 0, 5),     // UPDATE-only field on a CREATE
                 withHeaderVersion(durableRaw(h, 0, CREATE, 100, h, 0, 0, fp(59_000), fp(1), 0, LIMIT, 3, 0), 13),
         };
         try (Run r = fresh(1_000)) {
@@ -509,7 +509,7 @@ public class DurableLedgerV2Test {
                     only4(r.send(releaseFrame(4, order(11)))).tombstoneRanges());
             assertEquals("ORDER(Long.MAX_VALUE) without overflow", 3, only4(r.send(releaseFrame(5, order(max)))).tombstoneRanges());
             assertEquals("MAX - 1 merges with the MAX range", 3, only4(r.send(releaseFrame(6, order(max - 1)))).tombstoneRanges());
-            assertArrayEquals(new long[]{10, 12, far, far, max - 1, max}, S4Probe.ranges(r.engine()));
+            assertArrayEquals(new long[]{10, 12, far, far, max - 1, max}, DurableLedgerProbe.ranges(r.engine()));
             assertEquals(RELEASED, only3(r.send(create(11, 0, 100, 0, 59_000, 1))).result());
             assertEquals(RELEASED, only3(r.send(create(max, 0, 100, 0, 59_000, 1))).result());
             assertEquals("a gap id is not released", DurableCommandOutcome.APPLIED,
@@ -528,11 +528,11 @@ public class DurableLedgerV2Test {
             for (long h = 1; h <= orders; h++) {
                 final long leg = r.engine().getOrderIdGenerator();
                 r.send(create(h, 0, 100, 0, 59_000, 1));
-                maxInflight = Math.max(maxInflight, S4Probe.ledgerSize(r.engine()));
+                maxInflight = Math.max(maxInflight, DurableLedgerProbe.ledgerSize(r.engine()));
                 r.send(cancel(h, 1, 100, leg));
-                maxInflight = Math.max(maxInflight, S4Probe.ledgerSize(r.engine()));
-                if (S4Probe.ledgerSize(r.engine()) > 64) {
-                    fail("inflight <= 64 at order " + h + ", was " + S4Probe.ledgerSize(r.engine()));
+                maxInflight = Math.max(maxInflight, DurableLedgerProbe.ledgerSize(r.engine()));
+                if (DurableLedgerProbe.ledgerSize(r.engine()) > 64) {
+                    fail("inflight <= 64 at order " + h + ", was " + DurableLedgerProbe.ledgerSize(r.engine()));
                 }
                 pending.add(order(h));
                 if (pending.size() == 16) {
@@ -540,10 +540,10 @@ public class DurableLedgerV2Test {
                     pending.clear();
                 }
             }
-            assertEquals("no CAPACITY", 0, S4Probe.capacity(r.engine()));
+            assertEquals("no CAPACITY", 0, DurableLedgerProbe.capacity(r.engine()));
             assertEquals(0, resting(r.engine()));
-            assertArrayEquals("one tombstone range [1, n]", new long[]{1, orders}, S4Probe.ranges(r.engine()));
-            assertEquals(0, S4Probe.floorCount(r.engine()));
+            assertArrayEquals("one tombstone range [1, n]", new long[]{1, orders}, DurableLedgerProbe.ranges(r.engine()));
+            assertEquals(0, DurableLedgerProbe.floorCount(r.engine()));
             assertTrue("non-vacuous", maxInflight >= 32);
         }
         // Control without releases: CAPACITY exactly at command 1001.
@@ -589,7 +589,7 @@ public class DurableLedgerV2Test {
             final CommandOutcomeDecoder again = only3(r.send(create(4, 0, 100, 0, 59_010, 1)));
             assertEquals("room after UP_TO", DurableCommandOutcome.APPLIED, again.result());
             assertEquals(3, again.ledgerSize());
-            assertEquals(1, S4Probe.capacity(r.engine()));
+            assertEquals(1, DurableLedgerProbe.capacity(r.engine()));
         }
         // Behaviour 1 still reports the ledger v1 cap.
         try (Replica one = new Replica()) {
@@ -600,7 +600,7 @@ public class DurableLedgerV2Test {
     }
 
     /**
-     * I7 with an independent reference model of the ledger (inflight ids, floors, tombstones,
+     * The ledger size invariant with an independent reference model of the ledger (inflight ids, floors, tombstones,
      * resting legs per idHigh): after every log entry the last journaled {@code ledgerSize} equals
      * the model's size, and every record's result equals the model's decision.
      */
@@ -754,11 +754,11 @@ public class DurableLedgerV2Test {
                 assertEquals("seed " + seed + " entry " + i + ": the last journaled ledgerSize is the model's",
                         m.size, lastJournaledSize);
             }
-            System.out.println("[S4] ledger model seed " + seed + ": " + releases + " journaled release frames, "
+            System.out.println("[LEDGER] ledger model seed " + seed + ": " + releases + " journaled release frames, "
                     + changes + " size changes, final size " + m.size);
             assertTrue("non-vacuous: releases", releases > 50);
             assertTrue("non-vacuous: size changes", changes > 150);
-            assertEquals(m.size, S4Probe.ledgerSize(r.engine()));
+            assertEquals(m.size, DurableLedgerProbe.ledgerSize(r.engine()));
         }
     }
 
@@ -818,7 +818,7 @@ public class DurableLedgerV2Test {
             }
             final long allocated = mx.getCurrentThreadAllocatedBytes() - before;
             r.r.h.drain();
-            assertEquals(1_000, S4Probe.ledgerSize(r.engine()));
+            assertEquals(1_000, DurableLedgerProbe.ledgerSize(r.engine()));
             assertTrue("C = 2^31 - 1 is a bound, not an allocation: " + allocated + " B for 1000 commands",
                     allocated < 16L * 1024 * 1024);
         }

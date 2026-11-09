@@ -4,7 +4,7 @@ package com.match.infrastructure.persistence;
 import com.match.application.engine.BehaviourTwoHarness;
 import com.match.application.engine.Engine;
 import com.match.application.orderbook.MatchingEngine;
-import com.match.application.orderbook.S5Probe;
+import com.match.application.orderbook.OrderBookProbe;
 import com.match.domain.FixedPoint;
 import com.match.domain.commands.DurableCommandOutcome;
 import com.match.domain.commands.DurableOrderIntent;
@@ -21,11 +21,11 @@ import java.util.List;
 
 import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
-import static com.match.infrastructure.persistence.S5Frames.*;
+import static com.match.infrastructure.persistence.TifFrames.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S5 contract sections 3 and 4 (W1, W2): native IOC and FOK on behaviour-2 LIMIT creates and
+ * Native IOC and FOK on behaviour-2 LIMIT creates and
  * the bounded market buy, on the array and the direct book. Every command is a v12 frame through
  * the real {@link SbeDemuxer}; assertions read the journal, the books and the engine state.
  */
@@ -44,7 +44,7 @@ public class TifNativeTest {
     }
 
     private Run fresh(int cap) {
-        return freshWith(S5Frames.config(direct, cap, 8));
+        return freshWith(TifFrames.config(direct, cap, 8));
     }
 
     private static long rest(Run r, long h, long user, int side, double price, double qty) {
@@ -74,8 +74,8 @@ public class TifNativeTest {
             assertEquals("no resting bid", 0, me.getBidOrders().length);
             assertEquals("the taker side was never touched", bidVersion, me.getBidVersion());
             assertFalse("no omsMap key for the taker", r.engine().getOrderIdToOmsOrderId().containsKey(taker));
-            assertEquals(1L, S5Probe.ioc(r.engine()));
-            assertEquals(1L, S5Probe.iocRemainder(r.engine()));
+            assertEquals(1L, OrderBookProbe.ioc(r.engine()));
+            assertEquals(1L, OrderBookProbe.iocRemainder(r.engine()));
         }
     }
 
@@ -131,7 +131,7 @@ public class TifNativeTest {
             assertEquals("bid version unchanged", bv, me.getBidVersion());
             assertEquals("ask version unchanged", av, me.getAskVersion());
             assertFalse(r.engine().getOrderIdToOmsOrderId().containsKey(o.orderId()));
-            assertEquals(1L, S5Probe.fokUnfillable(r.engine()));
+            assertEquals(1L, OrderBookProbe.fokUnfillable(r.engine()));
         }
     }
 
@@ -182,22 +182,22 @@ public class TifNativeTest {
         }
     }
 
-    /** FIX-2: a full direct level is walked to its last order; the array book gives the same journal. */
+    /** A full direct level is walked to its last order; the array book gives the same journal. */
     @Test
     public void fokNeedsLastOrderOfFullDirectLevel() {
         final List<byte[]> fok;
         final List<byte[]> arrayFok;
-        try (Run d = freshWith(S5Frames.config(true, 10, 4));
-             Run a = freshWith(S5Frames.config(false, 10, 0))) {
+        try (Run d = freshWith(TifFrames.config(true, 10, 4));
+             Run a = freshWith(TifFrames.config(false, 10, 0))) {
             for (int j = 0; j < 4; j++) {
                 rest(d, 1 + j, 100 + j, ASK, 60_000, 1);
                 rest(a, 1 + j, 100 + j, ASK, 60_000, 1);
             }
             assertEquals("the direct level is full: no slot left", 0,
-                    S5Probe.S5 ? S5Probe.directFreeSlots(book(d), true, fp(60_000)) : 0);
+                    OrderBookProbe.TIF_APIS ? OrderBookProbe.directFreeSlots(book(d), true, fp(60_000)) : 0);
             assertTrue("pre-walk: the 4th order of a full level counts",
-                    S5Probe.canFillCompletely(book(d), true, fp(60_000), fp(4)));
-            assertFalse("pre-walk: 5 is not there", S5Probe.canFillCompletely(book(d), true, fp(60_000), fp(5)));
+                    OrderBookProbe.canFillCompletely(book(d), true, fp(60_000), fp(4)));
+            assertFalse("pre-walk: 5 is not there", OrderBookProbe.canFillCompletely(book(d), true, fp(60_000), fp(5)));
             fok = d.send(limit(9, 0, 200, BID, 60_000, 4, FOK));
             arrayFok = a.send(limit(9, 0, 200, BID, 60_000, 4, FOK));
         }
@@ -207,7 +207,7 @@ public class TifNativeTest {
         assertFramesEqual("direct full level == array", arrayFok, fok);
     }
 
-    /** FIX-5: head tombstones on direct; the pre-walk frees nothing and moves no head. */
+    /** Head tombstones on direct; the pre-walk frees nothing and moves no head. */
     @Test
     public void fokPreWalkIsReadOnlyOnDirectTombstones() {
         if (!direct) {
@@ -215,8 +215,8 @@ public class TifNativeTest {
         }
         final List<byte[]> followA = new java.util.ArrayList<>();
         final List<byte[]> followB = new java.util.ArrayList<>();
-        try (Run a = freshWith(S5Frames.config(true, 100, 8));
-             Run b = freshWith(S5Frames.config(true, 100, 8))) {
+        try (Run a = freshWith(TifFrames.config(true, 100, 8));
+             Run b = freshWith(TifFrames.config(true, 100, 8))) {
             for (Run r : new Run[]{a, b}) {
                 final long o1 = rest(r, 1, 100, ASK, 60_000, 1);
                 final long o2 = rest(r, 2, 101, ASK, 60_000, 1);
@@ -226,10 +226,10 @@ public class TifNativeTest {
                 appliedOrderId(r.send(cancel(2, 1, 101, o2)));
             }
             final MatchingEngine me = book(a);
-            final int free = S5Probe.directFreeSlots(me, true, fp(60_000));
-            final int head = S5Probe.directHeadSlot(me, true, fp(60_000));
-            if (S5Probe.S5) { // the precondition reads S5 test access (the base copy returns sentinels)
-                assertArrayEquals("two head tombstones", new int[]{2, 0}, S5Probe.directTombstones(me, true, fp(60_000)));
+            final int free = OrderBookProbe.directFreeSlots(me, true, fp(60_000));
+            final int head = OrderBookProbe.directHeadSlot(me, true, fp(60_000));
+            if (OrderBookProbe.TIF_APIS) { // the precondition reads TIF test access (the base copy returns sentinels)
+                assertArrayEquals("two head tombstones", new int[]{2, 0}, OrderBookProbe.directTombstones(me, true, fp(60_000)));
             }
             final long[] asks = me.getAskOrders();
             final long av = me.getAskVersion();
@@ -241,10 +241,10 @@ public class TifNativeTest {
             assertEquals(0, of(fa, 1).size());
             assertEquals(CANCELLED, o.status());
             assertEquals(FOK_UNFILLABLE, o.reason());
-            assertEquals("free-slot stack unchanged", free, S5Probe.directFreeSlots(me, true, fp(60_000)));
-            assertEquals("head slot unchanged", head, S5Probe.directHeadSlot(me, true, fp(60_000)));
+            assertEquals("free-slot stack unchanged", free, OrderBookProbe.directFreeSlots(me, true, fp(60_000)));
+            assertEquals("head slot unchanged", head, OrderBookProbe.directHeadSlot(me, true, fp(60_000)));
             assertArrayEquals("head tombstones still there", new int[]{2, 0},
-                    S5Probe.directTombstones(me, true, fp(60_000)));
+                    OrderBookProbe.directTombstones(me, true, fp(60_000)));
             assertArrayEquals(asks, me.getAskOrders());
             assertEquals(av, me.getAskVersion());
             // Follow-ups: refill the level to full (compaction), then sweep it.
@@ -303,7 +303,7 @@ public class TifNativeTest {
             assertEquals(CANCELLED, o.status());
             assertEquals(BUDGET_EXHAUSTED, o.reason());
             assertEquals(BUDGET_EXHAUSTED, terminalOf(f, o.orderId()).rejectReason());
-            assertEquals(1L, S5Probe.marketBudgetExhausted(r.engine()));
+            assertEquals(1L, OrderBookProbe.marketBudgetExhausted(r.engine()));
         }
     }
 
@@ -366,14 +366,14 @@ public class TifNativeTest {
                     amendRaw(1, 2, 100, leg, BID, 58_500, 1, LIMIT, FOK, fp(1)),
             };
             for (int i = 0; i < frames.length; i++) {
-                final int ledger = S4Probe.ledgerSize(r.engine());
-                final long before = S5Probe.invalidTif(r.engine());
+                final int ledger = DurableLedgerProbe.ledgerSize(r.engine());
+                final long before = OrderBookProbe.invalidTif(r.engine());
                 final CommandOutcomeDecoder o = outcome(r.send(frames[i]));
                 assertEquals("frame " + i + ": INVALID", DurableCommandOutcome.INVALID, o.result());
                 assertEquals("frame " + i + ": reason 0", 0, o.reason());
                 assertEquals("frame " + i + ": not recorded", ledger, o.ledgerSize());
-                assertEquals("frame " + i + ": ledger unchanged", ledger, S4Probe.ledgerSize(r.engine()));
-                assertEquals("frame " + i + ": counter", before + 1, S5Probe.invalidTif(r.engine()));
+                assertEquals("frame " + i + ": ledger unchanged", ledger, DurableLedgerProbe.ledgerSize(r.engine()));
+                assertEquals("frame " + i + ": counter", before + 1, OrderBookProbe.invalidTif(r.engine()));
             }
             assertArrayEquals("the leg is intact", bids, book(r).getBidOrders());
             // IOC on MARKET is a market order.

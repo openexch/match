@@ -18,7 +18,7 @@ import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S4 independent review (S4/review.md, check 5): {@link ZeroAllocDurablePathTest} measures
+ * {@link ZeroAllocDurablePathTest} measures
  * rest / cancel / amend / duplicate / RELEASED / INVALID(owner) / CAPACITY and ORDER-only release
  * frames on a book that never trades. This window adds the rest of the behaviour-2 durable path:
  * crossing takers (trades, maker and taker FILLED terminals, record 1/2), CONFLICT, B0 (v11 header),
@@ -27,7 +27,7 @@ import static org.junit.Assert.*;
  * harness and the same 20x warm-up as the implementer's test. Every cycle ends with an empty
  * ledger, no floor, one tombstone range and an empty book.
  */
-public class S4ReviewZeroAllocFullMixTest {
+public class ZeroAllocFullMixTest {
 
     private static final int C = 64;
     private static final int H_PER_CYCLE = 17;
@@ -91,8 +91,8 @@ public class S4ReviewZeroAllocFullMixTest {
     }
 
     private static long[] counters(Engine e, SbeDemuxer d) {
-        return new long[]{S4Probe.releaseLegLive(e), S4Probe.releaseApplied(e), S4Probe.releaseNoop(e),
-                S4Probe.releaseNoopFrames(e), S4Probe.released(e), S4Probe.invalidWire(e),
+        return new long[]{DurableLedgerProbe.releaseLegLive(e), DurableLedgerProbe.releaseApplied(e), DurableLedgerProbe.releaseNoop(e),
+                DurableLedgerProbe.releaseNoopFrames(e), DurableLedgerProbe.released(e), DurableLedgerProbe.invalidWire(e),
                 e.suppressedDuplicateCount(), e.getTradeIdGenerator(), d.decodeRejectCount(),
                 d.schemaRejectCount(), d.applyErrorCount()};
     }
@@ -115,7 +115,7 @@ public class S4ReviewZeroAllocFullMixTest {
                         Thread.onSpinWait();
                     }
                 }
-            }, "s4-review-drainer");
+            }, "full-mix-drainer");
             drainer.setDaemon(true);
             drainer.start();
             try {
@@ -141,9 +141,9 @@ public class S4ReviewZeroAllocFullMixTest {
                     demuxer.dispatchTrusted(b, 0, b.capacity(), ts++);
                 }
                 assertEquals(name + ": warm-up applies cleanly", 0, demuxer.applyErrorCount());
-                assertEquals(name + ": warm-up ends with an empty ledger", 0, S4Probe.ledgerSize(h.engine));
-                assertEquals(name + ": warm-up ends with no floor", 0, S4Probe.floorCount(h.engine));
-                assertEquals(name + ": warm-up ends with one range", 2, S4Probe.ranges(h.engine).length);
+                assertEquals(name + ": warm-up ends with an empty ledger", 0, DurableLedgerProbe.ledgerSize(h.engine));
+                assertEquals(name + ": warm-up ends with no floor", 0, DurableLedgerProbe.floorCount(h.engine));
+                assertEquals(name + ": warm-up ends with one range", 2, DurableLedgerProbe.ranges(h.engine).length);
                 assertEquals(name + ": warm-up ends with an empty book", 0, resting(h.engine));
                 final long[] before = counters(h.engine, demuxer);
                 final List<UnsafeBuffer> frames = measured.frames;
@@ -159,7 +159,7 @@ public class S4ReviewZeroAllocFullMixTest {
                 }
                 final long allocated = mx.getCurrentThreadAllocatedBytes() - a0 - calibration;
                 final long[] after = counters(h.engine, demuxer);
-                System.out.println("[S4-REVIEW] " + name + ": " + measured.commands + " durable commands + "
+                System.out.println("[FULL-MIX] " + name + ": " + measured.commands + " durable commands + "
                         + measured.releaseFrames + " release frames (trades, UP_TO, LEG_LIVE, CONFLICT, B0,"
                         + " B5, B6), allocated " + allocated + " B");
                 assertTrue(name + ": the window is >= 10k commands", measured.commands >= 10_000);
@@ -174,7 +174,7 @@ public class S4ReviewZeroAllocFullMixTest {
                 assertEquals(name + ": 8 trades per cycle", 8L * CYCLES, after[7] - before[7]);
                 assertEquals(name + ": no decode, schema or apply fault", 0,
                         (after[8] - before[8]) + (after[9] - before[9]) + (after[10] - before[10]));
-                assertEquals(name + ": the window ends with an empty ledger", 0, S4Probe.ledgerSize(h.engine));
+                assertEquals(name + ": the window ends with an empty ledger", 0, DurableLedgerProbe.ledgerSize(h.engine));
                 assertEquals(name + ": the window ends with an empty book", 0, resting(h.engine));
                 assertEquals(name + ": zero allocation on the service thread", 0L, allocated);
             } finally {

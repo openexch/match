@@ -21,7 +21,7 @@ import static com.match.application.engine.BehaviourTwoHarness.config;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S2 contract section 4: the node-local checks (a) supported behaviour, (b) wire ceiling
+ * The node-local checks (a) supported behaviour, (b) wire ceiling
  * within the jar, (c) legacy-mode creation values, (d) launch mode vs the record. A failure
  * halts the node and never rejects; record 5 is not written by a node that failed the check.
  */
@@ -97,16 +97,16 @@ public class EngineConfigCrossCheckTest {
         final byte[] ceilingThirteen = imageAt(config(1, 2, G, 13, 50_000));
         for (boolean configMode : new boolean[]{true, false}) {
             for (byte[] img : new byte[][]{behaviourThree, ceilingThirteen}) {
-                final S2Services.Service svc = new S2Services.Service(configMode);
+                final LaunchModeServices.Service svc = new LaunchModeServices.Service(configMode);
                 svc.restore(img);
                 assertEquals("configMode=" + configMode, 1, svc.failFast.get());
             }
         }
 
         // A behaviour-2 image with supported values: a config-mode node serves it...
-        final S2Services.Service legacy = new S2Services.Service(false);
+        final LaunchModeServices.Service legacy = new LaunchModeServices.Service(false);
         final byte[] supported = imageAt(nodeMatching(legacy.engine()));
-        final S2Services.Service configNode = new S2Services.Service(true);
+        final LaunchModeServices.Service configNode = new LaunchModeServices.Service(true);
         configNode.restore(supported);
         assertEquals("config mode serves a supported behaviour-2 image", 0, configNode.failFast.get());
         // ...a legacy-mode node halts on check (d) alone.
@@ -119,7 +119,7 @@ public class EngineConfigCrossCheckTest {
     @Test
     public void severalFailingChecksHaltOnce() {
         final byte[] img = imageAt(config(1, 3, G, 13, 50_000)); // (a), (b); BTC-only market table: (c); legacy: (d)
-        final S2Services.Service legacy = new S2Services.Service(false);
+        final LaunchModeServices.Service legacy = new LaunchModeServices.Service(false);
         final String err = stderrOf(() -> legacy.restore(img));
         assertEquals("fail-fast at most once per entry point", 1, legacy.failFast.get());
         for (String check : new String[]{"(a)", "(b)", "(c)", "(d)"}) {
@@ -128,7 +128,7 @@ public class EngineConfigCrossCheckTest {
     }
 
     /**
-     * RC2 S17 W12 (R-ME-2, M3): a restore that dropped an order never serves. An envelope-1 image whose BTC bid sits
+     * A restore that dropped an order never serves. An envelope-1 image whose BTC bid sits
      * above the legacy-mode node's price ceiling (SnapshotCodecTest.geometryMismatchIsLoud's order) restores with
      * one rejected order: the node refuses the image and fail-fasts once (text not pinned: a V2 image may meet the
      * R11 bijection check first).
@@ -149,9 +149,9 @@ public class EngineConfigCrossCheckTest {
         body.putInt(p, 0); p += 4;                                    // no asks
         body.putLong(p, 0); p += 8;                                   // timerCorrelationId
         body.putInt(p, 0); p += 4;                                    // omsMapCount
-        final byte[] image = S2Services.envelopeV1(Arrays.copyOf(body.byteArray(), p));
+        final byte[] image = LaunchModeServices.envelopeV1(Arrays.copyOf(body.byteArray(), p));
 
-        final S2Services.Service legacy = new S2Services.Service(false);
+        final LaunchModeServices.Service legacy = new LaunchModeServices.Service(false);
         final boolean[] served = new boolean[1];
         final String err = stderrOf(() -> served[0] = legacy.load(image));
         assertFalse("a node that dropped an order never serves: " + err, served[0]);

@@ -49,7 +49,7 @@ public class MarketPublisherBookChainTest {
         bc = new BookFrameCapturingBroadcaster();
         pub.setMatchingEngine(engine);
         pub.setBroadcaster(bc);
-        S13Seams.apply(pub);
+        NegativeControlSeams.apply(pub);
     }
 
     /** Rest a bid at {@code BASE + ticksAboveBase * TICK} (no asks in the test, so nothing matches). */
@@ -129,7 +129,7 @@ public class MarketPublisherBookChainTest {
         }
     }
 
-    // ---- RC2 S13 W-ME2 (contract 8.2, F-S13-1; RC-B2, CL-B-1 item 4) ----
+    // ---- an emptied book is published ----
 
     private static String describe(List<BookFrame> frames) {
         return frames.isEmpty() ? "length 0" : frames.toString();
@@ -164,7 +164,7 @@ public class MarketPublisherBookChainTest {
         assertEquals(1, bc.frames.size());
         assertEquals(2000, bc.frames.get(0).fromVersion);
         assertEquals(List.of(0), bc.frames.get(0).updateTypes);
-        // second cycle of the reset (FIX-2): empty again, then silent
+        // second cycle of the reset: empty again, then silent
         engine.cancelOrder(4, true);
         commit(4000);
         bc.frames.clear();
@@ -196,7 +196,7 @@ public class MarketPublisherBookChainTest {
         }
         assertEquals(2000, bc.frames.get(0).bookVersion);
         assertEquals(0, bc.frames.get(0).levels);
-        // a consumer holding the empty snapshot (FIX-2): the returning level chains from it
+        // a consumer holding the empty snapshot: the returning level chains from it
         restBid(7);
         commit(3000);
         bc.frames.clear();
@@ -220,7 +220,7 @@ public class MarketPublisherBookChainTest {
 
     @Test
     public void emptyBookWithNothingPublishedStaysSilent() {
-        // a versioned empty book: the published state is empty (W-ME2 sends it once after a reset) ...
+        // a versioned empty book: the published state is empty (sent once after a reset) ...
         restBid(6);
         engine.cancelOrder(1, true);
         commit(1000);

@@ -13,7 +13,7 @@ import java.util.TreeMap;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S5 FIX-4, the guard of decision D-d (a FOK judged fillable that does not fill halts the
+ * The guard of the FOK divergence fence (a FOK judged fillable that does not fill halts the
  * node): on seeded books, on the array and the direct implementation, the pre-walk
  * {@code canFillCompletely} agrees with the sweep {@code processLimitOrderNoRest} in both
  * directions, and with an independent model computed from the book export.
@@ -70,7 +70,7 @@ public class FokFeasibilityFuzzTest {
                     log, isBuy, priceLevel, qtyMode, pick, cap, false, mopl);
             c.seeds++;
         }
-        System.out.println("[S5] FokFeasibilityFuzzTest: " + c.seeds + " seeds x 2 impls; feasible " + c.feasible
+        System.out.println("[TIF] FokFeasibilityFuzzTest: " + c.seeds + " seeds x 2 impls; feasible " + c.feasible
                 + ", infeasible " + c.infeasible + " (cap-blocked " + c.capBlocked + "); head tombstones "
                 + c.headTomb + ", middle tombstones " + c.middleTomb + ", full direct levels " + c.fullLevel
                 + ", need met at the cap-th maker " + c.atCap + ", by the last order of a level " + c.lastOfLevel
@@ -180,7 +180,7 @@ public class FokFeasibilityFuzzTest {
                 c.fullLevel++;
             }
             if (direct) {
-                final int[] t = S5Probe.directTombstones(a, isBuy, l[0]);
+                final int[] t = OrderBookProbe.directTombstones(a, isBuy, l[0]);
                 c.headTomb += t[0] > 0 ? 1 : 0;
                 c.middleTomb += t[1] > 0 ? 1 : 0;
             }
@@ -217,7 +217,7 @@ public class FokFeasibilityFuzzTest {
         // A: the pre-walk on the reference engine, which must change nothing.
         final long[] bids = a.getBidOrders(), asks = a.getAskOrders();
         final long bv = a.getBidVersion(), av = a.getAskVersion();
-        final boolean pre = S5Probe.canFillCompletely(a, isBuy, price, qty);
+        final boolean pre = OrderBookProbe.canFillCompletely(a, isBuy, price, qty);
         assertArrayEquals(where + ": pre-walk is read-only (bids)", bids, a.getBidOrders());
         assertArrayEquals(where + ": pre-walk is read-only (asks)", asks, a.getAskOrders());
         assertEquals(where + ": pre-walk is read-only (versions)", bv + av, a.getBidVersion() + a.getAskVersion());
@@ -225,8 +225,8 @@ public class FokFeasibilityFuzzTest {
                 + ", firstK " + firstK + ")", model, pre);
 
         // B: the twin (same log, tombstones included): pre-walk, then the sweep.
-        assertEquals(where + ": twin pre-walk", pre, S5Probe.canFillCompletely(b, isBuy, price, qty));
-        final int matches = S5Probe.processLimitOrderNoRest(b, 999_999, 1, isBuy, price, qty);
+        assertEquals(where + ": twin pre-walk", pre, OrderBookProbe.canFillCompletely(b, isBuy, price, qty));
+        final int matches = OrderBookProbe.processLimitOrderNoRest(b, 999_999, 1, isBuy, price, qty);
         final boolean filled = b.getTakerRemainingQuantity() == 0 && !b.wasMatchLimitReached();
         assertEquals(where + ": pre-walk true <=> the sweep fills with the cap flag clear (the fence never fires)",
                 pre, filled);
@@ -267,8 +267,8 @@ public class FokFeasibilityFuzzTest {
                         final boolean buy = rnd.nextBoolean();
                         final long price = BASE + rnd.nextInt(LEVELS) * TICK;
                         final long qty = fp(0.5 * (1 + rnd.nextInt(12)));
-                        if (S5Probe.canFillCompletely(me, buy, price, qty)) {
-                            S5Probe.processLimitOrderNoRest(me, 500_000 + id, 1, buy, price, qty);
+                        if (OrderBookProbe.canFillCompletely(me, buy, price, qty)) {
+                            OrderBookProbe.processLimitOrderNoRest(me, 500_000 + id, 1, buy, price, qty);
                             assertTrue((direct ? "direct" : "array") + " seed " + seed + ": fence would fire",
                                     me.getTakerRemainingQuantity() == 0 && !me.wasMatchLimitReached());
                         }

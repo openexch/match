@@ -36,14 +36,14 @@ import java.nio.ByteBuffer;
  * has stalled; blocking degrades this node to a lagging replica while the other replicas'
  * journals continue — the correct trade for money integrity.
  *
- * Wire: ME journal schemaId 4 version 1 ({@code me-journal-schema.xml}, RC2 S1 contract
- * section 2). Every record is encoded whole into {@link #scratch} and offered as ONE ring
+ * Wire: ME journal schemaId 4 version 1 ({@code me-journal-schema.xml}).
+ * Every record is encoded whole into {@link #scratch} and offered as ONE ring
  * message, which the writer agent offers as ONE unfragmented frame; the largest legal frame is
  * {@link #MAX_FRAME_LENGTH} (a 48-entry {@code CommandRelease}), below the 1376 B payload of the
  * {@code aeron:ipc} default MTU. Schema 3 and the schema 1 template 28 are never written again.
- * {@code meEpoch} is read on every append from the bound {@link MeIdentity} (RC2 S2 section 5):
+ * {@code meEpoch} is read on every append from the bound {@link MeIdentity}:
  * 0 until a FRESH at behaviour >= 2 binds it, then the recorded genesisId. {@code journalSeq} is
- * the ENGINE's allocation on every record (RC2 S3): one dense sequence from FRESH = 1 under
+ * the ENGINE's allocation on every record: one dense sequence from FRESH = 1 under
  * behaviour 2, 0 under behaviour 1; this class never allocates or checks it.
  *
  * Single-writer: all methods are called only from the cluster service thread. The counters
@@ -60,7 +60,7 @@ public final class SettlementJournal {
     public static final int MSG_TYPE_RELEASE = 4;
     public static final int MSG_TYPE_CONFIG = 5;
 
-    /** Entry cap of a {@code CommandRelease} group (contract section 2, decision 10.6). */
+    /** Entry cap of a {@code CommandRelease} group. */
     public static final int MAX_RELEASE_ENTRIES = 48;
 
     /** Largest legal journal frame: header 8 + root 44 + group header 4 + 48 x 22 = 1112 B. */
@@ -69,9 +69,9 @@ public final class SettlementJournal {
             + MAX_RELEASE_ENTRIES * CommandReleaseEncoder.ReleasesEncoder.sbeBlockLength();
 
     /**
-     * RC2 S2: the engine-owned identity (one reference, never a copy, so a later bind is seen).
+     * The engine-owned identity (one reference, never a copy, so a later bind is seen).
      * Defaults to an unbound identity for a journal that is never bound (meEpoch 0, behaviour 1).
-     * RC2 S3 (S2 review NOTE-2): a plain field, bound once at bootstrap before the cluster
+     * A plain field, bound once at bootstrap before the cluster
      * service thread starts (thread start publishes it); read on the service thread.
      */
     private MeIdentity identity = new MeIdentity();
@@ -102,7 +102,7 @@ public final class SettlementJournal {
     }
 
     /**
-     * RC2 S2: bind the engine's {@link MeIdentity}; every later append stamps its meEpoch (and
+     * Bind the engine's {@link MeIdentity}; every later append stamps its meEpoch (and
      * record 3 its behaviour). Called once at bootstrap (AppClusteredService.setSettlementJournal).
      */
     public void bindIdentity(final MeIdentity engineIdentity) {
@@ -123,7 +123,7 @@ public final class SettlementJournal {
      * a v11 frame); {@code ledgerSizeAfter} is the command ledger size after this outcome is
      * recorded (the caller knows whether it will be).
      *
-     * <p>RC2 S4 (contract 3.3): {@code ledgerCapacity} is a parameter on both paths: the recorded
+     * <p>{@code ledgerCapacity} is a parameter on both paths: the recorded
      * C at behaviour 2, the ledger v1 cap {@link DurableCommandLedger#MAX_ENTRIES} at behaviour 1.
      * The outcome is read through the view (the engine's scratch at behaviour 2, the record at
      * behaviour 1); nothing is retained.</p>
@@ -174,9 +174,9 @@ public final class SettlementJournal {
     }
 
     /**
-     * Record 4 ({@code CommandRelease}). Written by the {@code ReleaseCommandIds} apply from S4;
-     * exists from S1 so the layout is round-trip tested. Entries are passed as parallel arrays
-     * (first {@code count} used) so the S4 apply can reuse preallocated storage. More than
+     * Record 4 ({@code CommandRelease}). Written by the {@code ReleaseCommandIds} apply;
+     * defined ahead of it so the layout is round-trip tested. Entries are passed as parallel arrays
+     * (first {@code count} used) so the release apply can reuse preallocated storage. More than
      * {@link #MAX_RELEASE_ENTRIES} entries is refused: the frame would outgrow the IPC MTU.
      */
     public void appendCommandRelease(final long journalSeq, final long egressSeq, final long releaseSeq,
@@ -212,7 +212,7 @@ public final class SettlementJournal {
 
     /**
      * Record 5 ({@code EngineConfig}): the journaled state-machine decision (FRESH or BUMP at
-     * behaviour >= 2, RC2 S2). {@code journalSeq} is the state machine's allocation; meEpoch is
+     * behaviour >= 2). {@code journalSeq} is the state machine's allocation; meEpoch is
      * stamped from the bound identity.
      */
     public void appendEngineConfig(final long journalSeq, final long egressSeq, final long configVersion,

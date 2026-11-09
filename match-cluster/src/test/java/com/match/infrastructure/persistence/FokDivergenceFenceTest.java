@@ -13,11 +13,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
-import static com.match.infrastructure.persistence.S5Frames.*;
+import static com.match.infrastructure.persistence.TifFrames.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S5 contract 3.2 (D-d, FIX-3): a FOK the pre-walk judged fillable that does not fill is an
+ * A FOK the pre-walk judged fillable that does not fill is an
  * apply failure, thrown before the first trade is published: no journal frame, no egress, no
  * journalSeq and no tradeId for the command, and the demuxer counts an apply error and rethrows
  * (the service then fails fast at that log position). Section 3.5 proves the case unreachable with
@@ -151,7 +151,7 @@ public class FokDivergenceFenceTest {
 
     @Test
     public void divergedFokHaltsBeforeAnyRecord() {
-        try (Run r = freshWith(S5Frames.config(false, 100, 0))) {
+        try (Run r = freshWith(TifFrames.config(false, 100, 0))) {
             final var engine = r.engine();
             final DivergingEngine doubleEngine = new DivergingEngine(new ArrayMatchingEngine(
                     FixedPoint.fromDouble(50_000.0), FixedPoint.fromDouble(150_000.0), FixedPoint.fromDouble(1.0), 4_096, 100));
@@ -163,7 +163,7 @@ public class FokDivergenceFenceTest {
             final int callsBefore = sink.calls.get();
             final long tradeId = engine.getTradeIdGenerator();
             final long seq = engine.meIdentity().nextJournalSeq();
-            final int ledger = S4Probe.ledgerSize(engine);
+            final int ledger = DurableLedgerProbe.ledgerSize(engine);
             final long errors = r.r.demuxer.applyErrorCount();
             final byte[] fok = limit(2, 0, 200, BID, 60_000, 1, FOK);
             IllegalStateException thrown = null;
@@ -180,7 +180,7 @@ public class FokDivergenceFenceTest {
             assertEquals("no egress for the command", callsBefore, sink.calls.get());
             assertEquals("no tradeId", tradeId, engine.getTradeIdGenerator());
             assertEquals("no journalSeq", seq, engine.meIdentity().nextJournalSeq());
-            assertEquals("not recorded", ledger, S4Probe.ledgerSize(engine));
+            assertEquals("not recorded", ledger, DurableLedgerProbe.ledgerSize(engine));
         }
     }
 }

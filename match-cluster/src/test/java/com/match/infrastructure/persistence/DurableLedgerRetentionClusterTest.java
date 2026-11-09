@@ -20,7 +20,7 @@ import static com.match.infrastructure.persistence.MeClusterHarness.key;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S4 contract 9.1 (H3, topology J-ME3) on a real three-member ME cluster in one JVM
+ * Ledger retention on a real three-member ME cluster in one JVM
  * ({@link MeClusterHarness}). The reference client acts as the core: core-shaped ids
  * ({@code idHigh = omsOrderId = n}, {@code idLow = attempt << 2 | kind}); it releases an order only
  * after the members' journals carry the outcome of every one of its commands, and it re-sends a
@@ -101,7 +101,7 @@ public class DurableLedgerRetentionClusterTest {
     }
 
     private static void fresh(MeClusterHarness h, Client client) throws InterruptedException {
-        // RC2 S6 (R2): EngineConfig is ADMIN-only; the durable lane stays on the FORWARDER client.
+        // EngineConfig is ADMIN-only; the durable lane stays on the FORWARDER client.
         try (AeronCluster admin = h.connect(com.openexchange.cluster.auth.ClusterSessionClass.ADMIN)) {
             assertTrue("offer accepted", MeClusterHarness.offer(admin, engineConfig(1, 2, G, 12, C), 10_000) > 0);
             assertTrue("record 5 on every member", MeClusterHarness.await(admin,
@@ -217,12 +217,12 @@ public class DurableLedgerRetentionClusterTest {
                 for (Member m : h.members) {
                     assertTrue("member " + m.id + " live", m.live);
                     assertEquals("member " + m.id + ": no fail-fast", 0, m.failFast.get());
-                    assertEquals("member " + m.id + ": CAPACITY counter", 0, S4Probe.capacity(m.engine()));
+                    assertEquals("member " + m.id + ": CAPACITY counter", 0, DurableLedgerProbe.capacity(m.engine()));
                     assertArrayEquals("member " + m.id + ": ledger v2 block byte-equal", block, m.ledgerBlock());
-                    assertEquals("member " + m.id + ": empty inflight", 0, S4Probe.ledgerSize(m.engine()));
+                    assertEquals("member " + m.id + ": empty inflight", 0, DurableLedgerProbe.ledgerSize(m.engine()));
                     assertArrayEquals("member " + m.id + ": one tombstone range", new long[]{1, orders},
-                            S4Probe.ranges(m.engine()));
-                    assertEquals(0, S4Probe.floorCount(m.engine()));
+                            DurableLedgerProbe.ranges(m.engine()));
+                    assertEquals(0, DurableLedgerProbe.floorCount(m.engine()));
                 }
                 System.out.println("[ME3] " + orders + " orders (" + (orders / C) + " x C) in "
                         + (System.currentTimeMillis() - started) + " ms; max evidence wait " + client.maxWaitMs
@@ -252,7 +252,7 @@ public class DurableLedgerRetentionClusterTest {
                 }
                 for (Member m : h.members) {
                     assertTrue("member " + m.id + ": inflight 20", MeClusterHarness.await(client.session,
-                            () -> S4Probe.ledgerSize(m.engine()) == 20, 10_000));
+                            () -> DurableLedgerProbe.ledgerSize(m.engine()) == 20, 10_000));
                 }
                 final List<Member> followers = new ArrayList<>();
                 for (Member m : h.members) {
@@ -281,7 +281,7 @@ public class DurableLedgerRetentionClusterTest {
                 assertEquals("nothing committed past the partition", before[1], after[1]);
                 for (Member f : followers) {
                     assertEquals("member " + f.id + ": inflight still 20 before the leader goes", 20,
-                            S4Probe.ledgerSize(f.engine()));
+                            DurableLedgerProbe.ledgerSize(f.engine()));
                 }
                 client.close();
                 oldLeader.close();
@@ -302,16 +302,16 @@ public class DurableLedgerRetentionClusterTest {
                 client = new Client(h);
                 assertTrue(h.awaitQuiescence(client.session, 30_000));
                 for (Member f : followers) {
-                    assertEquals("member " + f.id + ": inflight 20", 20, S4Probe.ledgerSize(f.engine()));
+                    assertEquals("member " + f.id + ": inflight 20", 20, DurableLedgerProbe.ledgerSize(f.engine()));
                     assertEquals("member " + f.id + ": no record 4", 0, f.records4.get());
                 }
                 oldLeader.start();
                 assertTrue(MeClusterHarness.await(client.session, () -> oldLeader.service != null
-                        && S4Probe.hasLedgerV2(oldLeader.engine()) && S4Probe.ledgerSize(oldLeader.engine()) == 20
+                        && DurableLedgerProbe.hasLedgerV2(oldLeader.engine()) && DurableLedgerProbe.ledgerSize(oldLeader.engine()) == 20
                         && oldLeader.lastJournalSeq.get() == newLeader.lastJournalSeq.get(), 30_000));
                 assertTrue(h.awaitQuiescence(client.session, 30_000));
                 assertEquals("the old leader never applied the uncommitted release", 0, oldLeader.records4.get());
-                assertEquals("old leader: inflight 20", 20, S4Probe.ledgerSize(oldLeader.engine()));
+                assertEquals("old leader: inflight 20", 20, DurableLedgerProbe.ledgerSize(oldLeader.engine()));
                 final byte[] block = newLeader.ledgerBlock();
                 for (Member m : h.members) {
                     assertArrayEquals("member " + m.id + ": byte-equal ledger v2 block", block, m.ledgerBlock());
@@ -321,7 +321,7 @@ public class DurableLedgerRetentionClusterTest {
                 client.send(frame);
                 for (Member m : h.members) {
                     assertTrue("member " + m.id + ": inflight 0", MeClusterHarness.await(client.session,
-                            () -> S4Probe.ledgerSize(m.engine()) == 0, 10_000));
+                            () -> DurableLedgerProbe.ledgerSize(m.engine()) == 0, 10_000));
                 }
                 assertTrue(h.awaitQuiescence(client.session, 30_000));
                 int applied = 0;

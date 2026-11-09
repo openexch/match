@@ -4,17 +4,17 @@ package com.match.application.orderbook;
 import com.match.application.engine.Engine;
 
 /**
- * RC2 S5 test seam (the S4Probe pattern): the one place the S5 tests read APIs that S5 adds (the
- * book contract of 3.3 / 5.4, the direct book's pure slot accessors, the section 8 counters). The
- * same test sources compile against the S4 base (307b48c) with a base copy of this class that
+ * Test seam (the DurableLedgerProbe pattern): the one place the TIF / amend tests read the APIs those rules
+ * added (the FOK pre-walk and restingRemaining book methods, the direct book's pure slot accessors, the TIF / amend
+ * counters). The same test sources compile against the earlier base (307b48c) with a base copy of this class that
  * returns sentinels, so the RED runs fail by value, never by compilation. Pure delegation.
  */
-public final class S5Probe {
-    private S5Probe() {
+public final class OrderBookProbe {
+    private OrderBookProbe() {
     }
 
-    /** True on the S5 code; the base copy returns false. */
-    public static final boolean S5 = true;
+    /** True on the code with the TIF / amend APIs; the base copy returns false. */
+    public static final boolean TIF_APIS = true;
 
     public static long restingRemaining(MatchingEngine me, long orderId, boolean isBuy) {
         return me.restingRemaining(orderId, isBuy);

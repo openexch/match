@@ -18,7 +18,7 @@ import java.util.List;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S3 contract section 3: the tradeId generator is engine-owned (moved from
+ * The tradeId generator is engine-owned (moved from
  * {@code MatchEventPublisherTest}): it starts at 1, advances by one per trade in match order
  * whether or not a sink is attached, is written at snapshot payload offset 8 and restored into
  * the engine in place.

@@ -35,20 +35,20 @@ public class Engine {
     // Atomic order ID generator
     private final AtomicLong orderIdGenerator = new AtomicLong(1);
 
-    // RC2 S3 (contract section 3, G2/K7): the trade-id generator, engine-owned REPLICATED state
+    // The trade-id generator, engine-owned REPLICATED state
     // (snapshot payload offset 8). One getAndIncrement per match in publishTradeExecutions, before
     // any sink call and outside every sink guard, so a ring-less, journal-dark or sink-less member
     // allocates exactly what a production member does. AtomicLong like orderIdGenerator: the
     // /metrics scraper reads it (match_trades_total).
     private final AtomicLong tradeIdGenerator = new AtomicLong(1);
 
-    // RC2 S3 (contract section 2, review NOTE-2): true iff the MeIdentity is bound (recorded
+    // True iff the MeIdentity is bound (recorded
     // behaviour >= 2). A plain field set exactly where the identity is bound (FRESH and the
     // snapshot restore of the identity block), so the hot path reads no volatile. Gates dense
-    // journalSeq allocation and the X4 duplicate suppression.
+    // journalSeq allocation and the equal-intent duplicate suppression.
     private boolean dense;
 
-    // RC2 S3 X4: equal-intent duplicates of a recorded outcome suppressed under behaviour 2. Not
+    // Equal-intent duplicates of a recorded outcome suppressed under behaviour 2. Not
     // replicated (never snapshotted); single writer (service thread), volatile for the scraper.
     private volatile long suppressedDuplicateCount;
 
@@ -61,7 +61,7 @@ public class Engine {
         this.currentLogPosition = position;
     }
 
-    /** Log position of the command being processed (egressSeq source; slice C reject emission). */
+    /** Log position of the command being processed (egressSeq source; EngineConfig reject emission). */
     public long getCurrentLogPosition() {
         return currentLogPosition;
     }
@@ -72,7 +72,7 @@ public class Engine {
 
     // Maps cluster orderId → omsOrderId for maker order correlation in trade executions
     // When a maker order is on the book, we need to look up its omsOrderId when it matches.
-    // RC2 S4 (contract 5.2): owned by LegIndex together with the omsOrderId -> resting leg count;
+    // Owned by LegIndex together with the omsOrderId -> resting leg count;
     // every put and remove below goes through it, and so does the snapshot restore.
     private final LegIndex legIndex = new LegIndex();
 
@@ -80,7 +80,7 @@ public class Engine {
     // fit 64-bit fixed-point. Plain long: written and read on the service thread only;
     // surfaced on the EGRESS-DIAG line as overflowRej.
     private final DurableCommandLedger commandLedger = new DurableCommandLedger();
-    // RC2 S4: the behaviour-2 ledger (contract section 2). null until a FRESH at behaviour >= 2
+    // The behaviour-2 ledger. null until a FRESH at behaviour >= 2
     // installs it with the recorded capacity C, or a snapshot restore installs it from the
     // marker-4 block. Behaviour 1 never creates it and keeps ledger v1 (commandLedger).
     private DurableCommandLedgerV2 ledgerV2;
@@ -90,15 +90,15 @@ public class Engine {
     private long outcomeOrder, expectedNewOrder;
     private int outcomeStatus, outcomeReason;
     private boolean outcomeOldCancelled;
-    // RC2 S5 (contract 3.2): the behaviour-2 apply context. Armed only by acceptDurableV2 (the
+    // The behaviour-2 apply context. Armed only by acceptDurableV2 (the
     // demuxer's behaviour-2 entry) immediately before applyDurable, reset in applyDurable's finally.
-    // Sections 3-5 of the S5 contract are gated by applyBehaviourTwo, never by `dense`.
+    // The TIF, market-bound and amend rules are gated by applyBehaviourTwo, never by `dense`.
     private boolean applyBehaviourTwo;
     private int applyTif;
     private long applyExpectedOldRemaining;
-    /** RC2 S5: order-schema v12 timeInForce values. */
+    /** Order-schema v12 timeInForce values. */
     public static final int TIF_GTC = 0, TIF_IOC = 1, TIF_FOK = 2;
-    // RC2 S5 section 8 counters. Node-local, single writer (service thread), volatile for the scraper.
+    // TIF / amend counters. Node-local, single writer (service thread), volatile for the scraper.
     private volatile long invalidTifCount;
     private volatile long invalidAmendReferenceCount;
     private volatile long invalidAmendTypeCount;
@@ -110,19 +110,19 @@ public class Engine {
     private volatile long amendReducedCount;
     private volatile long amendNoRemainderCount;
     private volatile long amendRemainingMismatchCount;
-    // RC2 S4 section 8: pooled command objects of the durable apply (both behaviours; identical outputs).
+    // Pooled command objects of the durable apply (both behaviours; identical outputs).
     private final CreateOrderCommand durableCreate = new CreateOrderCommand();
     private final CancelOrderCommand durableCancel = new CancelOrderCommand();
     private final UpdateOrderCommand durableUpdate = new UpdateOrderCommand();
-    // RC2 S4 section 8: the single mutable outcome scratch handed to the sink as a view.
+    // The single mutable outcome scratch handed to the sink as a view.
     private final OutcomeScratch outcome = new OutcomeScratch();
     // The slot of the prior outcome of the last suppressed duplicate (behaviour 2), else -1.
     private int lastSuppressedSlot = -1;
-    // RC2 S4 section 4.3: the release apply's preallocated result arrays (S1 cap 48).
+    // The release apply's preallocated result arrays (record 4 cap 48).
     private final int[] releaseResult = new int[MAX_RELEASE_ENTRIES];
     private final int[] releaseRemoved = new int[MAX_RELEASE_ENTRIES];
 
-    // RC2 S4 section 6.4 counters. Node-local (never replicated, never read by a decision); single
+    // Ledger v2 counters. Node-local (never replicated, never read by a decision); single
     // writer (service thread), volatile for the scraper.
     private volatile long releasedCount;
     private volatile long invalidWireCount;
@@ -135,15 +135,15 @@ public class Engine {
     private volatile long releaseLegLiveCount;
     private volatile long releaseNoopFrameCount;
 
-    /** RC2 S4: the record 4 entry cap (S1 3.2), the size of the release scratch. */
+    /** The record 4 entry cap, the size of the release scratch. */
     public static final int MAX_RELEASE_ENTRIES = 48;
 
     public DurableCommandLedger commandLedger() { return commandLedger; }
 
-    /** RC2 S4: the behaviour-2 ledger, or null (behaviour 1 / not configured). */
+    /** The behaviour-2 ledger, or null (behaviour 1 / not configured). */
     public DurableCommandLedgerV2 ledgerV2() { return ledgerV2; }
 
-    /** RC2 S4: the omsMap owner (read accessors; mutation is the engine's and the restore's). */
+    /** The omsMap owner (read accessors; mutation is the engine's and the restore's). */
     public LegIndex legIndex() { return legIndex; }
 
     /**
@@ -154,8 +154,8 @@ public class Engine {
     public com.match.domain.commands.DurableCommandOutcome acceptDurable(
             com.match.domain.commands.DurableOrderIntent c, long timestamp) {
         if (dense) {
-            // RC2 S5 (contract 3.2, FIX-1): this test entry never arms the behaviour-2 apply context
-            // and runs only the S4 B1 causes, so it keeps the S4 (pre-S5) semantics on any engine.
+            // This test entry never arms the behaviour-2 apply context
+            // and runs only the identity (B1) causes, without the TIF and amend rules, on any engine.
             acceptDurableV2(c, timestamp, false);
             return lastSuppressedSlot >= 0 ? ledgerV2.outcomeAt(lastSuppressedSlot) : outcome.toRecord();
         }
@@ -221,7 +221,7 @@ public class Engine {
     /**
      * Apply a durable CREATE / CANCEL / UPDATE through the matching path with the pooled command
      * objects, capturing the command's own status (both behaviours; the outputs are those of the
-     * pre-S4 per-call objects, field for field).
+     * earlier per-call objects, field for field).
      */
     private void applyDurable(com.match.domain.commands.DurableIntentView c, long timestamp) {
         applyingDurable = true;
@@ -259,10 +259,10 @@ public class Engine {
         }
     }
 
-    // ==================== RC2 S4: behaviour-2 durable path ====================
+    // ==================== behaviour-2 durable path ====================
 
     /**
-     * RC2 S4 (contract 3.2): the behaviour-2 durable command entry, rows B1-B7 (B0, the v11 header,
+     * The behaviour-2 durable command entry, rows B1-B7 (B0, the v11 header,
      * is decided by the demuxer through {@link #journalInvalidWire}). Allocation-free after warm-up.
      * Returns the outcome's result code (a suppressed duplicate returns the prior's).
      *
@@ -273,17 +273,17 @@ public class Engine {
     }
 
     /**
-     * {@code s5}: the demuxer's entry (true) runs the S5 B1 causes and arms the behaviour-2 apply
-     * context (contract 3.1, 3.2); the {@link #acceptDurable} test entry (false) does neither.
+     * {@code tifRules}: the demuxer's entry (true) runs the B1 causes with the TIF and amend rules and arms the behaviour-2 apply
+     * context; the {@link #acceptDurable} test entry (false) does neither.
      */
-    private int acceptDurableV2(com.match.domain.commands.DurableIntentView c, long timestamp, boolean s5) {
+    private int acceptDurableV2(com.match.domain.commands.DurableIntentView c, long timestamp, boolean tifRules) {
         final DurableCommandLedgerV2 ledger = ledgerV2;
         if (ledger == null) {
             throw new IllegalStateException("behaviour-2 durable command before the ledger v2 is installed");
         }
         lastSuppressedSlot = -1;
         // B1: behaviour-2 identity rules.
-        final int cause = s5
+        final int cause = tifRules
                 ? com.match.domain.commands.DurableOrderIntent.behaviourTwoCause(c.idHigh(), c.idLow(),
                         c.omsOrderId(), c.kind(), c.type(), c.timeInForce(), c.expectedOldRemaining())
                 : com.match.domain.commands.DurableOrderIntent.behaviourTwoCause(
@@ -314,7 +314,7 @@ public class Engine {
         final int prior = ledger.find(h, l);
         if (prior >= 0) {
             if (ledger.sameIntent(prior, c)) {
-                // RC2 S3 X4: no sink call, no journalSeq; the prior is durable at its own seq.
+                // No sink call, no journalSeq; the prior is durable at its own seq.
                 suppressedDuplicateCount = suppressedDuplicateCount + 1;
                 lastSuppressedSlot = prior;
                 return ledger.result(prior);
@@ -337,8 +337,8 @@ public class Engine {
         if (reject != 0) {
             outcome.set(c, currentLogPosition, timestamp, 0L, -1, 0, false, reject);
         } else {
-            if (s5) {
-                // RC2 S5 (contract 3.2): armed here only; applyDurable's finally resets it.
+            if (tifRules) {
+                // Armed here only; applyDurable's finally resets it.
                 applyBehaviourTwo = true;
                 applyTif = c.timeInForce();
                 applyExpectedOldRemaining = c.expectedOldRemaining();
@@ -358,7 +358,7 @@ public class Engine {
     }
 
     /**
-     * RC2 S4 (contract 5.1): CANCEL / UPDATE ownership derived from the book. Pass (0) when the leg
+     * CANCEL / UPDATE ownership derived from the book. Pass (0) when the leg
      * rests on this market with the command's userId, its omsMap value is the command's omsOrderId
      * and (UPDATE) its side is the command's side; WRONG_OWNER (5) when it rests here with any of
      * those different or rests on another market (still mapped); UNKNOWN_LEG (4) otherwise.
@@ -395,7 +395,7 @@ public class Engine {
     }
 
     /**
-     * RC2 S4 B0: a behaviour-2 template-9 frame with header version 11 (no tif, no
+     * A behaviour-2 template-9 frame with header version 11 (no tif, no
      * expectedOldRemaining on the wire; the view carries 0/0). INVALID, not recorded.
      */
     public int journalInvalidWire(com.match.domain.commands.DurableIntentView c, long timestamp) {
@@ -407,11 +407,11 @@ public class Engine {
     }
 
     /**
-     * RC2 S4 (contract 4.2, 4.3): apply one {@code ReleaseCommandIds} frame already validated by the
+     * Apply one {@code ReleaseCommandIds} frame already validated by the
      * demuxer (4.1). Entries in group order, each against the state the previous one left. A frame
      * with an APPLIED or LEG_LIVE entry journals exactly one record 4 (journalSeq consumed whether or
      * not this node journals); an all-NOOP frame (0 entries included) journals nothing and consumes
-     * no journalSeq (decision A1). Allocation-free.
+     * no journalSeq. Allocation-free.
      */
     public void applyRelease(long releaseSeq, int count, long[] commandIdHigh, long[] idLowFloor, int[] scope) {
         final DurableCommandLedgerV2 ledger = ledgerV2;
@@ -468,12 +468,12 @@ public class Engine {
     }
 
     /**
-     * RC2 S2 (contract section 6): a template-9 frame above the recorded wire ceiling whose v12
+     * A template-9 frame above the recorded wire ceiling whose v12
      * prefix decoded to a valid intent. Journals record 3 with {@code result 8} (INVALID) in the
      * commandRejection shape: appliedPosition = egressSeq = the entry's log position, the cluster
      * timestamp, orderId 0, status -1, reason 0, oldCancelled false, the frame's intent echoed,
      * ledgerSize unchanged. Never recorded; no capacity check, no apply, no trade or terminal. Only
-     * reachable at a recorded behaviour >= 2, so through the behaviour-2 ledger (RC2 S4: the
+     * reachable at a recorded behaviour >= 2, so through the behaviour-2 ledger (the
      * record carries the recorded capacity).
      */
     public void journalInvalid(com.match.domain.commands.DurableIntentView c, long timestamp) {
@@ -490,19 +490,19 @@ public class Engine {
     }
 
     /**
-     * RC2 S3 (contract section 2): the engine's journalSeq allocation point, called exactly when
+     * The engine's journalSeq allocation point, called exactly when
      * the engine decides a record will be journaled, immediately before the sink call that
      * carries it. Behaviour 2 (identity bound): the next dense seq from the one allocator,
      * {@link MeIdentity#allocateJournalSeq()}; behaviour 1: 0. Never guarded by the sink, the
-     * ring, the journal or leadership. S4's record 4 and B0-B2 records call it too.
+     * ring, the journal or leadership. Record 4 and the B0-B2 records call it too.
      */
     long journalSeqFor() {
         return dense ? meIdentity.allocateJournalSeq() : 0L;
     }
 
     /**
-     * RC2 S3: FRESH at behaviour >= 2 binds the identity and turns dense allocation on. RC2 S4: and
-     * installs the empty behaviour-2 ledger with the recorded capacity C (contract 2.1).
+     * FRESH at behaviour >= 2 binds the identity and turns dense allocation on. And
+     * installs the empty behaviour-2 ledger with the recorded capacity C.
      */
     void bindFreshIdentity(long genesisId, long recordedBehaviorVersion, long commandLedgerCapacity) {
         meIdentity.bindFresh(genesisId, recordedBehaviorVersion);
@@ -511,7 +511,7 @@ public class Engine {
     }
 
     /**
-     * RC2 S3: the snapshot restore of the identity block (already range-checked by the codec)
+     * The snapshot restore of the identity block (already range-checked by the codec)
      * binds the identity and turns dense allocation on, as FRESH did on the original members.
      */
     public void restoreIdentity(long meEpoch, long nextJournalSeq, long behaviorVersion) {
@@ -519,7 +519,7 @@ public class Engine {
         dense = true;
     }
 
-    /** RC2 S4: the snapshot restore installs the behaviour-2 ledger read from the marker-4 block. */
+    /** The snapshot restore installs the behaviour-2 ledger read from the marker-4 block. */
     public void restoreLedgerV2(DurableCommandLedgerV2 restored) {
         if (!dense) {
             throw new IllegalStateException("ledger v2 restored without a bound identity");
@@ -527,7 +527,7 @@ public class Engine {
         this.ledgerV2 = restored;
     }
 
-    /** RC2 S3: true once journalSeq allocation is dense; always equals {@code meIdentity().isBound()}. */
+    /** True once journalSeq allocation is dense; always equals {@code meIdentity().isBound()}. */
     public boolean isJournalSeqDense() {
         return dense;
     }
@@ -542,7 +542,7 @@ public class Engine {
         }
     }
 
-    // RC2 S4 section 6.4 counters (scraper).
+    // Ledger v2 counters (scraper).
     public long releasedCount() { return releasedCount; }
     public long invalidWireCount() { return invalidWireCount; }
     public long invalidKindBitsCount() { return invalidKindBitsCount; }
@@ -554,7 +554,7 @@ public class Engine {
     public long releaseLegLiveCount() { return releaseLegLiveCount; }
     public long releaseNoopFrameCount() { return releaseNoopFrameCount; }
 
-    // RC2 S5 section 8 counters (scraper).
+    // TIF / amend counters (scraper).
     public long invalidTifCount() { return invalidTifCount; }
     public long invalidAmendReferenceCount() { return invalidAmendReferenceCount; }
     public long invalidAmendTypeCount() { return invalidAmendTypeCount; }
@@ -567,14 +567,14 @@ public class Engine {
     public long amendNoRemainderCount() { return amendNoRemainderCount; }
     public long amendRemainingMismatchCount() { return amendRemainingMismatchCount; }
 
-    /** RC2 S4 gauges: ledger v2 size, capacity, floors, tombstone ranges (0 without a v2 ledger). */
+    /** Gauges: ledger v2 size, capacity, floors, tombstone ranges (0 without a v2 ledger). */
     public long ledgerSizeGauge() { final DurableCommandLedgerV2 l = ledgerV2; return l == null ? 0 : l.gaugeSize(); }
     public long ledgerCapacityGauge() { final DurableCommandLedgerV2 l = ledgerV2; return l == null ? 0 : l.capacity(); }
     public long ledgerFloorsGauge() { final DurableCommandLedgerV2 l = ledgerV2; return l == null ? 0 : l.gaugeFloors(); }
     public long ledgerRangesGauge() { final DurableCommandLedgerV2 l = ledgerV2; return l == null ? 0 : l.gaugeRanges(); }
 
     /**
-     * RC2 S4 section 8: the engine's single mutable outcome, handed to the sink as a view (the
+     * The engine's single mutable outcome, handed to the sink as a view (the
      * sink must not retain it). The intent half is copied from the incoming view.
      */
     static final class OutcomeScratch implements com.match.domain.commands.DurableOutcomeView {
@@ -652,12 +652,12 @@ public class Engine {
     // into every snapshot (SnapshotCodec trailing block).
     private EngineConfigState engineConfig;
 
-    // RC2 S2: the genesis identity (engine-owned, contract 2.1). Unbound at construction; bound by
+    // The genesis identity (engine-owned). Unbound at construction; bound by
     // a FRESH at behaviour >= 2 or filled by a snapshot restore. The journal and the heartbeat
     // hold this reference.
     private final MeIdentity meIdentity = new MeIdentity();
 
-    // RC2 S2: the LAUNCH mode — true only for deferredUntilConfig(). Node-local, never replicated:
+    // The LAUNCH mode — true only for deferredUntilConfig(). Node-local, never replicated:
     // read by the node-local check (d) only, never by a decision.
     private final boolean configMode;
 
@@ -719,12 +719,12 @@ public class Engine {
         return new Engine(true);
     }
 
-    /** RC2 S2: the engine-owned genesis identity (one instance for the engine's lifetime). */
+    /** The engine-owned genesis identity (one instance for the engine's lifetime). */
     public MeIdentity meIdentity() {
         return meIdentity;
     }
 
-    /** RC2 S2: true when launched in config mode ({@link #deferredUntilConfig()}); node-local. */
+    /** True when launched in config mode ({@link #deferredUntilConfig()}); node-local. */
     public boolean isConfigMode() {
         return configMode;
     }
@@ -909,7 +909,7 @@ public class Engine {
             // sell quantity <= 0) can never match. Reject at admission with INVALID_QUANTITY and
             // skip the matching sweep entirely, rather than silently falling through to the
             // no-liquidity REJECTED branch (which would misattribute the cause).
-            // RC2 S5 (contract section 4): at behaviour 2 a BUY also needs quantity > 0 (its bound).
+            // At behaviour 2 a BUY also needs quantity > 0 (its bound).
             final boolean bounded = applyBehaviourTwo;
             long marketSize = isBuy ? totalPrice : quantity;
             if (marketSize <= 0 || (bounded && isBuy && quantity <= 0)) {
@@ -923,7 +923,7 @@ public class Engine {
                 }
                 return;
             }
-            // Market order. Behaviour 1 passes 0 as the buy quantity (budget only, NOTE-3);
+            // Market order. Behaviour 1 passes 0 as the buy quantity (budget only);
             // behaviour 2 passes the bound (> 0 by admission above).
             if (isBuy) {
                 matchCount = engine.processMarketOrder(orderId, userId, true, bounded ? quantity : 0, totalPrice);
@@ -983,7 +983,7 @@ public class Engine {
             }
 
             if (applyBehaviourTwo && applyTif != TIF_GTC) {
-                // RC2 S5 (contract 3.2): native IOC / FOK; the taker never rests.
+                // Native IOC / FOK; the taker never rests.
                 processImmediateLimit(engine, marketId, timestamp, orderId, userId, isBuy, price, quantity, omsOrderId);
                 return;
             }
@@ -1082,7 +1082,7 @@ public class Engine {
     }
 
     /**
-     * RC2 S5 (contract 3.2, 3.5, section 6): a behaviour-2 IOC or FOK LIMIT create after the price,
+     * A behaviour-2 IOC or FOK LIMIT create after the price,
      * quantity and overflow validations. One command, atomic on the service thread: the taker is
      * never rested, so its mapping is removed on every path, and no per-order log line is written
      * (an IOC remainder and an infeasible FOK are normal outcomes).
@@ -1098,7 +1098,7 @@ public class Engine {
                     0, 0, price, isBuy, omsOrderId, OrderRejectReason.FOK_UNFILLABLE);
             } else {
                 final int matchCount = engine.processLimitOrderNoRest(orderId, userId, isBuy, price, quantity);
-                // D-d divergence fence (contract 3.2): before the first trade is published, so a
+                // FOK divergence fence: before the first trade is published, so a
                 // diverged FOK journals no record and consumes no journalSeq or tradeId. 3.5 proves it
                 // unreachable; every replica halts here at the same log position (apply failure).
                 if (engine.getTakerRemainingQuantity() != 0 || engine.wasMatchLimitReached()) {
@@ -1131,7 +1131,7 @@ public class Engine {
     }
 
     /**
-     * RC2 S5 (contract section 4): the behaviour-2 MARKET status map, rows top to bottom, first
+     * The behaviour-2 MARKET status map, rows top to bottom, first
      * match wins. FILLED means the bound filled.
      */
     private void publishBoundedMarketStatus(MatchingEngine engine, int marketId, long timestamp, long orderId,
@@ -1244,7 +1244,7 @@ public class Engine {
      */
     private void publishTradeExecutions(MatchingEngine engine, int marketId, long timestamp,
             long takerOrderId, long takerUserId, boolean takerIsBuy, int matchCount, long takerOmsOrderId) {
-        // RC2 S3 (contract 3.2, F-1): the loop runs whatever the sink. tradeId and journalSeq are
+        // The loop runs whatever the sink. tradeId and journalSeq are
         // allocated per match before any sink call, and the replicated maker bookkeeping below runs
         // regardless of the sink, so a sink-less engine keeps the same orderIdToOmsOrderId (an
         // input of the durable owner check, snapshotted) as a sink-attached one.
@@ -1383,7 +1383,7 @@ public class Engine {
             return;
         }
 
-        // RC2 S5 (contract 5.1): the amend correction, behaviour 2 only, after the pre-cancel
+        // The amend correction, behaviour 2 only, after the pre-cancel
         // validations. The core mints quantity = newQty - F0 and expected = Q - F0; the leg carries
         // Q - F, so the replacement gets newQty - F whatever fills landed since the mint.
         long placeQuantity = newQuantity;
@@ -1392,7 +1392,7 @@ public class Engine {
             final long expected = applyExpectedOldRemaining;
             if (actual > 0) {
                 if (actual > expected) {
-                    // D-b: a wrong reference (the core can only lag the ME); keep the leg as it is.
+                    // A wrong reference (the core can only lag the ME); keep the leg as it is.
                     amendRemainingMismatchCount = amendRemainingMismatchCount + 1;
                     publishAmendRejection(marketId, timestamp, oldOrderId, userId,
                         newPrice, isBuy, omsOrderId, OrderRejectReason.AMEND_REMAINING_MISMATCH);
@@ -1517,13 +1517,13 @@ public class Engine {
             int orderStatus, long remainingQty, long filledQty, long orderPrice, boolean isBuy, long omsOrderId,
             int rejectReason) {
         captureCommandStatus(orderId, orderStatus, rejectReason);
-        // RC2 S3: the terminal journal decision lives here. Every FILLED / CANCELLED / REJECTED of
-        // this path is journaled (the same expression the publisher used before S3, so behaviour 1
+        // The terminal journal decision lives here. Every FILLED / CANCELLED / REJECTED of
+        // this path is journaled (the same expression the publisher used before, so behaviour 1
         // is byte-identical) and consumes one journalSeq; NEW and PARTIALLY_FILLED consume none.
         final boolean journalTerminal = orderStatus >= OrderStatusType.FILLED;
         long seq = 0L;
         if (journalTerminal) {
-            // Review NOTE-9: guarantee what SettlementJournal.appendTerminal checks BEFORE the
+            // Guarantee what SettlementJournal.appendTerminal checks BEFORE the
             // allocation, on every member, so a journal-side throw can never halt only the
             // journaling nodes (a dark or sink-less member would continue on another value).
             if (rejectReason < 0 || rejectReason > 254) {
@@ -1555,7 +1555,7 @@ public class Engine {
         if (eventPublisher == null) {
             return;
         }
-        // Not journaled, no journalSeq (RC2 S3 section 4).
+        // Not journaled, no journalSeq.
         eventPublisher.publishOrderStatusUpdate(
             marketId, timestamp, orderId, userId,
             OrderStatusType.REJECTED, 0, 0, price, isBuy, omsOrderId, rejectReason,
@@ -1575,7 +1575,7 @@ public class Engine {
         if (eventPublisher == null) {
             return;
         }
-        // Not journaled, no journalSeq (RC2 S3 section 4).
+        // Not journaled, no journalSeq.
         eventPublisher.publishOrderStatusUpdate(
             marketId, timestamp, orderId, userId,
             OrderStatusType.CANCELLED, 0, 0, 0, isBuy, omsOrderId, OrderRejectReason.NONE,
@@ -1591,7 +1591,7 @@ public class Engine {
     }
 
     /**
-     * RC2 S13 W-ME3 (contract 8.3): after a snapshot restore, label every configured market's restored
+     * After a snapshot restore, label every configured market's restored
      * state with the snapshot position {@code p} and publish it past the dirty gate. Without it a market
      * with no command since the restore publishes book version 0 (the version is not in the snapshot)
      * and, on the array engine, an empty top, so every resnapshot of that market sends nothing.
@@ -1649,17 +1649,17 @@ public class Engine {
         orderIdGenerator.set(value);
     }
 
-    /** RC2 S3: the engine-owned trade-id generator (the next tradeId; snapshot payload offset 8). */
+    /** The engine-owned trade-id generator (the next tradeId; snapshot payload offset 8). */
     public long getTradeIdGenerator() {
         return tradeIdGenerator.get();
     }
 
-    /** RC2 S3: snapshot restore only (applied in place by {@code SnapshotCodec.deserialize}). */
+    /** Snapshot restore only (applied in place by {@code SnapshotCodec.deserialize}). */
     public void setTradeIdGenerator(long value) {
         tradeIdGenerator.set(value);
     }
 
-    /** RC2 S3 X4: equal-intent duplicates suppressed under behaviour 2 (node-local counter). */
+    /** Equal-intent duplicates suppressed under behaviour 2 (node-local counter). */
     public long suppressedDuplicateCount() {
         return suppressedDuplicateCount;
     }

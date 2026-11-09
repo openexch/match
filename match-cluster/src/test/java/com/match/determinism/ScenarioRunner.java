@@ -38,7 +38,7 @@ import java.util.Map;
  *   UPDATE u=100 order=1 side=BID px=61000.0 qty=2.0 [type=LIMIT|LIMIT_MAKER]  (default LIMIT)
  *   SNAPSHOT                               serialize → restore into a fresh engine
  *
- *   RC2 S5 (behaviour 2):
+ *   Behaviour 2:
  *   GENESIS behaviour=2 [cap=n]            first line only: FRESH through the EngineConfigStateMachine with
  *                                          the runner's impl and the five compiled markets (cap default 10000)
  *   DCREATE u= side= type= px= qty= [budget=] oms= attempt= [tif=GTC|IOC|FOK]
@@ -57,7 +57,7 @@ public final class ScenarioRunner {
     private long timerCorrelationId = 0L;
     // Matching implementation to use; null = the flag-resolved default (production behavior).
     private final String impl;
-    // RC2 S5: true after GENESIS (the engine is a config-mode engine at behaviour 2).
+    // True after GENESIS (the engine is a config-mode engine at behaviour 2).
     private boolean genesis;
     private int lines;
 
@@ -86,7 +86,7 @@ public final class ScenarioRunner {
         return (p == null || p.isEmpty()) ? "array" : p.toLowerCase();
     }
 
-    /** RC2 S5: FRESH at behaviour 2 with the five compiled markets' geometry. */
+    /** FRESH at behaviour 2 with the five compiled markets' geometry. */
     private void genesis(Map<String, String> kv) {
         if (lines != 1) {
             throw new IllegalArgumentException("GENESIS must be the first line");
@@ -119,7 +119,7 @@ public final class ScenarioRunner {
         }
     }
 
-    /** RC2 S5: a core-shaped durable command through the behaviour-2 entry. */
+    /** A core-shaped durable command through the behaviour-2 entry. */
     private void durable(int kind, Map<String, String> kv) {
         if (!genesis) {
             throw new IllegalArgumentException("D* verbs need GENESIS behaviour=2");
@@ -282,7 +282,7 @@ public final class ScenarioRunner {
      * Real snapshot round-trip: serialize current engine state, restore into a FRESH engine, and
      * swap it in — simulating a node restart mid-scenario. The sink persists, exactly as
      * production's event publisher persists while engine state is rebuilt; the trade-id counter
-     * is engine-owned (RC2 S3) and travels in the snapshot.
+     * is engine-owned and travels in the snapshot.
      */
     private void snapshotRoundTrip() {
         ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();

@@ -26,7 +26,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 /**
- * A-2 regression: a cluster snapshot LARGER than the snapshot channel's {@code maxMessageLength}
+ * Regression: a cluster snapshot LARGER than the snapshot channel's {@code maxMessageLength}
  * must survive a full transport round-trip. Before the fix, {@code onTakeSnapshot} offered the whole
  * snapshot as ONE Aeron message, so the moment the payload exceeded {@code maxMessageLength}
  * (snapshot term / 8) the offer threw {@link IllegalArgumentException} — the snapshot failed
@@ -47,7 +47,7 @@ import static org.junit.Assert.assertTrue;
  * restart/recovery harness in this module — {@code EmbeddedClusterTest} and
  * {@code SnapshotCadenceClusterTest} start a cluster but never stop-and-recover one — and the
  * recovered engine's scalars (orderIdGenerator, tradeIdGenerator, timerCorrelationId) are not
- * observable through egress, so a restart test could not assert them. The A-2 fix is precisely the
+ * observable through egress, so a restart test could not assert them. The fix is precisely the
  * two transport loops; this test exercises both (including the back-pressure retry branch, via a
  * subscriber-draining idle strategy) against real Aeron framing while asserting every recovered
  * field exactly. {@code SnapshotCadenceClusterTest} continues to cover the single-chunk encode path

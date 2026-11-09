@@ -2,7 +2,7 @@
 package com.match.domain.commands;
 
 /**
- * RC2 S4 (contract section 8): the 14 fields of a durable command intent as primitive getters, so
+ * The 14 fields of a durable command intent as primitive getters, so
  * the behaviour-2 durable path reads an intent without allocating a record per frame. The demuxer
  * fills one reusable mutable implementation per frame ({@link MutableDurableIntent});
  * {@link DurableOrderIntent} implements it too (its accessors already carry these names), so tests

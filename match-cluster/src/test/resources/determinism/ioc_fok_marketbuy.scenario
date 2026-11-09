@@ -1,4 +1,4 @@
-# RC2 S5 (behaviour 2): native IOC and FOK on LIMIT creates, the bounded market buy and its status map.
+# Native IOC and FOK on LIMIT creates, the bounded market buy and its status map.
 GENESIS behaviour=2 cap=3
 MARKET BTC_USD
 CLOCK 1000

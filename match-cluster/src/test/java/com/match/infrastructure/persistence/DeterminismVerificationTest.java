@@ -6,7 +6,7 @@ import com.match.application.engine.BehaviourTwoHarness.Shape;
 import com.match.application.engine.Engine;
 import com.match.application.engine.EngineConfigState;
 import com.match.application.orderbook.OrderRejectReason;
-import com.match.application.orderbook.S5Probe;
+import com.match.application.orderbook.OrderBookProbe;
 import com.match.domain.FixedPoint;
 import com.match.domain.commands.DurableCommandOutcome;
 import com.match.infrastructure.generated.CancelOrderEncoder;
@@ -38,7 +38,7 @@ import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S3 independent verification (review.md): cases the S3 suite does not cover.
+ * Determinism cases the other suites do not cover.
  * <ol>
  *   <li>A SINK-LESS replica on the full parity log (CONFLICT, suppressed duplicate, INVALID,
  *       BUMP) ends with the journaled replica's snapshot bytes; JournalDarkNodeParityTest covers
@@ -46,9 +46,9 @@ import static org.junit.Assert.*;
  *   <li>A sink-less replica's snapshot, restored into a journaled replica, re-journals the rest of
  *       the log byte for byte at every cut (replay after restore from a sink-less member).</li>
  *   <li>Equal retries of a recorded REJECTED (result 1) and NOT_OWNER (result 5) outcome are
- *       suppressed (contract 5.3 "covered" list; DuplicateSuppressionTest covers APPLIED,
+ *       suppressed (DuplicateSuppressionTest covers APPLIED,
  *       UNKNOWN_MARKET and UNKNOWN_LEG).</li>
- *   <li>NOTE-9: the engine's terminal rejectReason guard (0..254) is unreachable from input:
+ *   <li>The engine's terminal rejectReason guard (0..254) is unreachable from input:
  *       every OrderRejectReason constant is in range, and a seeded randomized log of legacy and
  *       durable frames with hostile prices, quantities, budgets, types, ids and legs never
  *       reaches it, on a DIRECT book (LEVEL_FULL) and an ARRAY book (BOOK_FULL), while the
@@ -56,7 +56,7 @@ import static org.junit.Assert.*;
  *       restored mid-run from the sink-less member's snapshot.</li>
  * </ol>
  */
-public class S3VerifierDeterminismTest {
+public class DeterminismVerificationTest {
 
     // ---- 1. sink-less replica on the parity log ----
 
@@ -133,7 +133,7 @@ public class S3VerifierDeterminismTest {
         }
     }
 
-    // ---- 4. NOTE-9: the rejectReason guard is unreachable ----
+    // ---- 4. the rejectReason guard is unreachable ----
 
     @Test
     public void everyOrderRejectReasonConstantIsAJournalCode() throws IllegalAccessException {
@@ -189,7 +189,7 @@ public class S3VerifierDeterminismTest {
         }
     }
 
-    /** RC2 S4 (B1): core-shaped ids, idHigh = omsOrderId, idLow = attempt << 2 | kind. */
+    /** Core-shaped ids, idHigh = omsOrderId, idLow = attempt << 2 | kind. */
     private static byte[] anyDurable(long attempt, int kind, int type, long userId, long omsOrderId,
                                      long oldOrderId, int side, long price, long qty, long budget,
                                      int tif, long expectedOldRemaining) {
@@ -238,7 +238,7 @@ public class S3VerifierDeterminismTest {
      *                      and require it to re-journal the rest byte for byte. Off for the DIRECT
      *                      book: its snapshot export drops the last order of a full level
      *                      (pre-existing, DirectBookFullLevelSnapshotVerifierTest), which a restore
-     *                      on that book exposes independently of S3.
+     *                      on that book exposes independently of journalSeq allocation.
      */
     private static int fuzz(EngineConfigState config, long seed, boolean restoreMidRun) {
         final Random rnd = new Random(seed);
@@ -259,7 +259,7 @@ public class S3VerifierDeterminismTest {
             final int[] results = new int[9];
             int appliedCancelsReplaces = 0;
             final int[] kindResults = new int[9];
-            // RC2 S5: codes 12-16 (IOC_REMAINDER .. AMEND_REMAINING_MISMATCH) are journaled reasons too
+            // Codes 12-16 (IOC_REMAINDER .. AMEND_REMAINING_MISMATCH) are journaled reasons too
             // (the hostile mix carries tif 0..2 on creates and market buys).
             final int[] reasons = new int[17];
             try {
@@ -274,25 +274,25 @@ public class S3VerifierDeterminismTest {
                         frame = sent.get(rnd.nextInt(sent.size()));                      // verbatim retry
                     } else if (pick < 9) {
                         final int type = rnd.nextInt(3);
-                        // RC2 S4: core-shaped creates on a small id space (400 orders x 4 attempts)
+                        // Core-shaped creates on a small id space (400 orders x 4 attempts)
                         // so different payloads still collide on one id (CONFLICT).
                         frame = anyDurable(rnd.nextInt(4), 0, type, user, 1 + rnd.nextInt(400), 0, side,
                                 hostilePrice(rnd), hostileQty(rnd), type == 1 ? hostileQty(rnd) * 50_000 : 0,
-                                // RC2 S5: IOC/FOK creates never rest, so GTC keeps most of the weight
+                                // IOC/FOK creates never rest, so GTC keeps most of the weight
                                 // (resting makers for the trades below); tif stays hostile 0..2.
                                 rnd.nextInt(3) != 0 ? 0 : rnd.nextInt(3), 0);
                     } else if (pick < 13 && !legs.isEmpty()) {
                         final Leg leg = legs.get(rnd.nextInt(legs.size()));
                         final boolean owner = rnd.nextInt(4) != 0;
                         final int kind = 1 + rnd.nextInt(2);
-                        // RC2 S5 (review FIX-1): most CANCEL/UPDATE frames carry the behaviour-2 valid
+                        // Most CANCEL/UPDATE frames carry the behaviour-2 valid
                         // tif (GTC) and, on UPDATE, the leg's remaining as the core-shaped reference, so
-                        // owner-correct cancels and replaces are applied as before S5. A separate,
+                        // owner-correct cancels and replaces are applied as before the TIF / amend rules. A separate,
                         // explicit quarter stays hostile: tif 0..2 and a hostile reference (0 included).
                         final int tif = rnd.nextInt(4) == 0 ? rnd.nextInt(3) : 0;
                         long expected = 0;
                         if (kind == 2) {
-                            final long remaining = S5Probe.restingRemaining(
+                            final long remaining = OrderBookProbe.restingRemaining(
                                     on.h.engine.getEngine(BehaviourTwoHarness.MARKET), leg.orderId, leg.side == 0);
                             expected = rnd.nextInt(4) == 0 ? Math.max(0, hostileQty(rnd))
                                     : remaining > 0 ? remaining : 1;
@@ -363,8 +363,8 @@ public class S3VerifierDeterminismTest {
                 assertTrue("suppressed duplicates", on.h.engine.suppressedDuplicateCount() > 20);
                 assertTrue("conflicts", results[DurableCommandOutcome.CONFLICT] > 20);
                 assertTrue("applied", results[0] > 100);
-                System.out.println("[S5] S3 verifier seed " + seed + ": CANCEL/UPDATE results " + Arrays.toString(kindResults));
-                // RC2 S5 review FIX-1: owner-correct cancels and replaces still apply. The generator
+                System.out.println("[TIF] verifier seed " + seed + ": CANCEL/UPDATE results " + Arrays.toString(kindResults));
+                // Owner-correct cancels and replaces still apply. The generator
                 // picks legs from an unpruned list, so most name a leg that is gone (UNKNOWN_LEG) and
                 // the base itself applied only 5..22 per seed (60 and 49 per four seeds, measured on
                 // 307b48c): per-seed floor 5, four-seed floor 40 in the callers.

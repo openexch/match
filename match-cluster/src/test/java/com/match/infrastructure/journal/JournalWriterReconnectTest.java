@@ -26,7 +26,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 /**
- * Proves the C-2 fix: when the recorded publication goes CLOSED under the writer, the entry
+ * Proves the closed-publication reconnect fix: when the recorded publication goes CLOSED under the writer, the entry
  * in flight must NOT be dropped. The agent closes and nulls the publication (so the next
  * doWork reconnects a fresh recorded publication), counts a reconnect, and ABORTs the ring
  * read so the entry stays buffered and is written after reconnect. Never drop.

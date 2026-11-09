@@ -17,7 +17,7 @@ public interface MatchEventSink {
      * journals is node configuration, never replicated state, so the command is applied either
      * way.
      *
-     * <p>RC2 S3 compile fence (review FIX-9): the pre-S3 {@code (long, DurableCommandOutcome, int)}
+     * <p>Compile fence: the earlier {@code (long, DurableCommandOutcome, int)}
      * form is gone with no bridge, and every implementor carries {@code @Override}, so a sink left
      * on the old signature fails to compile instead of silently journaling nothing.</p>
      *
@@ -32,7 +32,7 @@ public interface MatchEventSink {
     }
 
     /**
-     * RC2 S4 (contract section 8, delta 12.14): the behaviour-2 form of record 3. The outcome is the
+     * The behaviour-2 form of record 3. The outcome is the
      * engine's single mutable scratch, a view: implementations must not retain it after the call (a
      * recorder copies). Behaviour 1 keeps the record form above.
      *
@@ -45,7 +45,7 @@ public interface MatchEventSink {
     }
 
     /**
-     * RC2 S4 (contract 4.3, section 8): journal-only side output of one {@code ReleaseCommandIds}
+     * Journal-only side output of one {@code ReleaseCommandIds}
      * frame with at least one APPLIED or LEG_LIVE entry (ME journal record 4). The arrays are the
      * engine's preallocated scratch (first {@code count} used): never retain them.
      */
@@ -56,7 +56,7 @@ public interface MatchEventSink {
     }
 
     /**
-     * RC2 S2: journal-only side output of a FRESH or BUMP EngineConfig decision (ME journal
+     * Journal-only side output of a FRESH or BUMP EngineConfig decision (ME journal
      * record 5). Node configuration decides whether it is journaled, never replicated state.
      *
      * @param egressSeq  the entry's log position
@@ -68,8 +68,8 @@ public interface MatchEventSink {
     }
 
     /**
-     * Publish a single trade execution. Called once per match, in match order. RC2 S3: the
-     * engine owns both ids (contract section 3); the sink holds no counter.
+     * Publish a single trade execution. Called once per match, in match order. The
+     * engine owns both ids; the sink holds no counter.
      *
      * @param tradeId    the engine-allocated trade id (1, +1 per trade in match order)
      * @param journalSeq the engine-allocated journalSeq of record 1 (0 under behaviour 1)
@@ -119,7 +119,7 @@ public interface MatchEventSink {
             long egressSeq);
 
     /**
-     * RC2 S3: the engine's terminal journal decision travels with the status. The engine sets
+     * The engine's terminal journal decision travels with the status. The engine sets
      * {@code journalTerminal} for every FILLED / CANCELLED / REJECTED it publishes through its
      * plain status path, and clears it for the pre-cancel amend rejection and the replace
      * old-leg CANCELLED (neither closes the OMS order, the AE money key). A sink journals a

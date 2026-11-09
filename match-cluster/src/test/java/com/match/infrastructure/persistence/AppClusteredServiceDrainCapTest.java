@@ -15,7 +15,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.fail;
 
 /**
- * C-3: drainQueue() must bound the work one call does to EGRESS_DRAIN_MAX messages, so a freshly
+ * drainQueue() must bound the work one call does to EGRESS_DRAIN_MAX messages, so a freshly
  * promoted leader inheriting a full warm-standby omsEgressQueue cannot stall behind a single
  * unbounded drain before it processes any new command (the AE 60s failover-blindness mechanism).
  *
@@ -45,7 +45,7 @@ public class AppClusteredServiceDrainCapTest {
         return q;
     }
 
-    // ---- C-3 cap behavior ----
+    // ---- drain-cap behavior ----
 
     @Test
     public void oneDrainCapsWork_remainderStays_nextDrainFinishes_counterClimbsOnce() {
@@ -110,7 +110,7 @@ public class AppClusteredServiceDrainCapTest {
         assertEquals("no cap event", 0L, svc.drainCappedTotal());
     }
 
-    // ---- C-3 config resolution (pure) ----
+    // ---- drain-cap config resolution (pure) ----
 
     @Test
     public void resolveDrainMax_defaultsWhenUnset() {

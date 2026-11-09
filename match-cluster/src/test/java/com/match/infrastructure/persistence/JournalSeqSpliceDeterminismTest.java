@@ -17,7 +17,7 @@ import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S3 contract section 8 (R-B0-3): A + B == A + SNAPSHOT + B for the journal frames (byte for
+ * A + B == A + SNAPSHOT + B for the journal frames (byte for
  * byte, journalSeq included), the snapshot bytes, the tradeId generator and nextJournalSeq. The
  * restored replica's first frame of B carries exactly the restored nextJournalSeq; a full replay
  * from position 0 gives the same frames.

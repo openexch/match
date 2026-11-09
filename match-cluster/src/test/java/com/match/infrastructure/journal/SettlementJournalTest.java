@@ -161,7 +161,7 @@ public class SettlementJournalTest {
     }
 
     /**
-     * RC2 S3 (section 6): records 1-4 carry the caller's journalSeq verbatim (no placeholder) and
+     * Records 1-4 carry the caller's journalSeq verbatim (no placeholder) and
      * meEpoch from the bound identity; the journal neither allocates nor rewrites the seq.
      */
     @Test

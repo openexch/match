@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * RC2 S6 9.2 (FIX-6): the timer bookkeeping of ONE Aeron consensus module, mirrored from Aeron 1.53:
+ * The timer bookkeeping of ONE Aeron consensus module, mirrored from Aeron 1.53:
  * <ul>
  *   <li>{@code ConsensusModuleAgent.onScheduleTimer} (:1448-1458): while the expired count of an id is above
  *       zero, a schedule decrements it and is swallowed; otherwise the timer service schedules it;</li>

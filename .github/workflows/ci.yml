@@ -78,7 +78,7 @@ jobs:
       # settlement-journal id=3). A schema edit — or a stale hand-edit — that lands
       # without the regenerated Java leaves the committed codecs describing a
       # different wire than the schema, and the published match-common jar carries
-      # that drift to every consumer (this is how the G-1 stale SCHEMA_VERSION=2
+      # that drift to every consumer (this is how the earlier stale SCHEMA_VERSION=2
       # codecs survived: nothing regenerated them, so nothing noticed them). Fail
       # the build on any diff so committed == schema is enforced, not trusted.
       # git status (not `git diff --exit-code`) so a NEW but uncommitted codec is

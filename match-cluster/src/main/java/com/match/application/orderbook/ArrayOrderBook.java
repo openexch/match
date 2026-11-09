@@ -210,7 +210,7 @@ public final class ArrayOrderBook {
      * @return true if the order was present and removed
      */
     /**
-     * RC2 S4 (contract 5.1): the owner of a resting order, or -1. The same guards as
+     * The owner of a resting order, or -1. The same guards as
      * {@link #cancelOrder}: a location must exist and the slot must still hold this order id.
      */
     public long restingUserId(long orderId) {
@@ -222,7 +222,7 @@ public final class ArrayOrderBook {
     }
 
     /**
-     * RC2 S5 (contract 5.4): the remaining quantity of a resting order, or -1. The guards of
+     * The remaining quantity of a resting order, or -1. The guards of
      * {@link #restingUserId}. Read-only.
      */
     public long restingRemaining(long orderId) {
@@ -233,7 +233,7 @@ public final class ArrayOrderBook {
         return sQty[slot];
     }
 
-    // RC2 S5 (contract 3.3): pure accessors of the FOK pre-walk. They read, never write.
+    // Pure accessors of the FOK pre-walk. They read, never write.
 
     /** First order slot of level {@code node} (-1 = none). */
     int levelHeadSlot(int node) {

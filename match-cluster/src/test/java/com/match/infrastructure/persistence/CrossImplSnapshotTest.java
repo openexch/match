@@ -16,7 +16,7 @@ import java.util.TreeMap;
 
 import static com.match.infrastructure.persistence.BehaviourTwoLog.assertFramesEqual;
 import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
-import static com.match.infrastructure.persistence.S5Frames.*;
+import static com.match.infrastructure.persistence.TifFrames.*;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 
@@ -69,7 +69,7 @@ public class CrossImplSnapshotTest {
         assertEquals(from.getOrderIdGenerator(), to.getOrderIdGenerator());
     }
 
-    // ==================== RC2 S5: behaviour-2 TIF and amend history ====================
+    // ==================== behaviour-2 TIF and amend history ====================
 
     private static final int A = DurableCommandOutcome.APPLIED, R = DurableCommandOutcome.REJECTED;
 
@@ -101,15 +101,15 @@ public class CrossImplSnapshotTest {
     }
 
     /**
-     * RC2 S5 section 9: one behaviour-2 log (FRESH with the same cap 4; direct with 4 orders per
+     * One behaviour-2 log (FRESH with the same cap 4; direct with 4 orders per
      * level) through the array and the direct implementation: every step's outcome, byte-equal
      * journals, equal books, omsMap and ledger v2 block, and each image round-trips byte-equal on
      * its own implementation.
      */
     @Test
     public void behaviourTwoTifAndAmendHistoryIsImplementationIndependent() {
-        try (Run arr = freshWith(S5Frames.config(false, 4, 0));
-             Run dir = freshWith(S5Frames.config(true, 4, 4))) {
+        try (Run arr = freshWith(TifFrames.config(false, 4, 0));
+             Run dir = freshWith(TifFrames.config(true, 4, 4))) {
             rest(arr, dir, 1, ASK, 60_000, 1);
             rest(arr, dir, 2, ASK, 60_001, 1);
             step(arr, dir, limit(3, 0, 200, BID, 60_001, 3, IOC), A, CANCELLED, IOC_REMAINDER);       // IOC partial
@@ -145,7 +145,7 @@ public class CrossImplSnapshotTest {
             assertArrayEquals("bids", ma.getBidOrders(), md.getBidOrders());
             assertArrayEquals("asks", ma.getAskOrders(), md.getAskOrders());
             assertEquals("omsMap", omsMap(arr.engine()), omsMap(dir.engine()));
-            assertArrayEquals("ledger v2 block", S4Probe.ledgerBlock(arr.engine()), S4Probe.ledgerBlock(dir.engine()));
+            assertArrayEquals("ledger v2 block", DurableLedgerProbe.ledgerBlock(arr.engine()), DurableLedgerProbe.ledgerBlock(dir.engine()));
             assertEquals(arr.engine().getOrderIdGenerator(), dir.engine().getOrderIdGenerator());
             assertEquals(arr.engine().getTradeIdGenerator(), dir.engine().getTradeIdGenerator());
             for (Run r : new Run[]{arr, dir}) {

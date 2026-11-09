@@ -8,13 +8,13 @@ import com.match.infrastructure.Logger;
 
 /**
  * The {@code EngineConfig} state-machine handler: the decision table applied to every logged
- * EngineConfig command (slice C, extended by RC2 S2 with behaviour versioning and the genesis
+ * EngineConfig command (extended with behaviour versioning and the genesis
  * identity). Runs on the cluster service (agent) thread only, live and during replay alike, and
  * every DECISION reads ONLY the command's fields plus replicated state, so all replicas decide
  * identically. The jar (supported behaviours, wire ceiling) and the launch mode never decide; they
- * feed the node-local check, which either passes or removes THIS node via fail-fast (A-9).
+ * feed the node-local check, which either passes or removes THIS node via fail-fast.
  *
- * <p><b>Decision table</b> (RC2 S2 contract section 3; first match wins after row 0):</p>
+ * <p><b>Decision table</b> (first match wins after row 0):</p>
  * <ol start="0">
  *   <li>structurally invalid (S-a..S-c, {@link EngineConfigState#invalidReason()}), every state:
  *       REJECTED_INVALID.</li>
@@ -37,7 +37,7 @@ import com.match.infrastructure.Logger;
  * </ol>
  *
  * <p>Record 5 is appended through the injected {@link DecisionJournal} only AFTER the node-local
- * check passed (contract 3.3): the replicated effects (config, identity, consumed journalSeq)
+ * check passed: the replicated effects (config, identity, consumed journalSeq)
  * stand on every replica, and skipping this node's side output is the same as a crash before the
  * append, so no core can bind an epoch whose producer could not run it.</p>
  *
@@ -56,7 +56,7 @@ public final class EngineConfigStateMachine {
     }
 
     /**
-     * RC2 S2: the side output of a FRESH or BUMP decision, ME journal record 5. {@code recorded}
+     * The side output of a FRESH or BUMP decision, ME journal record 5. {@code recorded}
      * is the config as recorded after the decision; meEpoch is stamped by the journal from the
      * bound {@link MeIdentity}. Node-local output, never replicated state.
      */
@@ -64,14 +64,14 @@ public final class EngineConfigStateMachine {
         void journalEngineConfig(long egressSeq, long journalSeq, EngineConfigState recorded, int decision);
     }
 
-    /** The returned decision: closed, NOT replicated (contract 3.4). */
+    /** The returned decision: closed, NOT replicated. */
     public enum Decision {
         FRESH_LEGACY, FRESH, ADOPT, DUPLICATE, STALE, BUMP,
         REJECTED_INVALID, REJECTED_ADOPT_AT_2, REJECTED_SWITCH, REJECTED_CHANGE,
         REJECTED_DOWNGRADE, REJECTED_GENESIS, REJECTED_CEILING_LOWERED
     }
 
-    /** Record 5 {@code ConfigDecision} values the RC2 ME writes (ADOPT 1 and SWITCH 2 unused). */
+    /** Record 5 {@code ConfigDecision} values this ME writes (ADOPT 1 and SWITCH 2 unused). */
     public static final int JOURNAL_DECISION_FRESH = 0;
     public static final int JOURNAL_DECISION_BUMP = 3;
 
@@ -152,7 +152,7 @@ public final class EngineConfigStateMachine {
             }
             if (t >= 2) {
                 return reject(Decision.REJECTED_SWITCH,
-                        "no live behaviour 1 -> " + t + " switch (D7): behaviour >= 2 needs a new genesis",
+                        "no live behaviour 1 -> " + t + " switch: behaviour >= 2 needs a new genesis",
                         recorded, incoming);
             }
             return reject(Decision.REJECTED_CHANGE,
@@ -201,7 +201,7 @@ public final class EngineConfigStateMachine {
         return bump(recorded, incoming);
     }
 
-    // Row 1: behaviour 1 FRESH, bit-identical to S1 (no identity, no journal).
+    // Row 1: behaviour 1 FRESH, bit-identical to the pre-versioning engine (no identity, no journal).
     private Decision freshLegacy(EngineConfigState normalized) {
         engine.createEnginesFromConfig(normalized);
         acceptedCount++;
@@ -221,8 +221,8 @@ public final class EngineConfigStateMachine {
     private Decision fresh(EngineConfigState incoming) {
         engine.createEnginesFromConfig(incoming);
         final MeIdentity identity = engine.meIdentity();
-        // RC2 S3: bound through the engine so dense allocation (records 1-4) starts here too.
-        // RC2 S4 (row 2 hook): and the empty ledger v2 with the recorded capacity C is installed.
+        // Bound through the engine so dense allocation (records 1-4) starts here too.
+        // And the empty ledger v2 with the recorded capacity C is installed.
         engine.bindFreshIdentity(incoming.genesisId, incoming.behaviorVersion, incoming.commandLedgerCapacity);
         final long journalSeq = identity.allocateJournalSeq();
         acceptedCount++;
@@ -300,7 +300,7 @@ public final class EngineConfigStateMachine {
 
     /**
      * Node-local check after a snapshot restore that brought a recorded config, in BOTH launch
-     * modes (contract section 4). Never touches replicated state.
+     * modes. Never touches replicated state.
      *
      * @return true when every applicable check passed; false after fail-fast was invoked
      */
@@ -313,7 +313,7 @@ public final class EngineConfigStateMachine {
     }
 
     /**
-     * The node-local checks of contract section 4 (A-9: never a reject from node-local truth).
+     * The node-local checks (fail-fast: never a reject from node-local truth).
      * Every applicable check is evaluated, every failing one is logged CRITICAL naming the
      * recorded value and this node's value, then fail-fast runs AT MOST ONCE.
      *
@@ -332,7 +332,7 @@ public final class EngineConfigStateMachine {
                 failures.add("(a) recorded behaviorVersion=" + recorded.behaviorVersion
                         + " is not supported by this jar (supported bitmask=" + SUPPORTED_BEHAVIOR_VERSIONS_MASK + ")");
             }
-            // (b) a jar below the recorded wire ceiling cannot follow the log (W10).
+            // (b) a jar below the recorded wire ceiling cannot follow the log.
             if (recorded.behaviorVersion >= 2 && recorded.maxWireVersion > SUPPORTED_MAX_WIRE_VERSION) {
                 failures.add("(b) recorded maxWireVersion=" + recorded.maxWireVersion
                         + " is above this jar's order-schema version " + SUPPORTED_MAX_WIRE_VERSION);
@@ -364,7 +364,7 @@ public final class EngineConfigStateMachine {
         for (final String failure : failures) {
             final String msg = "[ENGINE-CONFIG] CRITICAL (" + context + "): " + failure
                     + "\n  A node-local reject would fork the cluster, so this node exits instead"
-                    + " (fail-fast, the A-9 principle); the other nodes keep quorum.";
+                    + " (fail-fast); the other nodes keep quorum.";
             logger.error(msg);
             System.err.println(msg);
         }

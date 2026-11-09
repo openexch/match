@@ -6,13 +6,13 @@ import com.match.application.engine.LedgerV2TestAccess;
 import com.match.application.orderbook.MatchingEngine;
 
 /**
- * RC2 S4 test seam: the one place the S4 tests read APIs that S4 adds (counters, the ledger v2,
- * {@code LegIndex}, {@code restingUserId}). Every S4 test reaches them only through here, so the
- * same test sources compile against the S3 base with a base copy of this class that returns
+ * Test seam: the one place the ledger v2 tests read the APIs it added (counters, the ledger v2,
+ * {@code LegIndex}, {@code restingUserId}). Every such test reaches them only through here, so the
+ * same test sources compile against the earlier base with a base copy of this class that returns
  * sentinels (the RED runs then fail by value, never by compilation). Pure delegation.
  */
-public final class S4Probe {
-    private S4Probe() {
+public final class DurableLedgerProbe {
+    private DurableLedgerProbe() {
     }
 
     /** Owner of a resting order on one side, -1 when absent. */

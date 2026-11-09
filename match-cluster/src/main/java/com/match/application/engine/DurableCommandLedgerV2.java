@@ -12,12 +12,12 @@ import org.agrona.collections.Long2LongHashMap;
 import java.util.Arrays;
 
 /**
- * RC2 S4 (contract sections 2, 4.2, 7.2): the behaviour-2 durable command ledger. Bounded by the
+ * The behaviour-2 durable command ledger. Bounded by the
  * recorded {@code commandLedgerCapacity} C and emptied only by committed {@code ReleaseCommandIds}
  * entries: {@code UP_TO} floors and {@code ORDER} tombstones. Never evicts, never times out, never
  * shrinks under capacity pressure (retention principles 2 and 4).
  *
- * <p>Replicated state (snapshotted, section 7.2): the inflight outcomes keyed by
+ * <p>Replicated state (snapshotted): the inflight outcomes keyed by
  * {@code (idHigh, idLow)}, the per-idHigh {@code UP_TO} floors and the sorted, disjoint, merged
  * tombstone ranges. Node-local and derived (never serialized): the slab layout, the 128-bit open
  * addressing index (linear probing, backward-shift deletion, so churn never accumulates tombstone
@@ -25,14 +25,14 @@ import java.util.Arrays;
  *
  * <p>Allocation: none on the per-command or per-release path after warm-up. Growth of the slab and
  * index (doubling from 1024 up to C), of the floor map and of the range arrays allocates; the heap
- * therefore follows the peak inflight, not C (section 6.1). Snapshot write and read allocate
- * (sorting), which is outside the guarantee (section 7.4).</p>
+ * therefore follows the peak inflight, not C. Snapshot write and read allocate
+ * (sorting), which is outside the guarantee.</p>
  *
  * <p>Single-threaded (cluster service thread); the three gauges are volatile for the scraper.</p>
  */
 public final class DurableCommandLedgerV2 {
 
-    /** Snapshot block marker (S2 reserved 4 for this slice). */
+    /** Snapshot block marker (4 is reserved for this block). */
     public static final byte MARKER = 4;
     /** The only block version. */
     public static final int BLOCK_VERSION = 2;
@@ -236,7 +236,7 @@ public final class DurableCommandLedgerV2 {
 
     /**
      * Record a canonical outcome (results 0, 1, 4, 5, 6). The caller checked B2-B4: the key is new,
-     * not covered, and {@code size < C}. An entry is never replaced (I5).
+     * not covered, and {@code size < C}. An entry is never replaced.
      */
     public void record(final DurableOutcomeView o) {
         final int r = o.result();
@@ -440,7 +440,7 @@ public final class DurableCommandLedgerV2 {
     }
 
     /**
-     * TEST SEAM ONLY (contract 9, {@code releasedCreateDuplicateIsRefusedNotReapplied} negative
+     * TEST SEAM ONLY ({@code releasedCreateDuplicateIsRefusedNotReapplied} negative
      * control): drop every inflight entry of {@code h} WITHOUT a floor or a tombstone, i.e. the
      * broken release the tombstone exists to prevent. Package-private; never called by main code.
      */
@@ -596,7 +596,7 @@ public final class DurableCommandLedgerV2 {
     }
 
     /**
-     * Read and validate a marker-4 block (rules R1-R10 of contract 7.3) that must end exactly at
+     * Read and validate a marker-4 block (reader rules R1-R10) that must end exactly at
      * {@code end}. Returns the restored ledger; throws {@link IllegalStateException} naming the rule.
      */
     public static DurableCommandLedgerV2 read(final DirectBuffer b, int p, final int end, final long recordedCapacity) {

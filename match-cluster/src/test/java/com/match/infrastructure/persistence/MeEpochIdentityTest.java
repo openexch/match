@@ -16,7 +16,7 @@ import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S2 contract section 5 (R-B0-4, IN-08 producer identity): a wiped ME has no identity until
+ * A wiped ME has no identity until
  * a new FRESH gives it a new epoch; a restored ME keeps its epoch on every path (snapshot
  * restore, full replay from position 0), with the same nextJournalSeq as a never-stopped member.
  * The keep-warm heartbeat carries the recorded epoch.
@@ -32,7 +32,7 @@ public class MeEpochIdentityTest {
         return positioned(f);
     }
 
-    private static long heartbeatEpoch(S2Services.Service svc) {
+    private static long heartbeatEpoch(LaunchModeServices.Service svc) {
         final UnsafeBuffer buf = new UnsafeBuffer(new byte[64]);
         svc.service.encodeKeepWarm(buf, 1, 123L);
         return new ClusterHeartbeatDecoder().wrapAndApplyHeader(buf, 0, new MessageHeaderDecoder()).meEpoch();
@@ -85,7 +85,7 @@ public class MeEpochIdentityTest {
         }
 
         // The heartbeat carries the recorded epoch: 0 on a wiped node, G1 once restored.
-        final S2Services.Service svc = new S2Services.Service(true);
+        final LaunchModeServices.Service svc = new LaunchModeServices.Service(true);
         assertEquals(0L, heartbeatEpoch(svc));
         svc.restore(image);
         assertEquals(0, svc.failFast.get());

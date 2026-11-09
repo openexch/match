@@ -52,38 +52,38 @@ public class SbeDemuxer {
     // Plain long: written and read on the cluster service thread only.
     private long createOrderCount;
 
-    // A-4/G-2 ingress-reject counters. Plain longs, same discipline as createOrderCount:
+    // Ingress-reject counters. Plain longs, same discipline as createOrderCount:
     // written only on the cluster service (agent) thread, read by the /metrics scraper via
     // NodeMetrics.acquire(). NOT replicated state and NOT snapshotted — pure local
     // observability. The DROP they record is deterministic: identical bytes are dropped
     // identically on every replica, so consensus is unaffected.
-    private long schemaRejectCount;  // G-2: header schemaId/version outside this build's supported range
-    private long decodeRejectCount;  // A-4: a body decode threw (e.g. out-of-range enum byte) — poison input, expected
+    private long schemaRejectCount;  // header schemaId/version outside this build's supported range
+    private long decodeRejectCount;  // a body decode threw (e.g. out-of-range enum byte) — poison input, expected
     private long applyErrorCount;
-    // RC2 S1: frames of a template this build decodes for bounds and class but does not serve yet
-    // (order-schema v12 ReleaseCommandIds 10, served from S4). Counted, never applied. Same
+    // Frames of a template this build decodes for bounds and class but does not serve yet
+    // (order-schema v12 ReleaseCommandIds 10 before behaviour 2). Counted, never applied. Same
     // discipline as the reject counters: service thread only, not replicated, not snapshotted.
     private long unservedTemplateCount;
-    // RC2 S2 section 6 (W10): frames above the RECORDED wire ceiling (behaviour >= 2 only). A
+    // Frames above the RECORDED wire ceiling (behaviour >= 2 only). A
     // template 9 whose v12 prefix is a valid intent is journaled INVALID (record 3 result 8);
     // every other template is a counted drop. Same discipline as the reject counters.
     private long aboveCeilingInvalidCount;
     private long aboveCeilingDropCount;
-    // RC2 S4 (contract 5.3, decision A2): legacy templates 1/2/3 refused at behaviour 2. Same
+    // Legacy templates 1/2/3 refused at behaviour 2. Same
     // discipline as the reject counters (service thread only, not replicated).
     private long legacyLaneRejectCount;
-    // RC2 S6 (contract 3.2): frames refused by the session-class rows R1-R4. Same discipline.
+    // Frames refused by the session-class rows R1-R4. Same discipline.
     private long unauthorizedRejectCount;
 
-    // RC2 S4 section 8: pooled template-9 and template-10 decoders, the reusable intent view and
-    // the release entry scratch (S1 cap 48), so the behaviour-2 durable path allocates nothing.
+    // Pooled template-9 and template-10 decoders, the reusable intent view and
+    // the release entry scratch (record 4 cap 48), so the behaviour-2 durable path allocates nothing.
     private final com.match.infrastructure.generated.DurableOrderCommandDecoder durableDecoder =
             new com.match.infrastructure.generated.DurableOrderCommandDecoder();
     private final com.match.infrastructure.generated.ReleaseCommandIdsDecoder releaseDecoder =
             new com.match.infrastructure.generated.ReleaseCommandIdsDecoder();
     private final com.match.domain.commands.MutableDurableIntent durableView =
             new com.match.domain.commands.MutableDurableIntent();
-    /** RC2 S4 (S1 3.2 cap): a template-10 frame with more entries is a frame-bounds reject. */
+    /** A template-10 frame with more entries is a frame-bounds reject. */
     static final int MAX_RELEASE_ENTRIES = Engine.MAX_RELEASE_ENTRIES;
     private final long[] releaseHigh = new long[MAX_RELEASE_ENTRIES];
     private final long[] releaseFloor = new long[MAX_RELEASE_ENTRIES];
@@ -106,7 +106,7 @@ public class SbeDemuxer {
     // routine schema bump. Package-private so the gate tests track the real constant.
     static final int MIN_SUPPORTED_SCHEMA_VERSION = 9;
 
-    // First header version whose root blocks carry the v12 appended fields (RC2 S1 contract 3).
+    // First header version whose root blocks carry the v12 appended fields.
     static final int V12 = 12;
     // Pre-12 root blocks of the two templates that grew in v12. The generated BLOCK_LENGTH
     // constants are the v12 values (DurableOrderCommand 80, EngineConfig 35).
@@ -114,8 +114,8 @@ public class SbeDemuxer {
     static final int ENGINE_CONFIG_PRE_V12_BLOCK_LENGTH = 17;
 
     /**
-     * Minimum root block per (template, header version): the frame-bounds rule of the RC2 S1
-     * contract section 3. Templates 9 and 8 grew in v12, so their minimum depends on the header
+     * Minimum root block per (template, header version): the frame-bounds rule.
+     * Templates 9 and 8 grew in v12, so their minimum depends on the header
      * version (9: 71 for v9..v11, 80 for v12; 8: 17 for v9..v11, 35 for v12): a v12 header
      * carrying a pre-12 block is a frame-bounds reject, and a pre-12 frame is never held to the
      * v12 length. Every other template's fixed prefix is identical across the supported range.
@@ -203,8 +203,8 @@ public class SbeDemuxer {
     }
 
     // The highest header version this jar accepts: EXPECTED_SCHEMA_VERSION in production. A
-    // field, not the constant, only so a test can stand in for a later jar (RC2 S2 review FIX-1:
-    // the ceiling rule must not depend on it).
+    // field, not the constant, only so a test can stand in for a later jar (the
+    // ceiling rule must not depend on it).
     private final int maxSupportedVersion;
 
     public SbeDemuxer(Engine engine) {
@@ -218,15 +218,15 @@ public class SbeDemuxer {
     }
 
     /**
-     * RC2 S6 (contract 3.1): the session-class code of a trusted in-process caller. Passes every class row
+     * The session-class code of a trusted in-process caller. Passes every class row
      * (R1-R4); never a wire class. For in-process tests and tools only, as the AE's {@code dispatchTrusted}.
      */
     static final int TRUSTED = -1;
 
     /**
      * Dispatch a frame from a session of class {@code classCode} (a {@code ClusterSessionClass} code read from
-     * the session's replicated principal). The service halts on class 0 before it calls this (R0, contract
-     * 3.2); a class-0 frame that reaches the demuxer anyway is refused like an unauthorized one.
+     * the session's replicated principal). The service halts on class 0 before it calls this (R0);
+     * a class-0 frame that reaches the demuxer anyway is refused like an unauthorized one.
      */
     public void dispatch(final int classCode, final DirectBuffer buffer, final int offset, final int length,
                          final long timestamp) {
@@ -268,7 +268,7 @@ public class SbeDemuxer {
         frame.wrap(buffer, offset, length);
         headerDecoder.wrap(frame, 0);
 
-        // G-2: schema/version gate. A frame whose header is outside the supported range is
+        // Schema/version gate. A frame whose header is outside the supported range is
         // dropped BEFORE any body decode — no generated accessor runs, so a stale or skewed
         // frame can never reach an out-of-range enum. The version check is a RANGE, not an
         // exact match: additive schema evolution must let an older-but-supported producer keep
@@ -276,12 +276,12 @@ public class SbeDemuxer {
         // above this build's ceiling (fields this build cannot decode) is still dropped here.
         final int schemaId = headerDecoder.schemaId();
         final int version = headerDecoder.version();
-        // RC2 S2 section 6: with a recorded behaviour >= 2 config, a frame above the RECORDED
+        // With a recorded behaviour >= 2 config, a frame above the RECORDED
         // ceiling is decided from the header and the replicated ceiling only, never by this
         // jar's supported version, so every member journals the same record at the same
         // position whatever its jar. It runs ahead of the version drop below: a later jar whose
         // supported version exceeds the recorded ceiling must still journal INVALID, exactly
-        // like the members still at the ceiling (review FIX-1). Cost on the hot path: one field
+        // like the members still at the ceiling. Cost on the hot path: one field
         // read and a null check (no config recorded) or a behaviour compare.
         boolean aboveCeiling = false;
         if (schemaId == EXPECTED_SCHEMA_ID && aboveRecordedCeiling(version)) {
@@ -315,7 +315,7 @@ public class SbeDemuxer {
         // commands beyond length). Explicit checks remain effective with Agrona bounds checks
         // disabled. The minimum root block is a function of (template, header version): templates
         // 9 and 8 grew in v12, every other known prefix is identical across versions 9..12
-        // (minimumBlockLength, RC2 S1 contract section 3 frame-bounds rule).
+        // (minimumBlockLength, the frame-bounds rule).
         final int block = headerDecoder.blockLength();
         // An above-ceiling template 9 is held to the v12 minimum (80): SBE is append-only, so the
         // first 80 root bytes keep their v12 meaning in every later version.
@@ -348,7 +348,7 @@ public class SbeDemuxer {
             }
         }
 
-        // RC2 S6 (contract 3.2 R1-R4): the session class decides, after the header, schema, ceiling-drop
+        // The session class decides, after the header, schema, ceiling-drop
         // and frame/group-bounds gates and before any body decode, so a refused frame mutates nothing,
         // journals nothing (no above-ceiling INVALID either), consumes no journalSeq and sends no egress.
         // Reads the replicated principal and the recorded behaviour only: every member decides alike.
@@ -357,7 +357,7 @@ public class SbeDemuxer {
             return;
         }
 
-        // A-4: non-throwing body decode. The generated enum accessors OrderSide.get()/
+        // Non-throwing body decode. The generated enum accessors OrderSide.get()/
         // OrderType.get() throw IllegalArgumentException on an out-of-range byte; that
         // exception used to escape to Aeron and, on repeat, trip match's
         // IDENTICAL_ERROR_EXIT_THRESHOLD halt(2), crash-looping the node on replay. Now ANY
@@ -369,7 +369,7 @@ public class SbeDemuxer {
             switch (headerDecoder.templateId()) {
                 case com.match.infrastructure.generated.DurableOrderCommandDecoder.TEMPLATE_ID:
                     if (version < 11) { rejectFrameBounds(); break; }
-                    // RC2 S2 section 13 addition: the fresh-cluster guard covers template 9 like
+                    // The fresh-cluster guard covers template 9 like
                     // the other order commands. Before any EngineConfig (config mode, no engines)
                     // there is no epoch and no publisher: counted drop on every replica, nothing
                     // journaled, nothing applied, never an apply failure.
@@ -380,10 +380,10 @@ public class SbeDemuxer {
                     }
                     // The generated decoder reads with the frame's own blockLength and version;
                     // an above-ceiling frame (version > 12) decodes its v12 prefix exactly like a
-                    // v12 frame, with the same identity and range checks (F1 included).
-                    // RC2 S4 section 8: one pooled decoder (wrap resets every cursor).
+                    // v12 frame, with the same identity and range checks (the UPDATE-only rule included).
+                    // One pooled decoder (wrap resets every cursor).
                     final var d = durableDecoder.wrapAndApplyHeader(frame,0,headerDecoder);
-                    // Null before range (RC2 S1 contract section 3): a pre-12 header maps the two v12
+                    // Null before range: a pre-12 header maps the two v12
                     // fields to 0/0 and runs NO range check (the decoder would return the SBE null);
                     // a v12 header reads them and range-checks (poison = decode reject below).
                     final int timeInForce;
@@ -411,7 +411,7 @@ public class SbeDemuxer {
                         d.commandKind(),d.orderType(),d.orderSide(),timeInForce,expectedOldRemaining);
                     applying = true;
                     if (aboveCeiling) {
-                        // Record 3 result 8: no capacity, no ledger, no apply (contract 6).
+                        // Record 3 result 8: no capacity, no ledger, no apply.
                         engine.journalInvalid(intent, timestamp);
                         final long n = ++aboveCeilingInvalidCount;
                         if (shouldLogReject(n)) {
@@ -483,8 +483,8 @@ public class SbeDemuxer {
                     break;
 
                 case com.match.infrastructure.generated.ReleaseCommandIdsDecoder.TEMPLATE_ID:
-                    // RC2 S1: defined and bounds-checked above. RC2 S4 (contract 4.1): served only
-                    // with engines and a recorded behaviour >= 2 (identity bound); otherwise the S1
+                    // Defined and bounds-checked above. Served only
+                    // with engines and a recorded behaviour >= 2 (identity bound); otherwise the
                     // counted unserved drop (ledger untouched, no egress, no journal).
                     if (!engine.hasEngines() || !engine.isJournalSeqDense()) {
                         countUnserved();
@@ -527,10 +527,10 @@ public class SbeDemuxer {
     }
 
     /**
-     * RC2 S4 (contract 3.1, 3.2 B0): a behaviour-2 template-9 frame. The base rules (the record 3
+     * A behaviour-2 template-9 frame. The base rules (the record 3
      * echo is reader-valid) are checked on the pooled view without building a record; a violation
-     * stays the counted decode drop (S2 normalized-echo request declined, delta 12.12). Then the
-     * S2 above-ceiling INVALID, then B0 (header version 11), then the engine's B1-B7.
+     * stays the counted decode drop (no normalized echo). Then the
+     * above-ceiling INVALID, then B0 (header version 11), then the engine's B1-B7.
      */
     private void dispatchDurableBehaviourTwo(final com.match.infrastructure.generated.DurableOrderCommandDecoder d,
                                              final int version, final int timeInForce,
@@ -554,7 +554,7 @@ public class SbeDemuxer {
                 marketId, kind, type, side, timeInForce, expectedOldRemaining);
         applying = true;
         if (aboveCeiling) {
-            // Record 3 result 8: no capacity, no ledger, no apply (S2 contract 6).
+            // Record 3 result 8: no capacity, no ledger, no apply.
             engine.journalInvalid(durableView, timestamp);
             final long n = ++aboveCeilingInvalidCount;
             if (shouldLogReject(n)) {
@@ -574,7 +574,7 @@ public class SbeDemuxer {
     }
 
     /**
-     * RC2 S4 (contract 4.1): template 10 at behaviour 2. All-or-nothing validation before any
+     * Template 10 at behaviour 2. All-or-nothing validation before any
      * mutation: more than 48 entries is a frame-bounds reject; {@code releaseSeq < 0} or any entry
      * with {@code commandIdHigh < 1}, {@code idLowFloor < 0} or a raw scope outside 0..1 is a
      * counted decode reject (no entry applied, nothing journaled). 0 entries is a legal all-NOOP
@@ -612,7 +612,7 @@ public class SbeDemuxer {
     }
 
     /**
-     * RC2 S6 contract 3.2, rows R1-R4 (R0 is the service's halt; R5 and R7 fall through to the existing paths;
+     * Session-class rows R1-R4 (R0 is the service's halt; R5 and R7 fall through to the existing paths;
      * R6, any other template id, is ignored by the switch as before). Codes are {@code ClusterSessionClass}
      * values: 1 GATEWAY, 2 FORWARDER, 4 ADMIN, 7 REPLICA; 3, 5 and 6 are never minted by the ME key table and
      * authorise nothing under R2-R4. Allocation-free.
@@ -646,7 +646,7 @@ public class SbeDemuxer {
     static final int CLASS_ADMIN = 4;
     static final int CLASS_REPLICA = 7;
 
-    /** RC2 S6 (3.2 UNAUTHORIZED): counted, rate-limited log; no mutation, journal, journalSeq, egress or close. */
+    /** Counted, rate-limited log; no mutation, journal, journalSeq, egress or close. */
     private void refuseUnauthorized(final int classCode, final long clusterSessionId) {
         final long n = ++unauthorizedRejectCount;
         if (shouldLogReject(n)) {
@@ -656,12 +656,12 @@ public class SbeDemuxer {
         }
     }
 
-    /** Scrapeable (match_ingress_unauthorized_total): frames refused by the session-class rows (RC2 S6). */
+    /** Scrapeable (match_ingress_unauthorized_total): frames refused by the session-class rows. */
     public long unauthorizedRejectCount() {
         return unauthorizedRejectCount;
     }
 
-    /** RC2 S4 (5.3): counted, rate-limited log, no mutation, no egress, no journal. */
+    /** Counted, rate-limited log, no mutation, no egress, no journal. */
     private void refuseLegacyLane() {
         final long n = ++legacyLaneRejectCount;
         if (shouldLogReject(n)) {
@@ -670,7 +670,7 @@ public class SbeDemuxer {
         }
     }
 
-    /** Scrapeable (match_legacy_lane_rejects_total): legacy templates 1/2/3 refused at behaviour 2 (RC2 S4). */
+    /** Scrapeable (match_legacy_lane_rejects_total): legacy templates 1/2/3 refused at behaviour 2. */
     public long legacyLaneRejectCount() {
         return legacyLaneRejectCount;
     }
@@ -684,20 +684,20 @@ public class SbeDemuxer {
         }
     }
 
-    /** RC2 S2: a recorded behaviour >= 2 config exists and {@code version} is above its ceiling. */
+    /** A recorded behaviour >= 2 config exists and {@code version} is above its ceiling. */
     private boolean aboveRecordedCeiling(final int version) {
         final com.match.application.engine.EngineConfigState recorded = engine.getEngineConfig();
         return recorded != null && recorded.behaviorVersion >= 2 && version > recorded.maxWireVersion;
     }
 
     /** Scrapeable (match_ingress_above_ceiling_invalid_total): template-9 frames above the
-     *  recorded ceiling journaled as INVALID (RC2 S2 section 6). */
+     *  recorded ceiling journaled as INVALID. */
     public long aboveCeilingInvalidCount() {
         return aboveCeilingInvalidCount;
     }
 
     /** Scrapeable (match_ingress_above_ceiling_drops_total): frames of any other template above
-     *  the recorded ceiling, dropped without mutation or journal (RC2 S2 section 6). */
+     *  the recorded ceiling, dropped without mutation or journal. */
     public long aboveCeilingDropCount() {
         return aboveCeilingDropCount;
     }
@@ -711,7 +711,7 @@ public class SbeDemuxer {
     }
 
     /** Scrapeable (match_ingress_unserved_templates_total): frames of a defined but not yet served
-     *  template (v12 ReleaseCommandIds 10 in S1), counted and never applied. */
+     *  template (v12 ReleaseCommandIds 10 before behaviour 2), counted and never applied. */
     public long unservedTemplateCount() {
         return unservedTemplateCount;
     }
@@ -724,13 +724,13 @@ public class SbeDemuxer {
     }
 
     /** Scrapeable (match_ingress_schema_rejects_total): frames dropped for a schemaId mismatch or
-     *  a version outside the supported range, before any body decode (G-2). */
+     *  a version outside the supported range, before any body decode. */
     public long schemaRejectCount() {
         return schemaRejectCount;
     }
 
     /** Scrapeable (match_ingress_decode_rejects_total): frames dropped for a body-decode failure,
-     *  e.g. an out-of-range enum byte (A-4). Expected under poison/skewed input. */
+     *  e.g. an out-of-range enum byte. Expected under poison/skewed input. */
     public long decodeRejectCount() {
         return decodeRejectCount;
     }
@@ -740,7 +740,7 @@ public class SbeDemuxer {
         return applyErrorCount;
     }
 
-    /** Scrapeable (match_preconfig_order_rejects_total): order commands dropped by the slice C
+    /** Scrapeable (match_preconfig_order_rejects_total): order commands dropped by the
      *  fresh-cluster guard — arrived before any EngineConfig, so no engine existed to serve them.
      *  Always 0 in legacy mode. */
     public long preConfigOrderRejectCount() {
@@ -798,7 +798,7 @@ public class SbeDemuxer {
      * Slice C: decode a logged EngineConfig command into a normalized {@link
      * com.match.application.engine.EngineConfigState} (markets sorted by marketId) and hand it to
      * the state machine. Wire-level poison (an out-of-range EngineImpl byte, truncation) throws
-     * out of the generated accessors and is caught by dispatch's existing A-4/#202 catch blocks;
+     * out of the generated accessors and is caught by dispatch's existing #202 catch blocks;
      * SEMANTIC validity (capacity ranges, duplicate markets, price bands) is the state machine's
      * deterministic reject, so it is counted apart from decode drops.
      */
@@ -809,8 +809,8 @@ public class SbeDemuxer {
         final long bookCapacity = engineConfigDecoder.bookCapacity();
         final long maxMatchesPerOrder = engineConfigDecoder.maxMatchesPerOrder();
         final long maxOrdersPerLevel = engineConfigDecoder.maxOrdersPerLevel();
-        // v12 root fields (RC2 S1 contract 3.3), null before range: a pre-12 header maps the
-        // defaults without reading; a v12 header reads them as encoded (no S1 range rule).
+        // v12 root fields, null before range: a pre-12 header maps the
+        // defaults without reading; a v12 header reads them as encoded (no range rule).
         final long behaviorVersion;
         final long commandLedgerCapacity;
         final long genesisId;

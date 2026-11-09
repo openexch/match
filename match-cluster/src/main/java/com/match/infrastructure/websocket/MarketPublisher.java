@@ -123,7 +123,7 @@ public class MarketPublisher implements MarketEventHandler {
         long statusSeq;
         int rejectReason; // OrderRejectReason code (NONE=0 on non-rejects); carried on egress from SBE v6 (match#75)
         long egressSeq;   // Aeron log position of the producing command; OMS ordering key (Layer 2, SBE v7)
-        long clusterTimestamp; // v9 (C-5): deterministic cluster timestamp of the producing command (event.getTimestamp())
+        long clusterTimestamp; // v9: deterministic cluster timestamp of the producing command (event.getTimestamp())
     }
 
     // P1.2 (match#31): per-market monotonic sequence over OrderStatus events,
@@ -147,7 +147,7 @@ public class MarketPublisher implements MarketEventHandler {
         long takerOmsOrderId;
         long makerOmsOrderId;
         long egressSeq;   // Aeron log position of the producing command; OMS ordering key (Layer 2, SBE v7)
-        long clusterTimestamp; // v9 (C-5): deterministic cluster timestamp of the producing command (event.getTimestamp())
+        long clusterTimestamp; // v9: deterministic cluster timestamp of the producing command (event.getTimestamp())
     }
 
     // Change detection - use engine version numbers to detect any book change
@@ -169,7 +169,7 @@ public class MarketPublisher implements MarketEventHandler {
     private int lastAskCount = 0;
     private boolean sentInitialSnapshot = false;
     private long lastResnapshotGen = 0;
-    // RC2 S13 test seam EMPTY_BOOK_VERSION_GUARD (contract 11.7): package-private, never written by main code.
+    // Test seam EMPTY_BOOK_VERSION_GUARD: package-private, never written by main code.
     // Off = an empty book with book version 0 is published too (a BookSnapshot with version 0).
     boolean emptyBookVersionGuard = true;
 
@@ -393,7 +393,7 @@ public class MarketPublisher implements MarketEventHandler {
         tradeEntry.takerOmsOrderId = event.getTakerOmsOrderId();
         tradeEntry.makerOmsOrderId = event.getMakerOmsOrderId();
         tradeEntry.egressSeq = event.getEgressSeq();
-        tradeEntry.clusterTimestamp = event.getTimestamp(); // v9 (C-5): deterministic cluster time
+        tradeEntry.clusterTimestamp = event.getTimestamp(); // v9: deterministic cluster time
         tradeExecutionBuffer.add(tradeEntry);
 
         // Capture book version for correlation (read from both books)
@@ -644,7 +644,7 @@ public class MarketPublisher implements MarketEventHandler {
         entry.statusSeq = seq;
         entry.rejectReason = event.getRejectReason();
         entry.egressSeq = event.getEgressSeq();
-        entry.clusterTimestamp = event.getTimestamp(); // v9 (C-5): deterministic cluster time
+        entry.clusterTimestamp = event.getTimestamp(); // v9: deterministic cluster time
         orderStatusBuffer.add(entry);
     }
 
@@ -705,7 +705,7 @@ public class MarketPublisher implements MarketEventHandler {
         int bidCount = engine.getTopBidCount();
         int askCount = engine.getTopAskCount();
 
-        // RC2 S13 W-ME2 (contract 8.2, F-S13-1): an emptied book is published. Before, an empty book
+        // An emptied book is published. Before, an empty book
         // returned here with no frame, also on a resnapshot, so every consumer kept the last levels of a
         // book whose last bid and ask had gone. Now, with both sides empty:
         //  - right after a generation reset (nothing sent yet) and with a known state (book version > 0):
@@ -713,7 +713,7 @@ public class MarketPublisher implements MarketEventHandler {
         //  - after a non-empty published state: the BookDelta of the diff (one DELETE per vanished level);
         //  - otherwise silent, as before: an empty published state that stays empty, and any empty book with
         //    book version 0 (never touched since this node started). The version guard keeps a node whose
-        //    top is not yet known (a restore without W-ME3) from blanking a real book at every consumer.
+        //    top is not yet known (a restore without the restored-book republish) from blanking a real book at every consumer.
         if (bidCount == 0 && askCount == 0) {
             final boolean known = !emptyBookVersionGuard || engine.getCollectedBookVersion() > 0;
             final boolean shows = !sentInitialSnapshot || lastBidCount + lastAskCount > 0;
@@ -1015,7 +1015,7 @@ public class MarketPublisher implements MarketEventHandler {
                 .statusSeq(entry.statusSeq)
                 .rejectReason((short) entry.rejectReason)
                 .egressSeq(entry.egressSeq)
-                .clusterTimestamp(entry.clusterTimestamp); // v9 (C-5)
+                .clusterTimestamp(entry.clusterTimestamp); // v9: deterministic cluster time
         }
 
         return MessageHeaderEncoder.ENCODED_LENGTH + orderStatusBatchEncoder.encodedLength();
@@ -1059,7 +1059,7 @@ public class MarketPublisher implements MarketEventHandler {
                 .takerOmsOrderId(entry.takerOmsOrderId)
                 .makerOmsOrderId(entry.makerOmsOrderId)
                 .egressSeq(entry.egressSeq)
-                .clusterTimestamp(entry.clusterTimestamp); // v9 (C-5)
+                .clusterTimestamp(entry.clusterTimestamp); // v9: deterministic cluster time
         }
 
         return MessageHeaderEncoder.ENCODED_LENGTH + tradeExecutionBatchEncoder.encodedLength();

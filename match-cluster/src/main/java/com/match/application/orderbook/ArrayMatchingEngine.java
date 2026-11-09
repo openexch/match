@@ -29,7 +29,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     // Prod cap on matches generated per command: bounds per-command work on the single consensus
     // thread. A hardcoded deterministic constant, NEVER an env var — a divergent cap between replicas
     // would fork the state machine. Tests inject a small cap via the package-private constructor.
-    public static final int MAX_MATCHES_PER_ORDER = 10_000; // public since slice C: the adopt cross-check compares it as the node-effective cap
+    public static final int MAX_MATCHES_PER_ORDER = 10_000; // public since EngineConfig: the adopt cross-check compares it as the node-effective cap
     private static final int MATCH_FIELDS = 5; // makerOrderId, makerUserId, price, quantity, makerFilled
 
     private final ArrayOrderBook askBook;
@@ -52,7 +52,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     // remaining (i.e. the taker was terminated at the cap). Reset at the start of each order.
     private boolean matchLimitReached;
 
-    // RC2 S5 (contract section 4): the current market buy is bounded by its quantity.
+    // The current market buy is bounded by its quantity.
     private boolean buyBounded;
 
     public ArrayMatchingEngine(long basePrice, long maxPrice, long tickSize, int capacity) {
@@ -62,7 +62,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     /**
      * Construct with an explicit per-order match cap. Two callers: tests exercising the
      * cap-termination path (match#93) with a handful of orders instead of 10k+, and — since
-     * slice C — config-mode engines passing the LOG-REPLICATED cap from EngineConfig (replicated
+     * EngineConfig — config-mode engines passing the LOG-REPLICATED cap from EngineConfig (replicated
      * via the cluster log, so identical on every replica; the determinism argument that forbids
      * env-derived caps does not apply to logged ones). Legacy (env-mode) engines always go
      * through the 4-arg constructor above, which pins the compiled-in prod cap.
@@ -113,7 +113,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
         return matchCount;
     }
 
-    /** RC2 S5 (contract 3.3): the sweep of {@link #processLimitOrder}, then no rest. */
+    /** The sweep of {@link #processLimitOrder}, then no rest. */
     public int processLimitOrderNoRest(long orderId, long userId, boolean isBuy, long price, long quantity) {
         sweepLimit(isBuy, price, quantity);
         if (takerRemainingQty > 0) {
@@ -145,7 +145,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     }
 
     /**
-     * RC2 S5 (contract 3.3, 3.5): the FOK pre-walk. The crossing makers in sweep order (levels
+     * The FOK pre-walk. The crossing makers in sweep order (levels
      * best-first with the sweep's break rule, FIFO within a level, every chained slot is live on the
      * array book), at most {@code maxMatchesPerOrder} of them: true at the first maker whose
      * cumulative quantity reaches {@code quantity}, false when it would take maker cap + 1 or the
@@ -184,7 +184,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
 
         if (isBuy) {
             takerRemainingBudget = budget;
-            // RC2 S5 (contract section 4): quantity > 0 bounds the buy (behaviour 2); quantity <= 0
+            // Quantity > 0 bounds the buy (behaviour 2); quantity <= 0
             // is the behaviour-1 budget-only sweep, structurally unchanged (the bound never reads).
             buyBounded = quantity > 0;
             if (buyBounded) {
@@ -246,7 +246,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
 
     /** Match a market buy (budget-based) against orders at one level. */
     private void matchMarketBuyAtLevel(ArrayOrderBook book, int node, long price) {
-        // RC2 S5 FIX-6: with a bound, the cap check below is reached only while quantity remains.
+        // With a bound, the cap check below is reached only while quantity remains.
         while (takerRemainingBudget > 0 && (!buyBounded || takerRemainingQty > 0) && book.getOrderCount(node) > 0) {
             if (matchCount >= maxMatchesPerOrder) {
                 // match#93: cap fired mid-sweep with crossing liquidity still here — terminate at cap.
@@ -522,7 +522,7 @@ public final class ArrayMatchingEngine implements MatchingEngine {
     }
 
     /**
-     * RC2 S13 W-ME3: reset the dirty gate (as {@link #clear()} does) and publish. A plain
+     * Reset the dirty gate (as {@link #clear()} does) and publish. A plain
      * {@link #publishTopOfBook()} is gated on the side versions, so it could skip a restored book whose
      * side versions happen to equal the last published ones, and it never re-stamps the book version.
      */

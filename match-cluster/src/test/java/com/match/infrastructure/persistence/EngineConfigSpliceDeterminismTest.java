@@ -15,7 +15,7 @@ import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S2 contract section 7: snapshot splice equality A + B == A + SNAPSHOT + B on a behaviour-2
+ * Snapshot splice equality A + B == A + SNAPSHOT + B on a behaviour-2
  * log. The restored replica must emit the same journal frames byte for byte (meEpoch G, the
  * second BUMP at its dense journalSeq, the INVALID record), end with the same snapshot bytes, the same
  * recorded config (the four included), the same {@code MeIdentity} and the same decisions.
@@ -127,7 +127,7 @@ public class EngineConfigSpliceDeterminismTest {
         }
         final List<byte[]> r5 = BehaviourTwoHarness.ofTemplate(b, 5);
         assertEquals(1, r5.size());
-        // RC2 S3: dense seqs, so the second BUMP is 1 + every frame journaled before it.
+        // Dense seqs, so the second BUMP is 1 + every frame journaled before it.
         int framesBeforeSecondBump = 0;
         for (int i = 0; i < 9; i++) {
             framesBeforeSecondBump += s.framesPerEntry.get(i).size();

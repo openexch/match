@@ -12,11 +12,11 @@ import java.util.List;
 
 import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
-import static com.match.infrastructure.persistence.S5Frames.*;
+import static com.match.infrastructure.persistence.TifFrames.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S5 contract section 6: the journal records of every behaviour-2 TIF, market and amend
+ * The journal records of every behaviour-2 TIF, market and amend
  * outcome, in order (trade, maker FILLED when consumed, taker terminal, record 3), the terminal
  * status and reason, record 3 (result, status, orderId, reason, oldCancelled, ledgerSize) and the
  * dense journalSeq (+1 per record). The fence row is {@link FokDivergenceFenceTest}.
@@ -27,7 +27,7 @@ public class TifJournalRecordTest {
     private static void assertRow(String row, Run r, byte[] frame, List<String> records, int result, int status,
                                   int reason, int oldCancelled, Long orderId, boolean recorded) {
         final long seq0 = r.engine().meIdentity().nextJournalSeq();
-        final int ledger0 = S4Probe.ledgerSize(r.engine());
+        final int ledger0 = DurableLedgerProbe.ledgerSize(r.engine());
         final List<byte[]> f = r.send(frame);
         final List<String> actual = new ArrayList<>();
         final CommandOutcomeDecoder o = BehaviourTwoHarness.record3(f.get(f.size() - 1));
@@ -66,7 +66,7 @@ public class TifJournalRecordTest {
     @Test
     public void everyRowOfSection6() {
         final int A = DurableCommandOutcome.APPLIED, R = DurableCommandOutcome.REJECTED, I = DurableCommandOutcome.INVALID;
-        try (Run r = freshWith(S5Frames.config(false, 2, 0))) {
+        try (Run r = freshWith(TifFrames.config(false, 2, 0))) {
             long h = 1;
             // IOC, full fill (a consumed maker gets its FILLED after its trade).
             rest(r, h++, 100, ASK, 60_000, 1);
@@ -120,7 +120,7 @@ public class TifJournalRecordTest {
             assertEquals(FILLED, outcome(r.send(market(h++, 0, 200, ASK, 3, 0, GTC))).status());
             assertRow("UPDATE reduced", r, amendRaw(lh, 1, 300, leg, BID, 59_001, 8, LIMIT, GTC, fp(10)), List.of(), A, NEW,
                     0, 1, null, true);
-            final long leg2 = S5Frames.book(r).getBidOrders()[0];
+            final long leg2 = TifFrames.book(r).getBidOrders()[0];
             // UPDATE, no remainder: target 8, F0 = 3 at the mint (expected 8 - 3 = 5), the user amends to 4
             // (quantity 4 - 3 = 1); a taker fills 3 more in the window (leg 2): reduced 1 - 3 < 0.
             assertEquals(FILLED, outcome(r.send(market(h++, 0, 200, ASK, 3, 0, GTC))).status());
@@ -140,7 +140,7 @@ public class TifJournalRecordTest {
         }
         // UPDATE, reduced leg that could not rest (direct, a level of 1 already full): the new
         // leg's REJECTED terminal, then record 3 REJECTED oldCancelled 1.
-        try (Run r = freshWith(S5Frames.config(true, 100, 1))) {
+        try (Run r = freshWith(TifFrames.config(true, 100, 1))) {
             rest(r, 1, 100, BID, 58_000, 1);
             final long leg = rest(r, 2, 101, BID, 57_000, 10);
             assertEquals(FILLED, outcome(r.send(market(3, 0, 200, ASK, 4, 0, GTC))).status()); // 1 @58000, 3 of leg

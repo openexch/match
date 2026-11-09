@@ -25,7 +25,7 @@ import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S6 contract 3.2 (rows R0-R7) and 9.2: the ME session authority. The class is the replicated principal's
+ * Rows R0-R7: the ME session authority. The class is the replicated principal's
  * code; a refused frame mutates nothing, journals nothing (no INVALID either), consumes no journalSeq and sends
  * no egress. In-process: the real demuxer, engine, journal and state machine (BehaviourTwoLog.Replica).
  */
@@ -75,7 +75,7 @@ public class MeSessionAuthorityTest {
             assertEquals(1, r.r.demuxer.unauthorizedRejectCount());
             assertArrayEquals("ledger (inflight, tombstones), books and generators unchanged", before, r.r.snapshot());
             assertEquals("no journalSeq consumed", seq, nextJournalSeq(r.engine()));
-            assertEquals(0, S4Probe.ranges(r.engine()).length / 2);
+            assertEquals(0, DurableLedgerProbe.ranges(r.engine()).length / 2);
             // the same frame from FORWARDER is the effective release
             final var rel = only4(sendAs(r, FORWARDER, release));
             assertEquals(R_APPLIED, entries(rel).get(0)[0]);
@@ -108,7 +108,7 @@ public class MeSessionAuthorityTest {
             assertTrue(sendAs(r, GATEWAY, above).isEmpty());
             assertEquals(0, r.r.demuxer.aboveCeilingInvalidCount());
             assertEquals(2, r.r.demuxer.unauthorizedRejectCount());
-            // the FORWARDER's identical frame is journaled INVALID (S2 section 6)
+            // the FORWARDER's identical frame is journaled INVALID
             assertEquals(DurableCommandOutcome.INVALID, only3(sendAs(r, FORWARDER, above)).result());
             assertEquals(1, r.r.demuxer.aboveCeilingInvalidCount());
         }
@@ -236,7 +236,7 @@ public class MeSessionAuthorityTest {
 
     /**
      * One R0 case: a class-0 frame (or SessionOpen) on a LEADER service with a cluster attached. "Nothing applied"
-     * is checked before the exception type, so on a base that applies the frame the RED says so (review FIX-1).
+     * is checked before the exception type, so on a base that applies the frame the RED says so.
      */
     private static void assertPrincipalLessHalts(final ClientSession session, final boolean sessionOpen) throws Exception {
         final AppClusteredService s = MeStubCluster.attach(new AppClusteredService(), new MeStubCluster());

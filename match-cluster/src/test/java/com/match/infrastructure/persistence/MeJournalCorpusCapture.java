@@ -25,29 +25,29 @@ import static com.match.infrastructure.persistence.DurableLedgerV2Test.cancel;
 import static com.match.infrastructure.persistence.DurableLedgerV2Test.order;
 import static com.match.infrastructure.persistence.DurableLedgerV2Test.releaseFrame;
 import static com.match.infrastructure.persistence.DurableLedgerV2Test.upTo;
-import static com.match.infrastructure.persistence.S5Frames.ASK;
-import static com.match.infrastructure.persistence.S5Frames.BID;
-import static com.match.infrastructure.persistence.S5Frames.FOK;
-import static com.match.infrastructure.persistence.S5Frames.GTC;
-import static com.match.infrastructure.persistence.S5Frames.IOC;
-import static com.match.infrastructure.persistence.S5Frames.amendRaw;
-import static com.match.infrastructure.persistence.S5Frames.limit;
-import static com.match.infrastructure.persistence.S5Frames.market;
+import static com.match.infrastructure.persistence.TifFrames.ASK;
+import static com.match.infrastructure.persistence.TifFrames.BID;
+import static com.match.infrastructure.persistence.TifFrames.FOK;
+import static com.match.infrastructure.persistence.TifFrames.GTC;
+import static com.match.infrastructure.persistence.TifFrames.IOC;
+import static com.match.infrastructure.persistence.TifFrames.amendRaw;
+import static com.match.infrastructure.persistence.TifFrames.limit;
+import static com.match.infrastructure.persistence.TifFrames.market;
 
 /**
- * RC2 S9h section 8 (decision D-S9h-2, W6): the E1 scenario corpus, captured once from J-ME3 ({@link MeClusterHarness}:
+ * The E1 scenario corpus, captured once from the in-JVM cluster harness ({@link MeClusterHarness}:
  * three ME members in one JVM, each member's settlement-journal ring drained into its own frame list). Every scenario
- * boots a fresh three-member cluster, binds it with a behaviour-2 FRESH EngineConfig and drives the commands of
- * {@code cpp:} 3.2 E1 through a FORWARDER session; the output per scenario is {@code member<k>.fjc} (k = 0..2) and a
+ * boots a fresh three-member cluster, binds it with a behaviour-2 FRESH EngineConfig and drives the E1 commands
+ * through a FORWARDER session; the output per scenario is {@code member<k>.fjc} (k = 0..2) and a
  * {@code MANIFEST}, all under one {@code SHA256SUMS}.
  *
- * <p>Recording boundaries (review N-6): the harness drains rings, not Archive recordings, so this tool synthesises them:
+ * <p>Recording boundaries: the harness drains rings, not Archive recordings, so this tool synthesises them:
  * an FJC {@code RECORDING <ordinal>} marker at every start of a member (ordinal = the member's start count) and a
  * {@code STOP} at every close (the ring is drained at close, so the STOP follows the member's last frame). A member
  * restart therefore maps to STOP, RECORDING. The one non-ME frame (a schema 3 v1 JournalTrade, scenario
  * {@code schema3_record}) is appended to member 0's last recording before its STOP and named in the MANIFEST.</p>
  *
- * <p>J-ME3 runs are not byte-reproducible (cluster time, log positions), so the corpus is a recording, not a regenerated
+ * <p>Harness runs are not byte-reproducible (cluster time, log positions), so the corpus is a recording, not a regenerated
  * fixture: {@code MeJournalCorpusCaptureTest} checks the SUMS and the MANIFEST's structural claims, never byte equality
  * with a fresh capture. Usage: {@code MeJournalCorpusCaptureTest#capture} with {@code -Dme.e1.capture.dir=<dir>} and
  * optionally {@code -Dme.e1.capture.scenarios=a,b} (a subset per JVM).</p>
@@ -230,7 +230,7 @@ final class MeJournalCorpusCapture {
             }
             case "fresh_config" -> r.command(limit(1, 0, 100, ASK, 60_000, 1, GTC));
             case "dark_node_hole" -> {
-                // the drill A shape of MeJournalHoleAfterSnapshotDrillTest (S3 9, critic K8): a follower's journal is
+                // the drill A shape of MeJournalHoleAfterSnapshotDrillTest: a follower's journal is
                 // held (its ring no longer drained) while load flows, the cluster snapshots at P, the follower is closed
                 // with its undrained ring discarded, then restarted: it restores at P and journals only above P
                 r.command(limit(1, 0, 100, ASK, 60_000, 1, GTC));
@@ -255,7 +255,7 @@ final class MeJournalCorpusCapture {
                 r.command(limit(5, 0, 100, ASK, 62_000, 1, GTC));
             }
             case "maker_sweep" -> {
-                // review NOTE-5 (a 62 in E1): one taker against three resting makers and one taker partially filling a
+                // (a 62 in E1): one taker against three resting makers and one taker partially filling a
                 // larger maker; records as the ME journals them (whether two trades are ever adjacent is the question)
                 r.command(limit(1, 0, 100, ASK, 60_000, 1, GTC));
                 r.command(limit(2, 0, 101, ASK, 60_000, 1, GTC));
@@ -266,7 +266,7 @@ final class MeJournalCorpusCapture {
                 r.command(market(7, 0, 202, BID, 2, 1_000_000, GTC));
             }
             case "restart_rejournal" -> {
-                // review NOTE-6: the realistic K8 shape (S9a 1.6): a follower closed and restarted with no snapshot
+                // The realistic restart shape: a follower closed and restarted with no snapshot
                 // re-journals from seq 1 in a new recording, overlapping what it had already delivered
                 r.command(limit(1, 0, 100, ASK, 60_000, 1, GTC));
                 r.command(limit(2, 0, 200, BID, 60_000, 1, GTC));

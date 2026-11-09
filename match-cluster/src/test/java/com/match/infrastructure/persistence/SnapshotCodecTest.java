@@ -89,8 +89,8 @@ public class SnapshotCodecTest {
     }
 
     /**
-     * RC2 S17 W12 (R-ME-1, M1): the envelope is mandatory. An image whose first long is not the durable magic
-     * (the v0.5.0-beta tag's raw layout, byte-identical in shape to an S16-era bare RC2 image) is refused at the
+     * The envelope is mandatory. An image whose first long is not the durable magic
+     * (the v0.5.0-beta tag's raw layout, byte-identical in shape to an earlier bare image) is refused at the
      * codec, before a single field is read from it.
      */
     @Test
@@ -130,8 +130,8 @@ public class SnapshotCodecTest {
         bad.putInt(p, 0);   p += 4;   // numAskOrders = 0
         bad.putLong(p, 0);  p += 8;   // timerCorrelationId
         bad.putInt(p, 0);   p += 4;   // omsMapCount = 0
-        // RC2 S17 W12: framed as the RC2 writer frames it (empty v1 ledger, envelope 1).
-        final byte[] image = S2Services.envelopeV1(Arrays.copyOf(bad.byteArray(), p));
+        // Framed as the current writer frames it (empty v1 ledger, envelope 1).
+        final byte[] image = LaunchModeServices.envelopeV1(Arrays.copyOf(bad.byteArray(), p));
 
         Engine e = new Engine();
         SnapshotCodec.Decoded d = SnapshotCodec.deserialize(new org.agrona.concurrent.UnsafeBuffer(image), 0,
@@ -143,8 +143,8 @@ public class SnapshotCodecTest {
     }
 
     /**
-     * A pre-match#25 snapshot without the trailing timer counter used to decode; RC2 S17 W12 (R-ME-1): it is a
-     * bare image and is refused like every other magic-less one (no RC2 writer produces it).
+     * A pre-match#25 snapshot without the trailing timer counter used to decode; it is a
+     * bare image and is refused like every other magic-less one (no current writer produces it).
      */
     @Test
     public void bareSnapshotWithoutTrailingTimerIsRefused() {
@@ -161,11 +161,11 @@ public class SnapshotCodecTest {
         assertTrue(refused.getMessage(), refused.getMessage().startsWith("snapshot envelope magic missing"));
     }
 
-    /** A-1: the orderId -> omsOrderId correlation map round-trips exactly and stays byte-deterministic. */
+    /** The orderId -> omsOrderId correlation map round-trips exactly and stays byte-deterministic. */
     @Test
     public void omsOrderIdMapRoundTripsExactly() {
         Engine orig = varied();
-        // A-1 added this map to the snapshot. Populate it with entries whose natural hash-map
+        // v9 added this map to the snapshot. Populate it with entries whose natural hash-map
         // iteration order is NOT ascending, so the round-trip proves both fidelity and the sort.
         long[][] pairs = {{17, 1700}, {3, 300}, {42, 4200}, {8, 800}, {25, 2500}, {1, 100}};
         for (long[] p : pairs) {
@@ -192,7 +192,7 @@ public class SnapshotCodecTest {
     }
 
     /**
-     * A-1 determinism: the oms map is written ASCENDING by orderId, independent of insertion order.
+     * Determinism: the oms map is written ASCENDING by orderId, independent of insertion order.
      * {@link Long2LongHashMap} iterates in slot order (hash-derived), not sorted, so without the sort
      * the serialized orderIds would follow that scrambled order and this fails — which is exactly the
      * cross-replica snapshot fork the sort prevents.
@@ -211,13 +211,13 @@ public class SnapshotCodecTest {
         long[] serializedIds = extractOmsMapOrderIds(buf);
         long[] expected = insertOrder.clone();
         Arrays.sort(expected);
-        assertArrayEquals("A-1: oms map orderIds must be written ascending (cross-replica determinism)",
+        assertArrayEquals("oms map orderIds must be written ascending (cross-replica determinism)",
                 expected, serializedIds);
     }
 
     /** Walk the snapshot byte format and return the oms-map section's orderIds in wire order. */
     private static long[] extractOmsMapOrderIds(ExpandableArrayBuffer b) {
-        int pos = 20; // RC2 S17 W12: the envelope (magic, version, length, CRC32C) is always there
+        int pos = 20; // The envelope (magic, version, length, CRC32C) is always there
         pos += 8; // orderIdGenerator
         pos += 8; // tradeIdGenerator
         int numMarkets = b.getInt(pos); pos += 4;

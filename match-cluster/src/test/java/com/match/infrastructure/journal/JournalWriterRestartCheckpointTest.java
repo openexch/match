@@ -23,10 +23,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 /**
- * RC2 S1 review (independent verifier, check 5): the retention watermark is the egressSeq the
+ * The retention watermark is the egressSeq the
  * writer reads out of each frame at {@link JournalWriterAgent#EGRESS_SEQ_OFFSET}. Schema 4 moved
- * that field from frame offset 8 to 24; a stale offset would checkpoint {@code journalSeq} (0 in
- * S1) and {@code JournalRetention} would then purge every segment. This pins the checkpointed
+ * that field from frame offset 8 to 24; a stale offset would checkpoint {@code journalSeq} (0 at
+ * behaviour 1) and {@code JournalRetention} would then purge every segment. This pins the checkpointed
  * value on the first entry of a fresh writer AND on the first entry after a writer RESTART (a
  * new agent, a reopened checkpoint file, a new recorded publication), which no other test covers.
  *

@@ -3,7 +3,7 @@ package com.match.infrastructure.persistence;
 
 import com.match.application.engine.BehaviourTwoHarness;
 import com.match.application.engine.Engine;
-import com.match.application.orderbook.S5Probe;
+import com.match.application.orderbook.OrderBookProbe;
 import org.agrona.concurrent.UnsafeBuffer;
 import org.agrona.concurrent.ringbuffer.OneToOneRingBuffer;
 import org.junit.Test;
@@ -19,15 +19,15 @@ import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S4 contract section 8: no allocation per template-9 or template-10 frame on the service
+ * No allocation per template-9 or template-10 frame on the service
  * thread at behaviour 2, after warm-up. The frames go through {@link SbeDemuxer#dispatch} into an
  * engine with a real {@code MatchEventPublisher} (egress rings with no-op handlers) and a real
  * {@code SettlementJournal} whose ring another thread drains, on the array and the direct book.
  * The measured window mixes resting creates, cancels, amends, suppressed duplicates, RELEASED,
  * INVALID, CAPACITY and release frames (APPLIED and all-NOOP); the warm-up runs the same mix, so
  * every counted cause fires there first, and each cause advances fewer than 999 times in the window
- * (no rate-limited log line is due, section 8). RC2 S5 (section 7): each cycle also runs
- * {@link #S5_PER_CYCLE} S5 sub-cycles (IOC filled and no match, FOK infeasible and filled, a bounded
+ * (no rate-limited log line is due). Each cycle also runs
+ * {@link #TIF_PER_CYCLE} TIF / amend sub-cycles (IOC filled and no match, FOK infeasible and filled, a bounded
  * market buy, a reduced amend and a no-remainder amend, then their ORDER release), about 1k of
  * each in the window.
  */
@@ -37,7 +37,7 @@ public class ZeroAllocDurablePathTest {
     private static final int ORDERS_PER_CYCLE = 16;
     private static final int CYCLES = 175; // ~58 commands + 6 release frames per cycle: ~10k + ~1k
     private static final int WARMUP_ROUNDS = 20;
-    private static final int S5_PER_CYCLE = 6;
+    private static final int TIF_PER_CYCLE = 6;
 
     /** Pre-built frames of the whole run, with the counts the run must produce. */
     private static final class Plan {
@@ -51,19 +51,19 @@ public class ZeroAllocDurablePathTest {
     }
 
     /**
-     * RC2 S5: one sub-cycle on an empty book (8 recorded commands, then one ORDER release frame that
+     * One sub-cycle on an empty book (8 recorded commands, then one ORDER release frame that
      * empties the ledger again). {@code x} is the predicted orderId of its first create.
      */
     private static void s5SubCycle(Plan p, List<byte[]> f, long x) {
         final long m = p.s5H;
-        f.add(S5Frames.limit(m, 0, 100, 1, 60_000, 10, S5Frames.GTC));                 // x rests 10
-        f.add(S5Frames.limit(m + 1, 0, 200, 0, 60_000, 1, S5Frames.IOC));              // x+1 IOC filled
-        f.add(S5Frames.limit(m + 2, 0, 200, 0, 59_000, 2, S5Frames.IOC));              // x+2 IOC no match
-        f.add(S5Frames.limit(m + 3, 0, 200, 0, 60_000, 100, S5Frames.FOK));            // x+3 FOK infeasible
-        f.add(S5Frames.limit(m + 4, 0, 200, 0, 60_000, 1, S5Frames.FOK));              // x+4 FOK filled
-        f.add(S5Frames.market(m + 5, 0, 200, 0, 1, 120_000, S5Frames.GTC));            // x+5 bounded market buy
-        f.add(S5Frames.amendRaw(m, 1, 100, x, 1, 60_000, 8, LIMIT, S5Frames.GTC, fp(10)));     // x+6 rests 5
-        f.add(S5Frames.amendRaw(m, 2, 100, x + 6, 1, 60_000, 5, LIMIT, S5Frames.GTC, fp(10))); // no remainder
+        f.add(TifFrames.limit(m, 0, 100, 1, 60_000, 10, TifFrames.GTC));                 // x rests 10
+        f.add(TifFrames.limit(m + 1, 0, 200, 0, 60_000, 1, TifFrames.IOC));              // x+1 IOC filled
+        f.add(TifFrames.limit(m + 2, 0, 200, 0, 59_000, 2, TifFrames.IOC));              // x+2 IOC no match
+        f.add(TifFrames.limit(m + 3, 0, 200, 0, 60_000, 100, TifFrames.FOK));            // x+3 FOK infeasible
+        f.add(TifFrames.limit(m + 4, 0, 200, 0, 60_000, 1, TifFrames.FOK));              // x+4 FOK filled
+        f.add(TifFrames.market(m + 5, 0, 200, 0, 1, 120_000, TifFrames.GTC));            // x+5 bounded market buy
+        f.add(TifFrames.amendRaw(m, 1, 100, x, 1, 60_000, 8, LIMIT, TifFrames.GTC, fp(10)));     // x+6 rests 5
+        f.add(TifFrames.amendRaw(m, 2, 100, x + 6, 1, 60_000, 5, LIMIT, TifFrames.GTC, fp(10))); // no remainder
         f.add(releaseFrame(m, order(m), order(m + 1), order(m + 2), order(m + 3), order(m + 4), order(m + 5)));
         p.commands += 8;
         p.releaseFrames += 1;
@@ -98,7 +98,7 @@ public class ZeroAllocDurablePathTest {
             f.add(releaseFrame(h0, order(h0 + k)));                                  // all-NOOP frame
         }
         p.releaseFrames += 6;
-        for (int k = 0; k < S5_PER_CYCLE; k++) {
+        for (int k = 0; k < TIF_PER_CYCLE; k++) {
             s5SubCycle(p, f, id0 + 2L * ORDERS_PER_CYCLE + 7L * k);
         }
         for (int j = 0; j < 4; j++) {
@@ -109,15 +109,15 @@ public class ZeroAllocDurablePathTest {
             p.frames.add(new UnsafeBuffer(b));
         }
         p.nextH += ORDERS_PER_CYCLE;
-        p.nextOrderId += 2L * ORDERS_PER_CYCLE + 7L * S5_PER_CYCLE;
+        p.nextOrderId += 2L * ORDERS_PER_CYCLE + 7L * TIF_PER_CYCLE;
     }
 
     private static long[] causes(Engine e, SbeDemuxer d) {
-        return new long[]{S4Probe.capacity(e), S4Probe.invalidOwnerId(e), S4Probe.released(e),
-                S4Probe.releaseApplied(e), S4Probe.releaseNoop(e), S4Probe.releaseNoopFrames(e),
+        return new long[]{DurableLedgerProbe.capacity(e), DurableLedgerProbe.invalidOwnerId(e), DurableLedgerProbe.released(e),
+                DurableLedgerProbe.releaseApplied(e), DurableLedgerProbe.releaseNoop(e), DurableLedgerProbe.releaseNoopFrames(e),
                 e.suppressedDuplicateCount(), d.decodeRejectCount(), d.schemaRejectCount(), d.applyErrorCount(),
-                S5Probe.ioc(e), S5Probe.fok(e), S5Probe.fokUnfillable(e), S5Probe.amendReduced(e),
-                S5Probe.amendNoRemainder(e)};
+                OrderBookProbe.ioc(e), OrderBookProbe.fok(e), OrderBookProbe.fokUnfillable(e), OrderBookProbe.amendReduced(e),
+                OrderBookProbe.amendNoRemainder(e)};
     }
 
     private static void run(byte[] freshConfig, String name) throws Exception {
@@ -138,7 +138,7 @@ public class ZeroAllocDurablePathTest {
                         Thread.onSpinWait();
                     }
                 }
-            }, "s4-journal-drainer");
+            }, "ledger-journal-drainer");
             drainer.setDaemon(true);
             drainer.start();
             try {
@@ -148,7 +148,7 @@ public class ZeroAllocDurablePathTest {
                 demuxer.dispatchTrusted(fresh, 0, fresh.capacity(), 1_000L);
                 assertEquals(name + ": FRESH", 1, h.decisions.size());
 
-                // Warm-up: the same mix, WARMUP_ROUNDS x the window (well above the contract's 10k
+                // Warm-up: the same mix, WARMUP_ROUNDS x the window (well above the 10k
                 // commands), so every counted cause fires first and every method of the path is
                 // C2-compiled before the window. HotSpot resolves a method's string constants on
                 // the REQUESTING thread when it queues that method for C2 (CompileBroker), which
@@ -171,11 +171,11 @@ public class ZeroAllocDurablePathTest {
                 for (UnsafeBuffer b : warm.frames) {
                     position += 128;
                     h.engine.setCurrentLogPosition(position);
-                    // RC2 S6: the FORWARDER class check is on the measured path (R1-R4, zero allocation).
+                    // The FORWARDER class check is on the measured path (R1-R4, zero allocation).
                     demuxer.dispatch(SbeDemuxer.CLASS_FORWARDER, 3L, b, 0, b.capacity(), ts++);
                 }
                 final long warmApplyErrors = demuxer.applyErrorCount();
-                final int warmLedger = S4Probe.ledgerSize(h.engine);
+                final int warmLedger = DurableLedgerProbe.ledgerSize(h.engine);
                 final long[] before = causes(h.engine, demuxer);
 
                 final List<UnsafeBuffer> frames = measured.frames;
@@ -183,7 +183,7 @@ public class ZeroAllocDurablePathTest {
                 // Calibration: an empty window (the MXBean read itself).
                 final long c0 = mx.getCurrentThreadAllocatedBytes();
                 final long calibration = mx.getCurrentThreadAllocatedBytes() - c0;
-                if (System.getenv("S4_ALLOC_BISECT") != null) {
+                if (System.getenv("ZERO_ALLOC_BISECT") != null) {
                     bisect(mx, h, demuxer, frames, position, ts);
                     return;
                 }
@@ -192,13 +192,13 @@ public class ZeroAllocDurablePathTest {
                     final UnsafeBuffer b = frames.get(i);
                     position += 128;
                     h.engine.setCurrentLogPosition(position);
-                    // RC2 S6: the FORWARDER class check is on the measured path (R1-R4, zero allocation).
+                    // The FORWARDER class check is on the measured path (R1-R4, zero allocation).
                     demuxer.dispatch(SbeDemuxer.CLASS_FORWARDER, 3L, b, 0, b.capacity(), ts++);
                 }
                 final long allocated = mx.getCurrentThreadAllocatedBytes() - a0 - calibration;
                 final long[] after = causes(h.engine, demuxer);
 
-                System.out.println("[S4] " + name + ": " + measured.commands + " durable commands + "
+                System.out.println("[LEDGER] " + name + ": " + measured.commands + " durable commands + "
                         + measured.releaseFrames + " release frames, allocated " + allocated + " B");
                 assertEquals(name + ": zero allocation on the service thread", 0L, allocated);
                 assertEquals(name + ": warm-up applies cleanly", 0, warmApplyErrors);
@@ -208,19 +208,19 @@ public class ZeroAllocDurablePathTest {
                 assertEquals(name + ": CAPACITY per cycle", CYCLES, after[0] - before[0]);
                 assertEquals(name + ": INVALID per cycle", CYCLES, after[1] - before[1]);
                 assertEquals(name + ": RELEASED", 4L * CYCLES, after[2] - before[2]);
-                assertEquals(name + ": APPLIED release entries", (16L + 6L * S5_PER_CYCLE) * CYCLES, after[3] - before[3]);
-                final long s5 = (long) S5_PER_CYCLE * CYCLES;
-                assertEquals(name + ": IOC (filled and no match)", 2 * s5, after[10] - before[10]);
-                assertEquals(name + ": FOK (both outcomes)", 2 * s5, after[11] - before[11]);
-                assertEquals(name + ": FOK infeasible", s5, after[12] - before[12]);
-                assertEquals(name + ": reduced amends", s5, after[13] - before[13]);
-                assertEquals(name + ": no-remainder amends", s5, after[14] - before[14]);
+                assertEquals(name + ": APPLIED release entries", (16L + 6L * TIF_PER_CYCLE) * CYCLES, after[3] - before[3]);
+                final long tifCases = (long) TIF_PER_CYCLE * CYCLES;
+                assertEquals(name + ": IOC (filled and no match)", 2 * tifCases, after[10] - before[10]);
+                assertEquals(name + ": FOK (both outcomes)", 2 * tifCases, after[11] - before[11]);
+                assertEquals(name + ": FOK infeasible", tifCases, after[12] - before[12]);
+                assertEquals(name + ": reduced amends", tifCases, after[13] - before[13]);
+                assertEquals(name + ": no-remainder amends", tifCases, after[14] - before[14]);
                 assertEquals(name + ": NOOP release entries", 2L * CYCLES, after[4] - before[4]);
                 assertEquals(name + ": all-NOOP frames", 2L * CYCLES, after[5] - before[5]);
                 assertEquals(name + ": suppressed duplicates", 4L * CYCLES, after[6] - before[6]);
                 assertEquals(name + ": no decode, schema or apply fault", 0,
                         (after[7] - before[7]) + (after[8] - before[8]) + (after[9] - before[9]));
-                // The reject causes (the counters of section 6.4 that a refusal bumps, and the
+                // The reject causes (the ledger v2 counters that a refusal bumps, and the
                 // demuxer's logged drops): fewer than 999 each in the window, so no rate-limited log
                 // line (first and every 1000th) is due inside it. Indices 3-5 count release
                 // outcomes, not causes, and log nothing.
@@ -228,7 +228,7 @@ public class ZeroAllocDurablePathTest {
                     assertTrue(name + ": cause " + k + " advanced fewer than 999 times (no log line due)",
                             after[k] - before[k] < 999);
                 }
-                assertEquals(name + ": the window ends with an empty ledger", 0, S4Probe.ledgerSize(h.engine));
+                assertEquals(name + ": the window ends with an empty ledger", 0, DurableLedgerProbe.ledgerSize(h.engine));
             } finally {
                 stop.set(true);
                 drainer.join(10_000);
@@ -247,7 +247,7 @@ public class ZeroAllocDurablePathTest {
             demuxer.dispatchTrusted(b, 0, b.capacity(), ts + i);
             final long d = mx.getCurrentThreadAllocatedBytes() - a;
             if (d != 0) {
-                System.out.println("[S4-BISECT] frame " + i + " template " + b.getShort(2) + " allocated " + d
+                System.out.println("[ALLOC-BISECT] frame " + i + " template " + b.getShort(2) + " allocated " + d
 );
             }
         }

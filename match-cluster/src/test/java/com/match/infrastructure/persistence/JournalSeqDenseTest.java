@@ -31,17 +31,17 @@ import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S3 contract sections 4 and 7 (R-B0-1): under behaviour 2 the ME journal is one dense
+ * Under behaviour 2 the ME journal is one dense
  * journalSeq sequence from FRESH = 1, in ring order, every frame stamped with meEpoch G; the
  * suppressed terminals and the egress-only statuses consume nothing. Behaviour 1 stays at
  * journalSeq 0 / meEpoch 0, byte-equal to the frames captured at 3b95c56.
  */
 public class JournalSeqDenseTest {
 
-    /** The behaviour-1 reference frames, captured at 3b95c56 (contract W6, review NOTE-6). */
-    static final String BEHAVIOUR1_RESOURCE = "/s3/behaviour1-journal.bin";
+    /** The behaviour-1 reference frames, captured at 3b95c56. */
+    static final String BEHAVIOUR1_RESOURCE = "/behaviour1/behaviour1-journal.bin";
 
-    /** RC2 S4 (B1): core-shaped, idHigh = omsOrderId, idLow = n << 2 | kind. */
+    /** Core-shaped, idHigh = omsOrderId, idLow = n << 2 | kind. */
     private static DurableOrderIntent intent(long n, int kind, long userId, long omsOrderId, long oldOrderId,
                                              int side, double price, double qty) {
         return new DurableOrderIntent(omsOrderId, (n << 2) | kind, userId, omsOrderId, oldOrderId, FixedPoint.fromDouble(price),
@@ -179,7 +179,7 @@ public class JournalSeqDenseTest {
      * The behaviour-1 log: durable creates (rest, cross), an equal retry (re-journaled in
      * behaviour 1), a conflict, a durable replace, a legacy create crossing it, a durable taker
      * filling the maker, legacy cancels (unknown leg ack, resting leg), a durable cancel of a
-     * (RC2 S4: built with the pre-S4 commandIdHigh-17 builders, so the frames stay those of the
+     * (built with the legacy commandIdHigh-17 builders, so the frames stay those of the
      * 3b95c56 reference; behaviour 1 has no B1 rule)
      * filled leg (UNKNOWN_LEG) and a pre-cancel amend rejection.
      */
@@ -246,7 +246,7 @@ public class JournalSeqDenseTest {
     @Test
     public void behaviourOneStaysAtZero() throws IOException {
         final List<byte[]> frames = behaviourOneFrames();
-        final String capture = System.getProperty("s3.capture.behaviour1");
+        final String capture = System.getProperty("journal.capture.behaviour1");
         if (capture != null) {
             Files.createDirectories(Path.of(capture).getParent());
             Files.write(Path.of(capture), encode(frames));

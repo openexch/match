@@ -15,7 +15,7 @@ import static com.match.application.engine.EngineConfigStateMachine.Decision.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S2 review additions (S2/review.md): decision-table cases the S2 tests leave implicit —
+ * Decision-table cases the other EngineConfig tests leave implicit —
  * row 3 normalization of the four, row 5 with differing v12 values, row 4 at an unsupported
  * target, and the first-match precedence of rows 10-14 when several conditions hold at once.
  */

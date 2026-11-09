@@ -95,7 +95,7 @@ public class AeronGateway implements EgressListener, AutoCloseable {
     // Stale egress detection — force reconnect if connected but no egress for too long.
     // The leader sends a ~1s keep-warm ClusterHeartbeat, so a healthy connection never exceeds ~1-2s.
     // A multi-second gap means the egress image is stale (e.g. still bound to the OLD leader after a
-    // switchover) — recover (M6). Checked every poll tick (was: only in the 10s stats block). 10s gives
+    // switchover) — recover. Checked every poll tick (was: only in the 10s stats block). 10s gives
     // a just-elected leader / freshly-reconnected session time to start egress before we reconnect,
     // avoiding reconnect churn during the election window, while still recovering far faster than 30s.
     private volatile long lastEgressMessageMs = System.currentTimeMillis();
@@ -251,7 +251,7 @@ public class AeronGateway implements EgressListener, AutoCloseable {
             cluster = null;
         }
 
-        // RC2 S6: an S6 ME authenticates every session; the market gateway is a GATEWAY (egress only at
+        // The ME authenticates every session; the market gateway is a GATEWAY (egress only at
         // behaviour 2). Refuse to start without ME_AUTH_CREDENTIAL or with another class. The names are the
         // ME policy's (match-cluster MatchAuth.POLICY).
         final com.openexchange.cluster.auth.ClusterCredentials credentials =
@@ -435,7 +435,7 @@ public class AeronGateway implements EgressListener, AutoCloseable {
                 // STALE EGRESS DETECTION (every poll tick): connected but no data flowing — the egress
                 // subscription image can stay bound to the OLD leader after a switchover, so AeronCluster
                 // reports connected=true yet no egress (not even the ~1s keep-warm) arrives. Recover fast
-                // by forcing a reconnect, which rebinds egress to the current leader (M6). Previously this
+                // by forcing a reconnect, which rebinds egress to the current leader. Previously this
                 // ran only in the 10s stats block with a 30s threshold → up to ~40s to recover.
                 //
                 // The egressMessageCount > 0 guard is REQUIRED: a freshly-(re)connected session resets

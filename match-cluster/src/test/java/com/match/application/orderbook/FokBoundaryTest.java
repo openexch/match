@@ -9,13 +9,13 @@ import java.util.function.Consumer;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S5 independent review: deterministic boundary books for the FOK pre-walk (contract 3.3,
- * 3.5, decision D-d), on both implementations. Each case builds the same book twice from one
+ * Deterministic boundary books for the FOK pre-walk (the FOK divergence
+ * fence), on both implementations. Each case builds the same book twice from one
  * script (tombstones included, never a restore), asks the pre-walk on A (which must change
  * nothing), then on the twin B runs the pre-walk and the sweep and requires
  * {@code pre == (remaining 0 and the cap flag clear)}, plus the expected answer.
  */
-public class S5ReviewFokBoundaryTest {
+public class FokBoundaryTest {
 
     private static final long BASE = fp(50_000), TICK = fp(1), P = fp(50_005);
 
@@ -81,8 +81,8 @@ public class S5ReviewFokBoundaryTest {
                 assertTrue(me.cancelOrder(1 + j, false));
             }
         };
-        both("M-1 head tombstones, need 1", 8, 4, s, P, 1, true);
-        both("M-1 head tombstones, need 1.5", 8, 4, s, P, 1.5, false);
+        both("all-but-last head tombstones, need 1", 8, 4, s, P, 1, true);
+        both("all-but-last head tombstones, need 1.5", 8, 4, s, P, 1.5, false);
     }
 
     /** A tombstoned tail then an append behind it: the chain is live, tombstone, live. */

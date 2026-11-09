@@ -5,7 +5,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 
 /**
- * Immutable, replicated engine-creation config (slice C of behaviour versioning).
+ * Immutable, replicated engine-creation config (the first step of behaviour versioning).
  *
  * <p>This is the in-memory form of a logged {@code EngineConfig} command (SBE v10+, template 8):
  * the set of values a replica needs to create its matching engines — implementation, capacity,
@@ -42,10 +42,10 @@ public final class EngineConfigState {
     /** Sorted ascending by marketId (normalized in {@link #of}). Never null; may be empty (invalid). */
     public final MarketDef[] markets;
 
-    // ---- order-schema v12 (RC2 S1 contract 3.3, RC2 S2 contract 2.1 and 3.1) ----
+    // ---- order-schema v12 ----
     // Carried as decoded (pre-12 frames map to the defaults below). They stay EXCLUDED from
-    // equalsConfig, equalsIgnoringVersion, canonicalString/canonicalHash and toString (the five S1
-    // methods are unchanged, so the #224 canonical hash is unchanged by construction). S2 adds:
+    // equalsConfig, equalsIgnoringVersion, canonicalString/canonicalHash and toString (these five
+    // methods are unchanged, so the #224 canonical hash is unchanged by construction). Added:
     // the structural rules S-b/S-c in invalidReason, the behaviour-1 normalization
     // (normalizedForBehaviourOne), the behaviour-2 equality sameBehaviourTwoConfig (row 8 only),
     // describe() for log lines, and the snapshot identity block (SnapshotCodec marker 3).
@@ -129,7 +129,7 @@ public final class EngineConfigState {
                 DEFAULT_MAX_WIRE_VERSION);
     }
 
-    /** {@link #of} with the four v12 values (carried, excluded from every comparison in S1). */
+    /** {@link #of} with the four v12 values (carried, excluded from every comparison above). */
     public static EngineConfigState of(long configVersion, String impl, long bookCapacity,
                                        long maxMatchesPerOrder, long maxOrdersPerLevel,
                                        MarketDef[] markets, long behaviorVersion,
@@ -176,7 +176,7 @@ public final class EngineConfigState {
                         + "] for impl=direct";
             }
         }
-        // S-b (RC2 S2 3.1): 0 is a v12 producer that did not set the field; 4294967295 the null.
+        // 0 is a v12 producer that did not set the field; 4294967295 the null.
         if (behaviorVersion < 1 || behaviorVersion > UINT32_MAX_VALUE) {
             return "behaviorVersion=" + behaviorVersion + " must be in [1, " + UINT32_MAX_VALUE + "]";
         }
@@ -273,8 +273,8 @@ public final class EngineConfigState {
     }
 
     /**
-     * RC2 S2 row 8: {@link #equalsConfig} AND the four v12 values equal. Used only by the
-     * behaviour >= 2 DUPLICATE row; the five S1 comparison/format methods stay as they are.
+     * Row 8: {@link #equalsConfig} AND the four v12 values equal. Used only by the
+     * behaviour >= 2 DUPLICATE row; the five comparison/format methods stay as they are.
      */
     public boolean sameBehaviourTwoConfig(EngineConfigState o) {
         return equalsConfig(o)
@@ -285,7 +285,7 @@ public final class EngineConfigState {
     }
 
     /**
-     * RC2 S2 2.1: the form a behaviour-1 decision records. The four v12 values are replaced by
+     * The form a behaviour-1 decision records. The four v12 values are replaced by
      * the pre-12 defaults whatever a v12 frame carried, so replay and restore of a behaviour-1
      * cluster give the same object (a behaviour-1 snapshot has no identity block).
      */
@@ -302,7 +302,7 @@ public final class EngineConfigState {
     }
 
     /**
-     * RC2 S2 row 15 (BUMP): this config with {@code configVersion} and {@code maxWireVersion}
+     * Row 15 (BUMP): this config with {@code configVersion} and {@code maxWireVersion}
      * replaced; every other field (the other two v12 values and the markets) is kept.
      */
     public EngineConfigState withConfigVersionAndCeiling(long newConfigVersion, long newMaxWireVersion) {
@@ -311,7 +311,7 @@ public final class EngineConfigState {
                 newMaxWireVersion);
     }
 
-    /** {@link #toString} plus the four v12 values, for decision log lines (RC2 S2). */
+    /** {@link #toString} plus the four v12 values, for decision log lines. */
     public String describe() {
         return toString() + "{behaviorVersion=" + behaviorVersion
                 + " commandLedgerCapacity=" + commandLedgerCapacity + " genesisId=" + genesisId

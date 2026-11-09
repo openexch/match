@@ -4,7 +4,7 @@ package com.match.infrastructure.journal;
 import java.io.File;
 
 /**
- * RC2 S3 drill child (test scope, contract section 11 step 6): installs a file-existence drain
+ * Drill child (test scope): installs a file-existence drain
  * gate on the settlement journal writer through the package-private hook of
  * {@link SettlementJournalRuntime}, then runs the production bootstrap unchanged. While the hold
  * file exists the writer drains nothing, so entries pile up in the in-memory journal ring exactly

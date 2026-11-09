@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * RC2 S2 test harness: one replica's engine wired the way the cluster wires it for behaviour 2 —
+ * Test harness: one replica's engine wired the way the cluster wires it for behaviour 2 —
  * a real {@link MatchEventPublisher} with a schema-4 {@link SettlementJournal} bound to the
  * engine's {@link MeIdentity}, and an {@link EngineConfigStateMachine} whose record-5 sink is
  * the publisher and whose fail-fast hook records instead of halting. Drain the ring to read the
@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class BehaviourTwoHarness implements AutoCloseable {
 
-    /** A positive genesis nonce (sign bit clear, S11 generator rule). */
+    /** A positive genesis nonce (sign bit clear, as the generator mints it). */
     public static final long G = 0x1234_5678_9ABC_DEF1L;
     public static final long G2 = 0x0FED_CBA9_8765_4321L;
     public static final int MARKET = 1;
@@ -35,7 +35,7 @@ public final class BehaviourTwoHarness implements AutoCloseable {
     public final List<EngineConfigStateMachine.Decision> decisions = new ArrayList<>();
 
     /**
-     * RC2 S3: the replica shapes a member can have (contract section 4: they must allocate the
+     * The replica shapes a member can have (they must allocate the
      * same tradeIds and journalSeqs at the same log position).
      */
     public enum Shape {
@@ -45,7 +45,7 @@ public final class BehaviourTwoHarness implements AutoCloseable {
         DARK,
         /** Publisher with the journal armed and no egress ring (no initMarket). */
         RINGLESS,
-        /** No sink attached to the engine at all (the RCS replica shape); record 5 unjournaled. */
+        /** No sink attached to the engine at all (a sink-less replica); record 5 unjournaled. */
         SINKLESS
     }
 
@@ -126,7 +126,7 @@ public final class BehaviourTwoHarness implements AutoCloseable {
     }
 
     /**
-     * RC2 S5 (W1, FIX-12): {@link #config} with an explicit impl and match cap. Array: capacity 4096,
+     * {@link #config} with an explicit impl and match cap. Array: capacity 4096,
      * {@code maxOrdersPerLevel} 0; direct: {@code bookCapacity} 0 and the given
      * {@code maxOrdersPerLevel} (64 when 0 is passed).
      */
@@ -174,7 +174,7 @@ public final class BehaviourTwoHarness implements AutoCloseable {
                 new UnsafeBuffer(frame), 0, new com.match.infrastructure.mejournal.generated.MessageHeaderDecoder());
     }
 
-    /** RC2 S4: decode a record 4 (CommandRelease) frame. */
+    /** Decode a record 4 (CommandRelease) frame. */
     public static com.match.infrastructure.mejournal.generated.CommandReleaseDecoder record4(byte[] frame) {
         return new com.match.infrastructure.mejournal.generated.CommandReleaseDecoder().wrapAndApplyHeader(
                 new UnsafeBuffer(frame), 0, new com.match.infrastructure.mejournal.generated.MessageHeaderDecoder());

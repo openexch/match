@@ -30,7 +30,7 @@ import static org.junit.Assert.assertNotNull;
  *       trade folded into each aggregation bucket. Trades arrive in monotonic tradeId order, so the
  *       first one carries the minimum and it must not move as later trades merge into the same
  *       (price, taker side) bucket. Deterministic candle-OPEN key + D-2 dedup.</li>
- *   <li><b>C-5 clusterTimestamp</b> per entry on {@code TradeExecutionBatch} and
+ *   <li><b>Deterministic clusterTimestamp</b> per entry on {@code TradeExecutionBatch} and
  *       {@code OrderStatusBatch}: the deterministic cluster timestamp of the producing command
  *       ({@code event.getTimestamp()}), carried on every entry (not just the message-level flush
  *       timestamp).</li>
@@ -82,7 +82,7 @@ public class MarketPublisherWireV9Test {
                 Long.valueOf(15L), firstIdByBucket.get(p2 + "/" + OrderSide.BID));
     }
 
-    /** C-5: every TradeExecutionBatch entry carries the per-trade deterministic cluster timestamp. */
+    /** Every TradeExecutionBatch entry carries the per-trade deterministic cluster timestamp. */
     @Test
     public void tradeExecutionBatchCarriesPerEntryClusterTimestamp() throws Exception {
         MarketPublisher pub = new MarketPublisher(1, "BTC-USD", null);
@@ -108,7 +108,7 @@ public class MarketPublisherWireV9Test {
         }
     }
 
-    /** C-5: every OrderStatusBatch entry carries the per-order deterministic cluster timestamp. */
+    /** Every OrderStatusBatch entry carries the per-order deterministic cluster timestamp. */
     @Test
     public void orderStatusBatchCarriesPerEntryClusterTimestamp() throws Exception {
         MarketPublisher pub = new MarketPublisher(1, "BTC-USD", null);
@@ -118,7 +118,7 @@ public class MarketPublisherWireV9Test {
         long[] tsIn = {9_100L, 9_101L, 9_250L};
         for (int i = 0; i < tsIn.length; i++) {
             PublishEvent e = new PublishEvent();
-            // arg 2 (timestamp) == event.getTimestamp() == the C-5 cluster time.
+            // arg 2 (timestamp) == event.getTimestamp() == the deterministic cluster time.
             e.setOrderStatusUpdate(1, tsIn[i], 500 + i, 200L, OrderStatusType.NEW,
                     FixedPoint.fromDouble(1.0), 0L, FixedPoint.fromDouble(60_000.0), true, 0L, 0, 0L);
             pub.onEvent(e, i, false);

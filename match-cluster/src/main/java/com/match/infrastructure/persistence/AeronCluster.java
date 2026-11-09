@@ -43,7 +43,7 @@ public class AeronCluster {
     private static final AtomicLong IDENTICAL_ERROR_COUNT = new AtomicLong();
 
     /**
-     * Runs the node until it stops, then exits through the kit's {@link EngineLifecycle} (RC2 S16 W9, the same code
+     * Runs the node until it stops, then exits through the kit's {@link EngineLifecycle} (the same code
      * the AE runs): a fatal fault or a failed start exits non-zero, SIGTERM closes within
      * {@code ENGINE_SHUTDOWN_TIMEOUT_MS}, a cluster termination exits 0. Never returns normally while the node is
      * running.
@@ -242,7 +242,7 @@ public class AeronCluster {
     }
 
     /**
-     * RC2 S17 W12 (R-KIT-Q): the kit's quorum watchdog, started the moment the consensus module has launched
+     * The kit's quorum watchdog, started the moment the consensus module has launched
      * (after the DNS wait and the external-driver wait, before the service container): exit 1 when no leader is
      * ever known within ENGINE_QUORUM_WAIT_MS. Returns the module so it stays in the try-with-resources.
      */

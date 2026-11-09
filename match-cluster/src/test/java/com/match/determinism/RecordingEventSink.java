@@ -13,17 +13,17 @@ import java.util.List;
  * exactly assertable: the engine calls these methods within {@code acceptOrder}, so the captured
  * list is the complete, globally-ordered output stream the moment {@code acceptOrder} returns.
  *
- * <p>RC2 S3: the trade id is the engine's allocation (contract section 3), rendered as given, so
+ * <p>The trade id is the engine's allocation, rendered as given, so
  * captured trade IDs are exactly what production assigns; the sink holds no counter.</p>
  */
 public final class RecordingEventSink implements MatchEventSink {
 
     private final List<EngineEvent> events = new ArrayList<>();
-    // RC2 S5: record 3 outcomes are captured only once a scenario opts in (GENESIS), so every other
+    // Record 3 outcomes are captured only once a scenario opts in (GENESIS), so every other
     // user of this sink (legacy scenarios, egress-count tests) sees exactly the events it saw before.
     private boolean recordOutcomes;
 
-    /** RC2 S5: also capture behaviour-2 record 3 outcomes (ScenarioRunner GENESIS). */
+    /** Also capture behaviour-2 record 3 outcomes (ScenarioRunner GENESIS). */
     public void recordOutcomes() {
         this.recordOutcomes = true;
     }
@@ -52,7 +52,7 @@ public final class RecordingEventSink implements MatchEventSink {
         return true;
     }
 
-    /** RC2 S5: the behaviour-2 record 3 (a view: copied, never retained). */
+    /** The behaviour-2 record 3 (a view: copied, never retained). */
     @Override
     public void publishCommandOutcome(long egressSeq, long journalSeq,
                                       com.match.domain.commands.DurableOutcomeView outcome,

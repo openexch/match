@@ -61,7 +61,7 @@ public class EngineConfigReplayDeterminismTest {
                 .bookCapacity(bookCapacity)
                 .maxMatchesPerOrder(100)
                 .maxOrdersPerLevel(0)
-                // v12: an unset behaviorVersion is 0, which RC2 S2 refuses (S-b).
+                // v12: an unset behaviorVersion is 0, which behaviour versioning refuses.
                 .behaviorVersion(1);
         EngineConfigEncoder.MarketsEncoder group = encoder.marketsCount(2);
         group.next().marketId(1)
@@ -133,7 +133,7 @@ public class EngineConfigReplayDeterminismTest {
                 a.snapshot(), b.snapshot());
     }
     /**
-     * RC2 S2: two replicas on a behaviour-2 log (FRESH at 2, trades, BUMP, DUPLICATE, STALE, an
+     * Two replicas on a behaviour-2 log (FRESH at 2, trades, BUMP, DUPLICATE, STALE, an
      * above-ceiling frame, a second BUMP) emit byte-equal journal frames and snapshot
      * byte-identically, the identity block included.
      */

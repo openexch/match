@@ -289,7 +289,7 @@ public class SbeDemuxerTest {
         assertFalse(dme.isAskEmpty());
     }
 
-    // ==================== Schema-Version Gate (G-2 range) ====================
+    // ==================== Schema-Version Gate (supported range) ====================
     //
     // The gate accepts versions in [MIN_SUPPORTED_SCHEMA_VERSION, SCHEMA_VERSION] and drops
     // everything else BEFORE any body decode. Today the floor equals the ceiling (both 9), so
@@ -411,7 +411,7 @@ public class SbeDemuxerTest {
 
         assertTrue("Ask should be consumed by market buy", dme.isAskEmpty());
     }
-    // ==================== order-schema v12 (RC2 S1 contract 3, 8.2) ====================
+    // ==================== order-schema v12 ====================
 
     /** A durable-command engine with a schema-4 journal, the way the cluster wires it. */
     private static final class Durable implements AutoCloseable {
@@ -496,7 +496,7 @@ public class SbeDemuxerTest {
         }
     }
 
-    // RC2 S2 split (F1): the CREATE keeps tif 2 with expectedOldRemaining 0 and stays applied;
+    // The CREATE keeps tif 2 with expectedOldRemaining 0 and stays applied;
     // the value 5 moved to an UPDATE against a resting leg (v12UpdateWithExpectedOldRemainingIsApplied).
     @Test
     public void v12DurableCommandCarriesTimeInForceAndExpectedOldRemaining() {
@@ -516,7 +516,7 @@ public class SbeDemuxerTest {
     public void v12CreateWithExpectedOldRemainingIsDecodePoison() {
         try (Durable d = new Durable()) {
             d.demuxer.dispatchTrusted(buffer, 0, encodeDurableV12(1, 0, 5), 1000L);
-            assertEquals("F1: expectedOldRemaining on a CREATE is decode poison", 1, d.demuxer.decodeRejectCount());
+            assertEquals("expectedOldRemaining on a CREATE is decode poison", 1, d.demuxer.decodeRejectCount());
             assertEquals(0, d.demuxer.applyErrorCount());
             assertEquals(0, d.engine.commandLedger().size());
             assertTrue(d.drain().isEmpty());
@@ -530,7 +530,7 @@ public class SbeDemuxerTest {
             final long resting = outcome(d.drain().get(0)).orderId();
             assertTrue("the CREATE rests", resting > 0);
             d.demuxer.dispatchTrusted(buffer, 0, encodeDurableV12(2, 1 /* CANCEL */, resting, 0, 5), 1001L);
-            assertEquals("F1: expectedOldRemaining on a CANCEL is decode poison", 1, d.demuxer.decodeRejectCount());
+            assertEquals("expectedOldRemaining on a CANCEL is decode poison", 1, d.demuxer.decodeRejectCount());
             assertEquals(0, d.demuxer.applyErrorCount());
             assertEquals("only the CREATE is in the ledger", 1, d.engine.commandLedger().size());
             assertTrue("no record for the refused CANCEL", d.drain().isEmpty());

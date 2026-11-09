@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S6 contract 5.1-5.3 (F-3, critic K3): the ME flush timer id is per leadership term, armed on every member
+ * The ME flush timer id is per leadership term, armed on every member
  * at the term event with a cluster-time deadline and re-armed by the leader only. Unit cases drive one service
  * through {@link MeStubCluster}; {@link #expiredTimerCountModelPerTermIdSurvives} drives three services through
  * three mirrored consensus modules ({@link ExpiredTimerCountModel}); the cluster case runs restart, failover and
@@ -88,12 +88,12 @@ public class MeFlushTimerSurvivesFailoverTest {
         assertEquals("and moved the chain to the current id", List.of(id(5)), c.idsSince(mark));
     }
 
-    // ---- the consensus-module count rule (RC1 S5 rule 16) ----
+    // ---- the consensus-module count rule ----
 
     /**
-     * Proof of contract 1.2 item 4 (b) on the model alone: with ONE fixed id and leader-only re-arming, a
+     * Proof on the model alone: with ONE fixed id and leader-only re-arming, a
      * follower's module counts every tick it consumes, so the promoted member's first schedule is swallowed and
-     * the chain is dead. This is why per-term ids are the precondition of A10.
+     * the chain is dead. This is why per-term ids are the precondition of surviving a failover.
      */
     @Test
     public void expiredTimerCountModelFixedIdLeaderOnlyRearmIsSwallowedAfterFollowerTicks() {

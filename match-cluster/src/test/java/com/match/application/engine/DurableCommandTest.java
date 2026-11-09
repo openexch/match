@@ -244,7 +244,7 @@ public class DurableCommandTest {
             assertEquals(engine.acceptDurable(c,1000), dark.acceptDurable(c,1000));
             engine.setCurrentLogPosition(256); dark.setCurrentLogPosition(256);
             assertEquals(engine.acceptDurable(c,2000), dark.acceptDurable(c,2000));
-            // RC2 S3 review FIX-1: the tradeId generator is engine state now; compare it, never zero it.
+            // The tradeId generator is engine state now; compare it, never zero it.
             assertEquals(engine.getTradeIdGenerator(), dark.getTradeIdGenerator());
             var a = new ExpandableArrayBuffer(); int n = SnapshotCodec.serialize(engine, 0, a);
             var b = new ExpandableArrayBuffer(); int m = SnapshotCodec.serialize(dark, 0, b);

@@ -22,7 +22,7 @@ import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S3 contract section 4 (R-B0-2): a journal-on, a journal-off and a ring-less replica of
+ * A journal-on, a journal-off and a ring-less replica of
  * one behaviour-2 log end with the same snapshot bytes (tradeId, identity block with
  * nextJournalSeq), and on the journal-on replica the sequence has no producer-side gap:
  * {@code nextJournalSeq - 1 == max journalSeq == number of frames}.
@@ -48,7 +48,7 @@ public class JournalDarkNodeParityTest {
     }
 
     private static long heartbeatEpoch(byte[] image) {
-        final S2Services.Service svc = new S2Services.Service(true);
+        final LaunchModeServices.Service svc = new LaunchModeServices.Service(true);
         svc.restore(image);
         assertEquals(0, svc.failFast.get());
         final UnsafeBuffer buf = new UnsafeBuffer(new byte[64]);

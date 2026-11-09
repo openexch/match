@@ -8,14 +8,14 @@ import com.openexchange.cluster.auth.ClusterAuthenticator;
 import com.openexchange.cluster.auth.ClusterSessionClass;
 
 /**
- * The matching engine's use of the shared K6 v1 authority (RC2 S6 contract 2.7). Every session authenticates
+ * The matching engine's use of the shared cluster-kit v1 authority. Every session authenticates
  * against the node-local key table ({@code ME_AUTH_KEYS} / {@code -Dmatch.auth.keys}); ME clients present
  * {@code ME_AUTH_CREDENTIAL} / {@code -Dmatch.auth.credential}. Classes: GATEWAY (market data, sends no ingress
  * at behaviour 2), FORWARDER (the durable lane), ADMIN (EngineConfig, operator reads) and REPLICA (the backup:
- * BackupQuery and nothing else, decision A14). The ME has no user scope: every key is {@code users=*} and an id
- * list fails the load (ownership is derived from the book, RC2 S4 5.1).
+ * BackupQuery and nothing else). The ME has no user scope: every key is {@code users=*} and an id
+ * list fails the load (ownership is derived from the book).
  *
- * <p>There is no anonymous mode (A1): an empty table rejects every session, loudly.</p>
+ * <p>There is no anonymous mode: an empty table rejects every session, loudly.</p>
  */
 public final class MatchAuth {
 
@@ -31,7 +31,7 @@ public final class MatchAuth {
 
     /**
      * The consensus-module authorisation table: REPLICA may send BackupQuery; every other (class, action),
-     * HeartbeatRequest, StandbySnapshot and AdminRequest included, is denied. RCS S11 extends this table and
+     * HeartbeatRequest, StandbySnapshot and AdminRequest included, is denied. A later change extends this table and
      * must keep the REPLICA BackupQuery row.
      */
     public static ClassAuthorisationService authorisationService() {
@@ -45,7 +45,7 @@ public final class MatchAuth {
      * The authenticator over the table read from the environment; a malformed table fails here, at boot.
      * {@code sessionTimeoutNs} is read when a backup-style request arrives (after the consensus module context
      * is concluded): the fail-closed window for Aeron's shared backup session id must outlive Aeron's pending
-     * session (RC2 S6 review DEFECT-1, kit docs/auth.md).
+     * session (kit docs/auth.md).
      */
     public static ClusterAuthenticator authenticatorFromEnvironment(final java.util.function.LongSupplier sessionTimeoutNs) {
         return new ClusterAuthenticator(AuthKeyTable.fromEnvironment(POLICY), ClusterAuthenticator.DEFAULT_MAX_PENDING,

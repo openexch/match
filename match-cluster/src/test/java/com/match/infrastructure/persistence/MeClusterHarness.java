@@ -41,7 +41,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * RC2 S4 test harness (contract 9.1, topology J-ME3): three {@link AppClusteredService} members
+ * Test harness: three {@link AppClusteredService} members
  * in config mode in one JVM on the shared-host port stride (the AE pattern of
  * {@code SweepSurvivesLeaderChangeClusterTest}), each with its settlement journal armed and its
  * ring drained in-process into a per-member frame list, plus one reference client on its own
@@ -192,13 +192,13 @@ final class MeClusterHarness implements AutoCloseable {
             }
         }
 
-        /** RC2 S6: this member's election is CLOSED (it has joined the current term, not mid-startup election). */
+        /** This member's election is CLOSED (it has joined the current term, not mid-startup election). */
         boolean electionClosed() {
             final Counter c = cfg.consensusModuleContext().electionStateCounter();
             return c != null && !c.isClosed() && io.aeron.cluster.ElectionState.get(c) == io.aeron.cluster.ElectionState.CLOSED;
         }
 
-        /** RC2 S6: frames this member refused by the session-class rows. */
+        /** Frames this member refused by the session-class rows. */
         long unauthorized() {
             return demuxer().unauthorizedRejectCount();
         }
@@ -213,12 +213,12 @@ final class MeClusterHarness implements AutoCloseable {
             }
         }
 
-        /** RC2 S6: the authenticator ClusterConfig installed on this member's consensus module. */
+        /** The authenticator ClusterConfig installed on this member's consensus module. */
         com.openexchange.cluster.auth.ClusterAuthenticator authenticator() {
             return (com.openexchange.cluster.auth.ClusterAuthenticator) field("sessionAuthenticator");
         }
 
-        /** Authenticator and class-table counters of this member; 0 where none is installed (a pre-S6 build). */
+        /** Authenticator and class-table counters of this member; 0 where none is installed (a build without authentication). */
         long authAccepted() {
             final var a = authenticator();
             return a == null ? 0 : a.acceptedCount();
@@ -255,7 +255,7 @@ final class MeClusterHarness implements AutoCloseable {
 
         /** The member's ledger v2 block bytes, via the codec's writer (quiescent members only). */
         byte[] ledgerBlock() {
-            return S4Probe.ledgerBlock(engine());
+            return DurableLedgerProbe.ledgerBlock(engine());
         }
 
         /** Stop position of this member's (closed) last log recording, from its archive catalog. */
@@ -326,7 +326,7 @@ final class MeClusterHarness implements AutoCloseable {
         System.setProperty("snapshot.log.bytes", "0");
         System.setProperty("snapshot.interval.minutes", "0");
         System.setProperty("snapshot.prune.enabled", "false");
-        TestAuth.install(); // RC2 S6: every member authenticates against the test key table
+        TestAuth.install(); // Every member authenticates against the test key table
         this.root = new File(System.getProperty("java.io.tmpdir"), "me3-" + name + "-" + portBase);
         IoUtil.delete(root, true);
         for (int i = 0; i < MEMBERS; i++) {
@@ -472,7 +472,7 @@ final class MeClusterHarness implements AutoCloseable {
         return connect(com.openexchange.cluster.auth.ClusterSessionClass.FORWARDER);
     }
 
-    /** A client of {@code sessionClass} presenting the test key of that class (RC2 S6). */
+    /** A client of {@code sessionClass} presenting the test key of that class. */
     AeronCluster connect(com.openexchange.cluster.auth.ClusterSessionClass sessionClass) throws InterruptedException {
         return connect(TestAuth.credentials(sessionClass), (sessionId, ts, buffer, offset, length, h) -> { }, 60_000);
     }
@@ -493,7 +493,7 @@ final class MeClusterHarness implements AutoCloseable {
                         .aeronDirectoryName(clientDriver.aeronDirectoryName())
                         .ingressEndpoints(liveIngressEndpoints())
                         .messageTimeoutNs(TimeUnit.SECONDS.toNanos(5))
-                        // RC2 S6: a client may wait out a whole-cluster restart (MeRestoredEgressTest)
+                        // A client may wait out a whole-cluster restart (MeRestoredEgressTest)
                         .newLeaderTimeoutNs(TimeUnit.SECONDS.toNanos(60)));
             } catch (RuntimeException e) {
                 last = e;
@@ -541,7 +541,7 @@ final class MeClusterHarness implements AutoCloseable {
     }
 
     /**
-     * RC2 S6: wait until {@code m} has finished its (startup) election and its commit position equals the
+     * Wait until {@code m} has finished its (startup) election and its commit position equals the
      * leader's for 500 ms. A leader killed while a restarted member is still inside its startup election makes
      * that election a leader startup, and Aeron then closes every open session with TIMEOUT
      * ({@code SessionManager.prepareSessionsForNewTerm(isStartup)}); tests that fail over after a restart wait

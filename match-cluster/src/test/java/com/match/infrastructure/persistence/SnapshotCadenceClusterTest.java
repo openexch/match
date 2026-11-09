@@ -76,7 +76,7 @@ public class SnapshotCadenceClusterTest {
                 "aeron-cadence-test-" + System.nanoTime());
         final List<String> hostnames = List.of("localhost");
 
-        TestAuth.install(); // RC2 S6: the real authenticator over the test key table
+        TestAuth.install(); // The real authenticator over the test key table
 
         final ClusterConfig config = ClusterConfig.create(
                 0, 0, hostnames, hostnames, PORT_BASE, baseDir, new AppClusteredService());

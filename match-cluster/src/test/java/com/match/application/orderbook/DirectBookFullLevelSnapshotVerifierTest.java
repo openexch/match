@@ -7,8 +7,8 @@ import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 
 /**
- * Found by the RC2 S3 independent verification (S3/review.md, pre-existing at 3b95c56, NOT an S3
- * change): {@link DirectIndexOrderBook} walks a level's chain with {@code guard = maxOrdersPerLevel}
+ * Found by an independent verification (pre-existing at 3b95c56, not a regression):
+ * {@link DirectIndexOrderBook} walks a level's chain with {@code guard = maxOrdersPerLevel}
  * and {@code --guard > 0}, so it visits at most {@code maxOrdersPerLevel - 1} nodes. A level whose
  * chain holds {@code maxOrdersPerLevel} nodes therefore (a) loses its last live order from
  * {@code getActiveOrders()}, i.e. from the snapshot (SnapshotCodec writes getAskOrders/getBidOrders),
