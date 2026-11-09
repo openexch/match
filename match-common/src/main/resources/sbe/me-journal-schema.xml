@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-    ME journal wire schema (schemaId 4, version 1). RC2 S1 contract section 2.
+    ME journal wire schema (schemaId 4, version 1).
 
     Replaces schema 3 (settlement-journal-schema.xml, kept byte-identical for the frozen
     bridge/loadgen) and the schema 1 JournalCommandOutcome (template 28, RESERVED) on the

@@ -12,7 +12,7 @@ import org.agrona.DirectBuffer;
 import java.util.HexFormat;
 
 /**
- * RC2 S6: the ME test key table (one any-user key per ME class, written in the A16 form {@code ::users=*}) and
+ * The ME test key table (one any-user key per ME class, written in the {@code ::users=*}) and
  * the client-side and service-side helpers the in-process and cluster tests use. {@link #install()} publishes
  * the table through the property the production ClusterConfig reads, so every test cluster runs the real
  * authenticator and authorisation service.

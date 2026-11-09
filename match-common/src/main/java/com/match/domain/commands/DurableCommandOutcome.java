@@ -6,12 +6,12 @@ public record DurableCommandOutcome(DurableOrderIntent intent, long appliedPosit
         long orderId, int status, int reason, boolean oldCancelled, int result) implements DurableOutcomeView {
     public static final int APPLIED = 0, REJECTED = 1, CONFLICT = 2, CAPACITY = 3,
             UNKNOWN_LEG = 4, WRONG_OWNER = 5, UNKNOWN_MARKET = 6,
-            /** Schema 4 record 3 value 7; written from S4 (ReleaseCommandIds). */
+            /** Schema 4 record 3 value 7; written by the ReleaseCommandIds apply. */
             RELEASED = 7,
-            /** Schema 4 record 3 value 8: a frame above the recorded wire ceiling (RC2 S2 section 6). */
+            /** Schema 4 record 3 value 8: a frame above the recorded wire ceiling. */
             INVALID = 8;
 
-    // RC2 S4: the intent half of the view (the record keeps its intent; the journal reads one shape).
+    // The intent half of the view (the record keeps its intent; the journal reads one shape).
     @Override public long idHigh() { return intent.idHigh(); }
     @Override public long idLow() { return intent.idLow(); }
     @Override public long userId() { return intent.userId(); }

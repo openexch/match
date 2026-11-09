@@ -159,7 +159,7 @@ public class JournalRetentionTest {
         assertEquals(3L * seg, target);
     }
 
-    // ---- contract 1: a non-positive watermark purges nothing (no archive touched) ----
+    // ---- rule 1: a non-positive watermark purges nothing (no archive touched) ----
 
     @Test
     public void purgeBelow_nonPositiveWatermark_isNoOpWithoutArchive() {

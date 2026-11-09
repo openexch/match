@@ -22,7 +22,7 @@
             <artifactId>match-common</artifactId>
         </dependency>
 
-        <!-- RC2 S6: the ME session credential (ME_AUTH_CREDENTIAL), one kit copy for every client. -->
+        <!-- The ME session credential (ME_AUTH_CREDENTIAL), one kit copy for every client. -->
         <dependency>
             <groupId>com.openexchange</groupId>
             <artifactId>cluster-kit</artifactId>

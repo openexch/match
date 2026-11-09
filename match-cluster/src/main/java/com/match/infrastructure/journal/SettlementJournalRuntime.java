@@ -49,7 +49,7 @@ public final class SettlementJournalRuntime implements AutoCloseable {
     private static final java.util.function.BooleanSupplier ALWAYS_DRAIN = () -> true;
 
     /**
-     * RC2 S3 drill seam (contract 11, A5): the writer's drain gate. Package-private and
+     * Drill seam: the writer's drain gate. Package-private and
      * constant-true by default; only the test-scope drill child main replaces it, before
      * bootstrap. No env var or system property reaches it.
      */
@@ -148,7 +148,7 @@ public final class SettlementJournalRuntime implements AutoCloseable {
         // The writer's archive client owns its Aeron client: it must carry the node's error handler. Without one
         // Aeron installs Aeron.Configuration.DEFAULT_ERROR_HANDLER, which answers a driver timeout with
         // Runtime.exit(-1) on a "runtime-exit-runner" thread: the node took a signal stop (status 255, the FATAL
-        // never recorded) while its archives tore down under an unmapped CnC (RC2 S16 W6 C13: exit 139 3/3).
+        // never recorded) while its archives tore down under an unmapped CnC (exit 139 3/3).
         final JournalWriterAgent agent = new JournalWriterAgent(
                 journal.ringBuffer(),
                 () -> new AeronArchive.Context()

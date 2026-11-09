@@ -18,8 +18,8 @@ import static com.match.application.engine.EngineConfigStateMachine.Decision.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S2 contract section 3: the EngineConfig decision table at behaviour 1 and 2 (the critic's
- * EngineConfigBehaviorSwitchTest, renamed: RC2 has no switch row). Every row is driven through
+ * The EngineConfig decision table at behaviour 1 and 2 (formerly
+ * EngineConfigBehaviorSwitchTest, renamed: there is no switch row). Every row is driven through
  * the real state machine with a real publisher and schema-4 journal, so "record 5" means a frame
  * in the ring and "meEpoch" the stamped bytes.
  */
@@ -85,13 +85,13 @@ public class EngineConfigBehaviorTableTest {
             for (int i = 0; i < after.size(); i++) {
                 final byte[] f = after.get(i);
                 assertEquals("every record after FRESH carries meEpoch G", G, BehaviourTwoHarness.meEpochOf(f));
-                assertEquals("RC2 S3: dense journalSeq after FRESH = 1, in ring order", 2L + i,
+                assertEquals("dense journalSeq after FRESH = 1, in ring order", 2L + i,
                         BehaviourTwoHarness.journalSeqOf(f));
             }
         }
     }
 
-    // ---- row 0 at FRESH (S-b, S-c) ----
+    // ---- row 0 at FRESH ----
 
     @Test
     public void freshAtTwoStructuralRules() {
@@ -158,7 +158,7 @@ public class EngineConfigBehaviorTableTest {
         }
     }
 
-    // ---- row 0 against a recorded config (NOTE-15) ----
+    // ---- row 0 against a recorded config ----
 
     @Test
     public void invalidFrameAgainstARecordedConfig() {

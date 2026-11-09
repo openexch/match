@@ -15,7 +15,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 
 /**
- * RC2 S1 review (independent verifier, check 2): the behaviour-free rule says every journal byte
+ * The behaviour-free rule says every journal byte
  * of an existing scenario changes ONLY through the schema 4 header and the fields the contract
  * adds. This pins it directly: the same inputs encoded with the frozen schema 3 codecs
  * ({@code JournalTrade} 1, {@code JournalTerminal} 2) and the schema 1 template 28 codec are

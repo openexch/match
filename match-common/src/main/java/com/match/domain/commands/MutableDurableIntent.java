@@ -2,7 +2,7 @@
 package com.match.domain.commands;
 
 /**
- * RC2 S4 (contract section 8): the reusable, mutable {@link DurableIntentView} the demuxer fills
+ * The reusable, mutable {@link DurableIntentView} the demuxer fills
  * once per template-9 frame instead of allocating a {@link DurableOrderIntent}. Single-threaded
  * (service thread); never retained across frames.
  */

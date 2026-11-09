@@ -213,7 +213,7 @@ public class GatewayHttpHandler extends SimpleChannelInboundHandler<FullHttpRequ
 
         // D-1: 200 only while the Aeron bridge to the cluster is delivering, so probers
         // (cloud-console probeHealth, future k8s) see a wedged gateway as DOWN. Signals
-        // are the ones already tracked for /metrics and the M6 stale-egress reconnect;
+        // are the ones already tracked for /metrics and the stale-egress reconnect;
         // the leader's ~1s keep-warm means a healthy link never idles near the threshold.
         // No bridge wired (test-only constructor) = nothing to judge, legacy 200.
         if (aeronGateway != null) {

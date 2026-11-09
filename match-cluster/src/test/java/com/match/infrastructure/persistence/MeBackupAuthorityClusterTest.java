@@ -32,7 +32,7 @@ import static com.match.infrastructure.persistence.DurableLedgerV2Test.releaseFr
 import static org.junit.Assert.*;
 
 /**
- * RC2 S6 9.2 (BLOCKER-1, decision A14): the ME backup authenticates as REPLICA, and REPLICA may do BackupQuery
+ * The ME backup authenticates as REPLICA, and REPLICA may do BackupQuery
  * and nothing else. Three members plus an in-JVM {@link ClusterBackup} built by {@link ClusterBackupApp#backupContext}:
  * (a) no credential: no response, rejected at the authenticator; (b) FORWARDER: authenticated, BackupQuery denied;
  * (c) REPLICA: responses and live-log progress; (d) an ingress client holding the REPLICA key sends templates
@@ -143,7 +143,7 @@ public class MeBackupAuthorityClusterTest {
     public void onlyReplicaMayQueryBackupsAndReplicaSendsNoIngress() throws Exception {
         try (MeClusterHarness h = new MeClusterHarness(PORT_BASE, "backup-authority")) {
             // Aeron gives every backup request session id -1; the kit authenticates a -1 session only when its
-            // request is alone in a window of the session timeout + 1 s (review DEFECT-1). A short timeout keeps
+            // request is alone in a window of the session timeout + 1 s. A short timeout keeps
             // the phases of this test apart: each phase starts once the previous phase's requests aged out.
             h.sessionTimeoutMs = 4_000;
             h.startAll();

@@ -12,10 +12,10 @@ import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S2 review addition (S2/review.md): contract section 6 "duplicate ids are not consulted:
+ * The ceiling rule "duplicate ids are not consulted:
  * the ceiling check precedes the ledger". An above-ceiling template 9 that re-sends an already
  * APPLIED command id is still journaled INVALID, the ledger and the book are untouched, and the
- * next v12 retry of the same id is the ledger's normal duplicate answer: from RC2 S3 (X4) a
+ * next v12 retry of the same id is the ledger's normal duplicate answer: a
  * behaviour-2 equal duplicate, suppressed (nothing journaled, no journalSeq consumed).
  */
 public class AboveCeilingDuplicateIdReviewTest {
@@ -43,7 +43,7 @@ public class AboveCeilingDuplicateIdReviewTest {
             assertEquals(1, r.demuxer.aboveCeilingInvalidCount());
 
             // The v12 retry still meets the ORIGINAL ledger entry (the INVALID was never recorded):
-            // a behaviour-2 equal duplicate, suppressed by RC2 S3 X4.
+            // a behaviour-2 equal duplicate, suppressed as an equal-intent duplicate.
             final long seqBeforeRetry = r.h.engine.meIdentity().nextJournalSeq();
             final List<byte[]> retry = r.apply(new Entry(create, 448L, 1_003L));
             assertTrue("the equal duplicate journals nothing", retry.isEmpty());
@@ -51,7 +51,7 @@ public class AboveCeilingDuplicateIdReviewTest {
             assertEquals(1, r.h.engine.ledgerV2().size());
             assertEquals("the retry consumes no journalSeq", seqBeforeRetry,
                     r.h.engine.meIdentity().nextJournalSeq());
-            // RC2 S4: the ledger v2 keeps the original outcome under the core-shaped id (9001, 1 << 2).
+            // The ledger v2 keeps the original outcome under the core-shaped id (9001, 1 << 2).
             assertEquals("the original APPLIED outcome is still the recorded one", orderId,
                     r.h.engine.ledgerV2().get(9001, 1L << 2).orderId());
             assertEquals(0, r.demuxer.applyErrorCount());

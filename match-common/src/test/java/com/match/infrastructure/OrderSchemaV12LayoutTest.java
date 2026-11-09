@@ -18,7 +18,7 @@ import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 
 /**
- * order-schema v12 layout (RC2 S1 contract 3, 8.1): the grown blocks and their appended offsets,
+ * order-schema v12 layout: the grown blocks and their appended offsets,
  * the new template 10, the null mapping of a pre-12 frame read by the v12 decoder, and a v12
  * frame read by the v11 generated decoder (test-source copy) yielding the 12 original fields.
  */
@@ -76,7 +76,7 @@ public class OrderSchemaV12LayoutTest {
             i++;
         }
         assertEquals(48, i);
-        assertEquals("frame max of contract 3.2", 836, 8 + d.encodedLength());
+        assertEquals("v12 frame max", 836, 8 + d.encodedLength());
     }
 
     @Test

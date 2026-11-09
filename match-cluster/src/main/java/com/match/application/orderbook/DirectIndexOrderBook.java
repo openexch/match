@@ -243,7 +243,7 @@ public class DirectIndexOrderBook {
      * Cancel order by ID. O(1)
      */
     /**
-     * RC2 S4 (contract 5.1): the owner of a resting order, or -1. The same guards as
+     * The owner of a resting order, or -1. The same guards as
      * {@link #cancelOrder}: a location must exist (a tombstone has none) and the packed slot must
      * still hold this order id.
      */
@@ -256,7 +256,7 @@ public class DirectIndexOrderBook {
     }
 
     /**
-     * RC2 S5 (contract 5.4): the remaining quantity of a resting order, or -1. The guards of
+     * The remaining quantity of a resting order, or -1. The guards of
      * {@link #restingUserId}. Read-only.
      */
     public long restingRemaining(long orderId) {
@@ -267,7 +267,7 @@ public class DirectIndexOrderBook {
         return orders[orderBase + 2];
     }
 
-    // RC2 S5 (contract 3.3, FIX-2): pure accessors of the FOK pre-walk. Unlike getHeadOrder*, they
+    // Pure accessors of the FOK pre-walk. Unlike getHeadOrder*, they
     // never advance the head and never free a slot.
 
     /** The head slot of level {@code priceIdx} as stored (it may be a tombstone). */

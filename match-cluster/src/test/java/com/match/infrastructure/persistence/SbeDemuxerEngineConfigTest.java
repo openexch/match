@@ -15,7 +15,7 @@ import java.util.List;
 import static org.junit.Assert.*;
 
 /**
- * Slice C: SbeDemuxer's EngineConfig ingress case (non-throwing decode, the A-4/#202 pattern) and
+ * SbeDemuxer's EngineConfig ingress case (non-throwing decode, the #202 pattern) and
  * the fresh-cluster order guard. Real SBE frames through the real dispatch path.
  */
 public class SbeDemuxerEngineConfigTest {
@@ -33,7 +33,7 @@ public class SbeDemuxerEngineConfigTest {
                 .bookCapacity(bookCapacity)
                 .maxMatchesPerOrder(maxMatchesPerOrder)
                 .maxOrdersPerLevel(maxOrdersPerLevel)
-                // v12: an unset behaviorVersion is 0, which RC2 S2 refuses (S-b).
+                // v12: an unset behaviorVersion is 0, which behaviour versioning refuses.
                 .behaviorVersion(1);
         EngineConfigEncoder.MarketsEncoder group = encoder.marketsCount(marketNums.length);
         for (int i = 0; i < marketNums.length; i++) {
@@ -174,7 +174,7 @@ public class SbeDemuxerEngineConfigTest {
         assertEquals(1, demuxer.createOrderCount());
         assertFalse(engine.getEngine(1).isBidEmpty());
     }
-    // ---- order-schema v12 (RC2 S1 contract 3.3 / section 7 / 8.2) ----
+    // ---- order-schema v12 ----
 
     private static final long[][] ONE_MARKET = {{7, 500_000_000L, 1_500_000_000L, 500_000L}};
     private static final String[] ONE_SYMBOL = {"AAA-USD"};

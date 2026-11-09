@@ -13,7 +13,7 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * RC2 S2 test support: order-schema frames for behaviour-2 logs, and a {@link Replica} that
+ * Test support: order-schema frames for behaviour-2 logs, and a {@link Replica} that
  * applies them through the real {@link SbeDemuxer} the way {@code AppClusteredService} does
  * (log position set from the entry before dispatch, cluster timestamp passed through).
  */
@@ -68,7 +68,7 @@ final class BehaviourTwoLog {
     }
 
     /**
-     * RC2 S4: an EngineConfig with explicit impl, caps and markets (ids get BTC-like bands with
+     * An EngineConfig with explicit impl, caps and markets (ids get BTC-like bands with
      * the same min/max/tick as {@link #engineConfig}).
      */
     static byte[] engineConfigWith(long configVersion, long behaviorVersion, long genesisId, long maxWireVersion,
@@ -112,7 +112,7 @@ final class BehaviourTwoLog {
     }
 
     /**
-     * A v12 DurableOrderCommand (template 9, block 80) with a core-shaped id (RC2 S4 9.2, B1):
+     * A v12 DurableOrderCommand (template 9, block 80) with a core-shaped id:
      * {@code commandIdHigh = omsOrderId} and {@code commandIdLow = attempt << 2 | kind}, the way the
      * core mints it. {@code attempt} is the caller's per-command number; distinct (omsOrderId,
      * attempt) pairs are distinct ids, equal ones are the same id.
@@ -151,7 +151,7 @@ final class BehaviourTwoLog {
     }
 
     /**
-     * RC2 S4: a ReleaseCommandIds frame (template 10). {@code entries} is a flat list of
+     * A ReleaseCommandIds frame (template 10). {@code entries} is a flat list of
      * {@code (commandIdHigh, idLowFloor, scope)} triples; scope 0 UP_TO, 1 ORDER (raw byte, so a
      * test can send an out-of-range scope).
      */
@@ -173,7 +173,7 @@ final class BehaviourTwoLog {
         return Arrays.copyOf(buffer.byteArray(), MessageHeaderEncoder.ENCODED_LENGTH + encoder.encodedLength());
     }
 
-    /** The legacy (pre-S4) template-9 builder: a fixed commandIdHigh 17 (not core-shaped). */
+    /** The legacy template-9 builder: a fixed commandIdHigh 17 (not core-shaped). */
     static byte[] durableIdHigh17(long idLow, int kind, long userId, long omsOrderId, long oldOrderId, int side,
                                   double price, double qty, int tif, long expectedOldRemaining) {
         final UnsafeBuffer buffer = new UnsafeBuffer(new byte[256]);
@@ -190,7 +190,7 @@ final class BehaviourTwoLog {
         return durable(attempt, 0, userId, omsOrderId, 0L, side, price, qty, 0, 0L);
     }
 
-    /** The pre-S4 CREATE builder (commandIdHigh 17, the caller's idLow): behaviour-1 reference logs. */
+    /** The legacy CREATE builder (commandIdHigh 17, the caller's idLow): behaviour-1 reference logs. */
     static byte[] durableCreateIdHigh17(long idLow, long userId, long omsOrderId, int side, double price, double qty) {
         return durableIdHigh17(idLow, 0, userId, omsOrderId, 0L, side, price, qty, 0, 0L);
     }
@@ -238,7 +238,7 @@ final class BehaviourTwoLog {
         }
     }
 
-    /** RC2 S3 frame invariant (contract 7.2): journalSeq 0 iff meEpoch 0, on every frame. */
+    /** Frame invariant: journalSeq 0 iff meEpoch 0, on every frame. */
     static void assertSeqEpochInvariant(List<byte[]> frames) {
         for (int i = 0; i < frames.size(); i++) {
             final byte[] f = frames.get(i);
@@ -260,7 +260,7 @@ final class BehaviourTwoLog {
             this(engine, com.match.infrastructure.generated.MessageHeaderDecoder.SCHEMA_VERSION);
         }
 
-        /** RC2 S3: a replica of the given shape (journaled, dark, ring-less or sink-less). */
+        /** A replica of the given shape (journaled, dark, ring-less or sink-less). */
         Replica(Engine engine, BehaviourTwoHarness.Shape shape) {
             this(engine, com.match.infrastructure.generated.MessageHeaderDecoder.SCHEMA_VERSION, shape);
         }
@@ -302,7 +302,7 @@ final class BehaviourTwoLog {
         /** A new config-mode replica restored from this one's snapshot bytes. */
         static Replica restoredFrom(byte[] image) {
             final Replica r = new Replica();
-            // RC2 S3: the codec restores the tradeId generator into the engine in place.
+            // The codec restores the tradeId generator into the engine in place.
             SnapshotCodec.deserialize(new UnsafeBuffer(image), 0, image.length, r.h.engine);
             return r;
         }

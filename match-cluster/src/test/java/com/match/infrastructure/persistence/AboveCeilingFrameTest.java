@@ -13,7 +13,7 @@ import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S2 contract section 6 (W10): frames above the RECORDED wire ceiling. Decided from the
+ * Frames above the RECORDED wire ceiling. Decided from the
  * header and the replicated ceiling only, so every replica journals the same record at the same
  * position whatever its jar.
  */
@@ -50,7 +50,7 @@ public class AboveCeilingFrameTest {
             assertEquals(2L, o.behaviorVersion());
             assertEquals(G, o.meEpoch());
             // The 14 intent fields are echoed.
-            // RC2 S4: BehaviourTwoLog.durable mints core-shaped ids (idHigh = omsOrderId, attempt << 2 | kind).
+            // BehaviourTwoLog.durable mints core-shaped ids (idHigh = omsOrderId, attempt << 2 | kind).
             assertEquals(9001L, o.commandIdHigh());
             assertEquals(7L << 2, o.commandIdLow());
             assertEquals(100L, o.userId());
@@ -95,9 +95,9 @@ public class AboveCeilingFrameTest {
             assertEquals(1, r.h.decisions.size());
             assertTrue("no journal", r.h.drain().isEmpty());
 
-            // Invalid intent above the ceiling -> decode reject, no journal (F1 included).
+            // Invalid intent above the ceiling -> decode reject, no journal (the UPDATE-only rule included).
             r.apply(new Entry(withHeaderVersion(durable(9, 0, 100, 9001, 0, 0, 59_000, 1, 0, 5), 13), POS + 256, TS));
-            assertEquals("F1 above the ceiling", 1, r.demuxer.decodeRejectCount());
+            assertEquals("UPDATE-only field above the ceiling", 1, r.demuxer.decodeRejectCount());
             r.apply(new Entry(withHeaderVersion(durable(10, 0, 100, 9001, 0, 0, 59_000, 1, 3, 0), 13), POS + 384, TS));
             assertEquals("tif 3 above the ceiling", 2, r.demuxer.decodeRejectCount());
             assertEquals(0, r.demuxer.aboveCeilingInvalidCount());
@@ -120,7 +120,7 @@ public class AboveCeilingFrameTest {
         }
     }
     /**
-     * Review FIX-1: a later jar (supported version 13) at recorded ceiling 12 journals a v13
+     * A later jar (supported version 13) at recorded ceiling 12 journals a v13
      * template 9 as INVALID, byte-equal to a v12 member at the same position. The rule reads the
      * header and the recorded ceiling, never the jar's own version.
      */

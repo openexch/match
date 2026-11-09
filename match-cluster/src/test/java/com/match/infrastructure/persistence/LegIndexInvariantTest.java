@@ -4,7 +4,7 @@ package com.match.infrastructure.persistence;
 import com.match.application.engine.BehaviourTwoHarness.Shape;
 import com.match.application.engine.Engine;
 import com.match.application.orderbook.MatchingEngine;
-import com.match.application.orderbook.S5Probe;
+import com.match.application.orderbook.OrderBookProbe;
 import com.match.domain.commands.DurableCommandOutcome;
 import com.match.infrastructure.mejournal.generated.CommandOutcomeDecoder;
 import org.agrona.collections.Int2ObjectHashMap;
@@ -27,12 +27,12 @@ import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S4 invariant I6 (contract 2.2, 5.2): after every behaviour-2 command the omsMap keys are in
+ * Invariant: after every behaviour-2 command the omsMap keys are in
  * bijection with the resting legs of all books, and {@code LegIndex.count(o)} equals the number of
  * resting legs whose omsOrderId is {@code o}; again after a serialize/restore round trip. Seeded
  * fuzz on the array book (small capacity: BOOK_FULL) and the direct book (2 per level:
  * LEVEL_FULL), with fills, partial fills, amends, cancels, market orders and maker rejects, on a
- * journaled member and on a sink-less member side by side. RC2 S5: the mix also carries native IOC
+ * journaled member and on a sink-less member side by side. The mix also carries native IOC
  * and FOK creates, bounded market buys (quantity and budget) and amends whose reference includes
  * in-window fills (and an occasional wrong reference), and no IOC/FOK id ever keeps an omsMap key
  * or a resting leg after its command.
@@ -41,7 +41,7 @@ public class LegIndexInvariantTest {
 
     private record Leg(long orderId, long h, long user, int side) { }
 
-    /** The I6 check against a scan of the books. */
+    /** The bijection check against a scan of the books. */
     static void check(Engine e, Set<Long> omsIds, String where) {
         final Set<Long> resting = new TreeSet<>();
         final Int2ObjectHashMap<MatchingEngine>.ValueIterator it = e.getEngines().values().iterator();
@@ -64,9 +64,9 @@ public class LegIndexInvariantTest {
         }
         assertEquals(where + ": omsMap keys == resting legs", resting, keys);
         for (long o : omsIds) {
-            assertEquals(where + ": LegIndex.count(" + o + ")", (long) perOms.getOrDefault(o, 0L), S4Probe.legCount(e, o));
+            assertEquals(where + ": LegIndex.count(" + o + ")", (long) perOms.getOrDefault(o, 0L), DurableLedgerProbe.legCount(e, o));
         }
-        assertEquals(where + ": distinct omsOrderIds", perOms.size(), S4Probe.legDistinct(e));
+        assertEquals(where + ": distinct omsOrderIds", perOms.size(), DurableLedgerProbe.legDistinct(e));
     }
 
     private static void fuzz(byte[] config, long seed, String name) {
@@ -95,13 +95,13 @@ public class LegIndexInvariantTest {
                     if (kindOfCreate < 7) {
                         frame = create(h, 0, 100 + rnd.nextInt(4), side, price, qty);
                     } else if (kindOfCreate >= 10) {
-                        // RC2 S5: native IOC (10) / FOK (11).
+                        // Native IOC (10) / FOK (11).
                         frame = durableRaw(h, 0, CREATE, 100 + rnd.nextInt(4), h, 0, side, fp(price), fp(qty), 0,
                                 LIMIT, kindOfCreate - 9, 0);
                     } else if (kindOfCreate < 9) {
                         frame = createOfType(h, 0, 100 + rnd.nextInt(4), side, price, qty, LIMIT_MAKER);
                     } else {
-                        // MARKET: a buy spends a budget bounded by its quantity (RC2 S5 9.1), a sell
+                        // MARKET: a buy spends a budget bounded by its quantity, a sell
                         // sizes by quantity.
                         frame = durableRaw(h, 0, CREATE, 100, h, 0, side, 0, fp(qty),
                                 side == 0 ? fp(qty * 60_000) : 0, MARKET, 0, 0);
@@ -112,10 +112,10 @@ public class LegIndexInvariantTest {
                     if (rnd.nextBoolean()) {
                         frame = cancel(leg.h, attempt, leg.user, leg.orderId);
                     } else {
-                        // RC2 S5 9.1: the leg's current remaining (test access), plus in-window fills
+                        // The leg's current remaining (test access), plus in-window fills
                         // the core has not seen yet; >= 1 when the leg no longer rests (B6 answers first).
                         final MatchingEngine me = journaled.h.engine.getEngine(1);
-                        final long remaining = S5Probe.restingRemaining(me, leg.orderId, leg.side == 0);
+                        final long remaining = OrderBookProbe.restingRemaining(me, leg.orderId, leg.side == 0);
                         final int r = rnd.nextInt(8);
                         final long expected = remaining <= 0 ? fp(1)
                                 : r < 3 ? remaining + fp(1 + rnd.nextInt(2)) : r == 3 && remaining > 1 ? remaining - 1
@@ -149,12 +149,12 @@ public class LegIndexInvariantTest {
                     assertFalse(name + ": IOC/FOK " + id + " has an omsMap key",
                             journaled.h.engine.getOrderIdToOmsOrderId().containsKey(id));
                     assertEquals(name + ": IOC/FOK " + id + " rests", -1L,
-                            S5Probe.restingRemaining(me, id, true) & S5Probe.restingRemaining(me, id, false));
+                            OrderBookProbe.restingRemaining(me, id, true) & OrderBookProbe.restingRemaining(me, id, false));
                 }
                 check(sinkless.h.engine, omsIds, name + " seed " + seed + " entry " + i + " (sink-less)");
             }
             assertTrue(name + ": non-vacuous applies", applied > 200);
-            System.out.println("[S5] LegIndexInvariantTest " + name + " seed " + seed + ": IOC/FOK applied " + immediate
+            System.out.println("[TIF] LegIndexInvariantTest " + name + " seed " + seed + ": IOC/FOK applied " + immediate
                     + ", amends with in-window fills " + reduced);
             assertTrue(name + ": IOC/FOK applied", immediate > 50);
             assertTrue(name + ": amends with in-window fills", reduced > 5);

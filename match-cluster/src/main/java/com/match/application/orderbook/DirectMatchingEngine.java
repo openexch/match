@@ -15,7 +15,7 @@ public class DirectMatchingEngine implements MatchingEngine {
     // Prod cap on matches generated per command: bounds per-command work on the single consensus
     // thread. A hardcoded deterministic constant, NEVER an env var — a divergent cap between replicas
     // would fork the state machine. Tests inject a small cap via the package-private constructor.
-    public static final int MAX_MATCHES_PER_ORDER = 10_000; // public since slice C: the adopt cross-check compares it as the node-effective cap
+    public static final int MAX_MATCHES_PER_ORDER = 10_000; // public since EngineConfig: the adopt cross-check compares it as the node-effective cap
     private static final int MATCH_FIELDS = 5; // makerOrderId, makerUserId, price, quantity, makerFilled
 
     // Effective per-order match cap (defaults to MAX_MATCHES_PER_ORDER; test-injectable).
@@ -37,7 +37,7 @@ public class DirectMatchingEngine implements MatchingEngine {
     // remaining (i.e. the taker was terminated at the cap). Reset at the start of each order.
     private boolean matchLimitReached;
 
-    // RC2 S5 (contract section 4): the current market buy is bounded by its quantity.
+    // The current market buy is bounded by its quantity.
     private boolean buyBounded;
 
     // Order books (bid and ask sides)
@@ -136,7 +136,7 @@ public class DirectMatchingEngine implements MatchingEngine {
         return matchCount;
     }
 
-    /** RC2 S5 (contract 3.3): the sweep of {@link #processLimitOrder}, then no rest. */
+    /** The sweep of {@link #processLimitOrder}, then no rest. */
     public int processLimitOrderNoRest(long orderId, long userId, boolean isBuy, long price, long quantity) {
         sweepLimit(isBuy, price, quantity);
         if (takerRemainingQty > 0) {
@@ -177,7 +177,7 @@ public class DirectMatchingEngine implements MatchingEngine {
     }
 
     /**
-     * RC2 S5 (contract 3.3, FIX-2, 3.5): the FOK pre-walk. Navigation through the pure
+     * The FOK pre-walk. Navigation through the pure
      * getBestPriceIndex / nextPriceIndex; within a level the chain is read through the pure slot
      * accessors, NEVER getHeadOrder* (they advance the head and free tombstone slots). The per-level
      * walk is the exact acc3fe3 bound of compactLevel / getActiveOrders: at most maxOrdersPerLevel
@@ -239,7 +239,7 @@ public class DirectMatchingEngine implements MatchingEngine {
         if (isBuy) {
             // Market buy - spend budget
             takerRemainingBudget = budget;
-            // RC2 S5 (contract section 4): quantity > 0 bounds the buy (behaviour 2); quantity <= 0
+            // Quantity > 0 bounds the buy (behaviour 2); quantity <= 0
             // is the behaviour-1 budget-only sweep, structurally unchanged (the bound never reads).
             buyBounded = quantity > 0;
             if (buyBounded) {
@@ -317,7 +317,7 @@ public class DirectMatchingEngine implements MatchingEngine {
      * Match market buy at a price level (budget-based)
      */
     private void matchMarketBuyAtLevel(DirectIndexOrderBook book, int priceIdx, long price) {
-        // RC2 S5 FIX-6: with a bound, the cap check below is reached only while quantity remains.
+        // With a bound, the cap check below is reached only while quantity remains.
         while (takerRemainingBudget > 0 && (!buyBounded || takerRemainingQty > 0) && book.getOrderCount(priceIdx) > 0) {
             // Stop matching if limit reached to prevent unbounded execution
             if (matchCount >= maxMatchesPerOrder) {
@@ -513,7 +513,7 @@ public class DirectMatchingEngine implements MatchingEngine {
     }
 
     /**
-     * RC2 S13 W-ME3: empty. The flush thread reads the live book and the live book version here, so the
+     * Empty. The flush thread reads the live book and the live book version here, so the
      * version fix of the restore (Engine.republishRestoredBooks) is all a restored direct book needs.
      */
     @Override

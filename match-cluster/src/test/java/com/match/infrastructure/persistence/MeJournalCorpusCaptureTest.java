@@ -26,9 +26,9 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 /**
- * RC2 S9h 11.8 (W-E1): the committed E1 corpus ({@code src/test/resources/mejournal-e1/}) against its SHA256SUMS and the
+ * The committed E1 corpus ({@code src/test/resources/mejournal-e1/}) against its SHA256SUMS and the
  * structural claims of each MANIFEST (record kinds present, the dark-node hole, the two epochs, the one synthetic schema 3
- * frame). J-ME3 is not byte-reproducible, so a fresh capture is never compared byte for byte; {@link #capture} re-records
+ * frame). The harness is not byte-reproducible, so a fresh capture is never compared byte for byte; {@link #capture} re-records
  * the corpus only when {@code -Dme.e1.capture.dir} names a directory.
  */
 public class MeJournalCorpusCaptureTest {
@@ -94,7 +94,7 @@ public class MeJournalCorpusCaptureTest {
         for (final String s : MeJournalCorpusCapture.SCENARIOS) {
             final String manifest = new String(f.get(s + "/MANIFEST"), StandardCharsets.US_ASCII);
             assertTrue(s + ": scenario line", manifest.startsWith("scenario=" + s + "\n"));
-            assertTrue(s + ": the boundary rule is stated (N-6)", manifest.contains("boundary_rule="));
+            assertTrue(s + ": the boundary rule is stated", manifest.contains("boundary_rule="));
             final String structure = MeJournalCorpusCapture.structure(members(f, s));
             assertTrue(s + ": the MANIFEST states the structure of the streams:\n" + structure, manifest.contains(structure));
         }
@@ -252,7 +252,7 @@ public class MeJournalCorpusCaptureTest {
                                     && MeJournalCorpusCapture.seq(b.get(b.size() - 1)) > MeJournalCorpusCapture.seq(a.get(a.size() - 1));
                         }
                     }
-                    assertTrue(s + ": a new recording re-journals from seq 1 over what was delivered (K8)", overlap);
+                    assertTrue(s + ": a new recording re-journals from seq 1 over what was delivered", overlap);
                 }
                 default -> throw new AssertionError(s);
             }

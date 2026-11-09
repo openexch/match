@@ -13,7 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * RC2 S13 test scope (contract 11.5, RC-F6, CL-F-8): the market publishers of an {@link
+ * Test scope: the market publishers of an {@link
  * com.match.infrastructure.persistence.AppClusteredService} that was not started. The service creates its
  * publishers in onStart (with their 20 ms scheduler threads); this rig creates one {@link MarketPublisher} per
  * market, never calls {@link MarketPublisher#onStart()}, wires the engine's book and the service's own
@@ -32,7 +32,7 @@ public final class PublisherRig {
             final MarketPublisher p = new MarketPublisher(m, "M" + m, null);
             p.setMatchingEngine(engine.getEngine(m));
             p.setBroadcaster(broadcaster);
-            S13Seams.apply(p);
+            NegativeControlSeams.apply(p);
             publishers.add(p);
         }
     }

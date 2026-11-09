@@ -19,7 +19,7 @@ import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S3 contract section 5 (X4): under behaviour 2 an equal-intent duplicate of a RECORDED
+ * Under behaviour 2 an equal-intent duplicate of a RECORDED
  * outcome journals nothing and consumes no journalSeq; CONFLICT, CAPACITY and INVALID are never
  * recorded and journal every copy at consecutive seqs.
  */
@@ -28,7 +28,7 @@ public class DuplicateSuppressionTest {
     private static final long PRICE = FixedPoint.fromDouble(59_000);
     private static final long QTY = FixedPoint.fromDouble(1);
 
-    /** RC2 S4 (B1): a core-shaped CREATE, idHigh = omsOrderId = 9000 + n, idLow = 0 << 2 | CREATE. */
+    /** A core-shaped CREATE, idHigh = omsOrderId = 9000 + n, idLow = 0 << 2 | CREATE. */
     private static DurableOrderIntent create(long n, long price) {
         return new DurableOrderIntent(9000 + n, 0, 100, 9000 + n, 0, price, QTY, 0, BehaviourTwoHarness.MARKET, 0, 0, 0);
     }
@@ -46,7 +46,7 @@ public class DuplicateSuppressionTest {
 
     /**
      * Fill the ledger to its recorded capacity C with recorded outcomes (never through the 1 MiB
-     * ring). RC2 S4: the behaviour-2 ledger is v2 and its capacity is the recorded C (50000 here).
+     * ring). The behaviour-2 ledger is v2 and its capacity is the recorded C (50000 here).
      */
     private static void fillLedger(Engine engine) {
         for (long i = 1_000_000; engine.ledgerV2().size() < engine.ledgerV2().capacity(); i++) {

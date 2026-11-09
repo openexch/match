@@ -7,7 +7,7 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 /**
- * Tests for DirectMatchingEngine — validates matching correctness and C3 safety.
+ * Tests for DirectMatchingEngine — validates matching correctness and safety.
  */
 public class DirectMatchingEngineTest {
 

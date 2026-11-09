@@ -20,7 +20,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * ME journal schema 4 layout pinned against the RC2 S1 contract section 2 table: every block
+ * ME journal schema 4 layout pinned against the schema table: every block
  * length and every field offset, the schema identity, and the 1112 B frame bound that keeps every
  * record inside one unfragmented {@code aeron:ipc} frame (MTU 1408, payload 1376).
  */

@@ -4,7 +4,7 @@ package com.match.infrastructure.persistence;
 import com.match.application.engine.BehaviourTwoHarness.Shape;
 import com.match.application.engine.Engine;
 import com.match.application.orderbook.MatchingEngine;
-import com.match.application.orderbook.S5Probe;
+import com.match.application.orderbook.OrderBookProbe;
 import com.match.domain.commands.DurableCommandOutcome;
 import com.match.infrastructure.mejournal.generated.CommandOutcomeDecoder;
 import com.match.infrastructure.mejournal.generated.CommandReleaseDecoder;
@@ -28,7 +28,7 @@ import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S4 independent review (S4/review.md): one seeded run that combines what the S4 tests cover
+ * One seeded run that combines what the ledger v2 tests cover
  * separately. Crossing books (fills, partial fills, maker FILLED), several legs under one idHigh
  * (iceberg slices / stop children: CREATE {@code (h, attempt k)}), amends that re-key the leg,
  * cancels by the owner and by a wrong user, verbatim resends of ANY earlier frame (another
@@ -45,11 +45,11 @@ import static org.junit.Assert.*;
  *       of {@code h} rests per a scan of the books and the omsMap); an all-NOOP frame journals
  *       nothing;</li>
  *   <li>no leg ever rests under a tombstoned idHigh;</li>
- *   <li>I6 (keys == resting legs, LegIndex counts) on all members;</li>
+ *   <li>the bijection invariant (keys == resting legs, LegIndex counts) on all members;</li>
  *   <li>the restored members journal byte-identical frames and end with identical snapshots.</li>
  * </ul>
  */
-public class S4ReviewReleaseSafetyFuzzTest {
+public class ReleaseSafetyFuzzTest {
 
     private record RestingLeg(long orderId, long h, long user, int side) { }
 
@@ -63,7 +63,7 @@ public class S4ReviewReleaseSafetyFuzzTest {
                 for (int i = 0; i < sides[s].length; i += 4) {
                     final long id = sides[s][i];
                     out.add(new RestingLeg(id, e.getOrderIdToOmsOrderId().get(id),
-                            S4Probe.restingUserId(me, id, s == 0), s));
+                            DurableLedgerProbe.restingUserId(me, id, s == 0), s));
                 }
             }
         }
@@ -119,7 +119,7 @@ public class S4ReviewReleaseSafetyFuzzTest {
                         final int t = rnd.nextInt(10);
                         frame = t < 8 ? createOfType(h, 0, 100 + rnd.nextInt(3), rnd.nextInt(2), price, qty,
                                 t < 6 ? LIMIT : LIMIT_MAKER)
-                                // MARKET: the buy (t 8) carries its quantity bound with the budget (RC2 S5 9.1).
+                                // MARKET: the buy (t 8) carries its quantity bound with the budget.
                                 : durableRaw(h, 0, CREATE, 100, h, 0, t == 8 ? 0 : 1, 0, fp(qty),
                                 t == 8 ? fp(qty * 60_000) : 0, MARKET, 0, 0);
                     } else if (pick < 9) {
@@ -138,8 +138,8 @@ public class S4ReviewReleaseSafetyFuzzTest {
                         if (rnd.nextBoolean()) {
                             frame = cancel(leg.h, att, user, leg.orderId);
                         } else {
-                            // RC2 S5 9.1: the core-shaped reference, the leg's remaining (test access).
-                            final long remaining = S5Probe.restingRemaining(a.h.engine.getEngine(1), leg.orderId,
+                            // The core-shaped reference, the leg's remaining (test access).
+                            final long remaining = OrderBookProbe.restingRemaining(a.h.engine.getEngine(1), leg.orderId,
                                     leg.side == 0);
                             frame = amend(leg.h, att, user, leg.orderId, leg.side, price, qty,
                                     rnd.nextInt(4) == 0 ? LIMIT_MAKER : LIMIT, remaining > 0 ? remaining : fp(1));
@@ -281,7 +281,7 @@ public class S4ReviewReleaseSafetyFuzzTest {
                 final byte[] image = a.snapshot();
                 assertArrayEquals(name + ": sink-less snapshot", image, s.snapshot());
                 assertArrayEquals(name + ": restored snapshot", image, restored.snapshot());
-                System.out.println("[S4-REVIEW] " + name + " seed " + seed + ": legLive=" + legLive
+                System.out.println("[RELEASE-FUZZ] " + name + " seed " + seed + ": legLive=" + legLive
                         + " orderApplied=" + orderApplied + " upToApplied=" + upToApplied + " released=" + releasedSeen
                         + " lateDuplicateOfCanonicalBlocked=" + lateCanonicalBlocked + " partial=" + partial
                         + " noopFrames=" + noopFrames + " maxLegsUnderOneH=" + maxLegsUnderOneH

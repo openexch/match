@@ -6,14 +6,14 @@ import com.match.application.engine.Engine;
 import java.lang.reflect.Field;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** RC2 S2 test support: an {@link AppClusteredService} in a chosen launch mode with a recording fail-fast. */
-final class S2Services {
+/** Test support: an {@link AppClusteredService} in a chosen launch mode with a recording fail-fast. */
+final class LaunchModeServices {
 
-    private S2Services() {
+    private LaunchModeServices() {
     }
 
     /**
-     * RC2 S17 W12: a hand-built v9 body (through the omsMap count) as the RC2 writer frames it: the empty v1
+     * A hand-built v9 body (through the omsMap count) as the current writer frames it: the empty v1
      * ledger block, then envelope 1 with its length and CRC32C.
      */
     static byte[] envelopeV1(final byte[] body) {
@@ -85,12 +85,12 @@ final class S2Services {
         }
 
         /**
-         * RC2 S17 W12: the onStart load path (reassembly, decode, the CRITICAL refusal and failFast); true when
+         * The onStart load path (reassembly, decode, the CRITICAL refusal and failFast); true when
          * the node would serve, false when it refused the image.
          */
         boolean load(byte[] image) {
             try {
-                service.loadSnapshot(new S13Node.OneShotSource(image), org.agrona.concurrent.NoOpIdleStrategy.INSTANCE);
+                service.loadSnapshot(new EpochHelloNode.OneShotSource(image), org.agrona.concurrent.NoOpIdleStrategy.INSTANCE);
                 return true;
             } catch (final IllegalStateException refused) {
                 return false;

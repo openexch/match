@@ -17,7 +17,7 @@ import static org.junit.Assert.assertEquals;
  * Wire round-trip test for the v10 EngineConfig ingress template (order-schema id=1,
  * template id 8).
  *
- * <p>This bump is ONLY the wire schema + codegen (finding A-3 generalized: engine-creation
+ * <p>This bump is ONLY the wire schema + codegen (generalized: engine-creation
  * config whose values are replicated via the cluster log); the demuxer deliberately has no
  * handler yet — dispatch drops the template via the unknown-template path until the
  * state-machine handler lands in the next PR. These tests just prove the generated codecs
@@ -37,7 +37,7 @@ public class EngineConfigRoundTripTest {
         final long bookCapacity = 1_048_576L;
         final long maxMatchesPerOrder = 50_000L;
         final long maxOrdersPerLevel = 4_096L;
-        // v12 (RC2 S1 contract 3.3): appended root fields before the markets group.
+        // v12: appended root fields before the markets group.
         final long behaviorVersion = 4_000_000_009L; // uint32 above Integer.MAX_VALUE
         final long commandLedgerCapacity = 100_000L;
         final long genesisId = -7_212_345_678_901_234_567L; // int64, any value incl. negative

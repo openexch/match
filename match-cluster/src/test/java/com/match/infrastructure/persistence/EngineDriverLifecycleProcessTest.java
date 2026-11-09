@@ -22,11 +22,11 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /**
- * RC2 S16 W9 (C13 for the Java engines): the production entry point on an EXTERNAL media driver, both in child JVMs,
+ * The production entry point on an EXTERNAL media driver, both in child JVMs,
  * so the exit status asserted is the one a process manager sees. The AE runs the same test on the same kit code
  * ({@code com.openexchange.cluster.EngineLifecycle}).
  *
- * <p>RED evidence: {@code -Dw9.engine.classpath=<pre-fix match-cluster.jar>} runs the child on that jar instead of this
+ * <p>RED evidence: {@code -Dengine.driver.classpath=<pre-fix match-cluster.jar>} runs the child on that jar instead of this
  * build (the pre-fix engine exits 0 on driver death, hangs on the absent driver and on SIGTERM).
  */
 public class EngineDriverLifecycleProcessTest {
@@ -50,11 +50,11 @@ public class EngineDriverLifecycleProcessTest {
 
     @Test
     public void mediaDriverDeathAfterStartExitsOneNeverZero() throws Exception {
-        assertDriverDeathExitsOne(startNodeOnDriver(false), "W9 driver kill -9");
+        assertDriverDeathExitsOne(startNodeOnDriver(false), "driver kill -9");
     }
 
     /**
-     * W9b (S16 W6 C13: ME exit 139 in 3/3): with the settlement journal on, the node runs a second, SHARED-mode archive
+     * Journal-on case (ME exit 139 in 3/3 before the fix): with the settlement journal on, the node runs a second, SHARED-mode archive
      * recording the journal publication, and the journal writer's archive client had Aeron's default error handler.
      * On driver death that client called {@code Runtime.exit(-1)} (a signal stop, so the FATAL was never recorded),
      * and the journal archive's own client closed and unmapped the CnC before its conductor decremented the
@@ -64,7 +64,7 @@ public class EngineDriverLifecycleProcessTest {
     public void mediaDriverDeathWithTheSettlementJournalExitsOneWithoutACrash() throws Exception {
         final Node node = startNodeOnDriver(true);
         awaitJournalRecording(node, 30_000); // the journal archive has an active recording (INFO is not logged)
-        assertDriverDeathExitsOne(node, "W9b driver kill -9, journal on");
+        assertDriverDeathExitsOne(node, "driver kill -9, journal on");
     }
 
     private static void assertDriverDeathExitsOne(final Node node, final String label) throws Exception {
@@ -88,14 +88,14 @@ public class EngineDriverLifecycleProcessTest {
 
     @Test
     public void absentDriverAtStartExitsOneWithinTheDriverWait() throws Exception {
-        final Path base = dir("match-w9-nodriver-");
+        final Path base = dir("match-driver-nodriver-");
         final Path aeronDir = Files.createDirectories(base.resolve("aeron"));
         final Path log = base.resolve("engine.log");
         final long t0 = System.nanoTime();
         final Process engine = engine(base, aeronDir, freePort(), log,
                 Map.of("TRANSPORT_EXTERNAL_DRIVER_TIMEOUT_MS", "2000"));
         final Exit exit = awaitExit(engine, 20_000, t0);
-        System.out.println("W9 no driver, wait 2000 ms: exit=" + exit.code + " after " + exit.ms + " ms from spawn");
+        System.out.println("no driver, wait 2000 ms: exit=" + exit.code + " after " + exit.ms + " ms from spawn");
         final String out = Files.readString(log);
         assertEquals("absent driver must exit 1 (took " + exit.ms + " ms): " + out, 1, exit.code);
         assertTrue("within the 2000 ms wait plus the JVM start: " + exit.ms, exit.ms < 12_000);
@@ -108,7 +108,7 @@ public class EngineDriverLifecycleProcessTest {
         final long t0 = System.nanoTime();
         node.engine.destroy(); // SIGTERM
         final Exit exit = awaitExit(node.engine, 20_000, t0);
-        System.out.println("W9 SIGTERM: exit=" + exit.code + " after " + exit.ms + " ms");
+        System.out.println("SIGTERM: exit=" + exit.code + " after " + exit.ms + " ms");
         final String out = node.log();
         assertTrue("SIGTERM must exit 0 or 143, got " + exit.code + " after " + exit.ms + " ms: " + out,
                 exit.code == 0 || exit.code == 143);
@@ -145,13 +145,13 @@ public class EngineDriverLifecycleProcessTest {
     }
 
     private Node startNodeOnDriver(final boolean settlementJournal) throws Exception {
-        final Path base = dir("match-w9-");
+        final Path base = dir("match-driver-");
         final Map<String, String> extraEnv = settlementJournal
                 ? Map.of("SETTLEMENT_JOURNAL_ENABLED", "true",
                         "SETTLEMENT_JOURNAL_DIR", base.resolve("journal").toString(),
                         "SETTLEMENT_JOURNAL_RING_BYTES", String.valueOf(1 << 20))
                 : Map.of();
-        final Path aeronDir = shmDir("match-w9-aeron-");
+        final Path aeronDir = shmDir("match-driver-aeron-");
         final Process driver = driver(aeronDir, base.resolve("driver.log"));
         final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
         while (!Files.exists(aeronDir.resolve("cnc.dat"))) {
@@ -167,7 +167,7 @@ public class EngineDriverLifecycleProcessTest {
     }
 
     private static String childClasspath() {
-        final String override = System.getProperty("w9.engine.classpath");
+        final String override = System.getProperty("engine.driver.classpath");
         return override == null || override.isEmpty() ? System.getProperty("java.class.path") : override;
     }
 

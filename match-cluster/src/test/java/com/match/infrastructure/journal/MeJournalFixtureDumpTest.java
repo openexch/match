@@ -17,7 +17,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 /**
- * The schema 4 cross-language fixtures (RC2 S1 FIX-7): the dump is byte-stable run to run, and
+ * The schema 4 cross-language fixtures: the dump is byte-stable run to run, and
  * the committed copy under {@code src/test/resources/mejournal/} is exactly what the dump
  * produces (regenerate with {@code MeJournalFixtureDump match-cluster/src/test/resources/mejournal}).
  */
@@ -46,7 +46,7 @@ public class MeJournalFixtureDumpTest {
         assertFrame(f.get(CONFIG), 5, 47);
     }
 
-    // RC2 S3 (W5a): the fixture names, as string literals so a stale dump fails by value.
+    // The fixture names, as string literals so a stale dump fails by value.
     private static final String TRADE = "java-trade.bin";
     private static final String TERMINAL = "java-terminal.bin";
     private static final String COMMAND_FIRST = "java-command.first.bin";
@@ -63,7 +63,7 @@ public class MeJournalFixtureDumpTest {
     }
 
     /**
-     * RC2 S3 contract section 11 (MeJournalFixtureDumpTest row, review NOTE-10): one
+     * One
      * identity-bound producer sequence: journalSeq 1..6 in the order config, trade, terminal,
      * command.first, command.conflict, release; meEpoch G on every frame; egressSeq
      * non-decreasing in seq order; behaviour 2 on records 3 and 5; ceiling 12; the conflict in

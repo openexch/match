@@ -17,8 +17,8 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * Test-scope generator of the ME journal schema 4 cross-language fixtures (RC2 S1 contract
- * FIX-7, 5.4, 8.2). Every file is ONE journal frame exactly as {@link SettlementJournal} puts it
+ * Test-scope generator of the ME journal schema 4 cross-language fixtures.
+ * Every file is ONE journal frame exactly as {@link SettlementJournal} puts it
  * on the ring (and the writer agent offers it as one unfragmented frame), produced from fixed
  * inputs, so the bytes are a pure function of this source. The execution projector copies the
  * files and pins the producing match commit as {@code fixture_source_commit}.
@@ -29,13 +29,13 @@ import java.util.TreeMap;
  * the committed files drift from what this class produces.</p>
  *
  * <p>The values follow the schema 3 era projector fixtures (trade 1 / orders 91, 92 / OMS 101,
- * 102; command 17:1 for OMS 9001) and pass the projector validation of contract 5.5.</p>
+ * 102; command 17:1 for OMS 9001) and pass the projector validation.</p>
  *
- * <p>RC2 S3 (W5a, review FIX-5 and NOTE-10): the six frames are ONE identity-bound behaviour-2
+ * <p>The six frames are ONE identity-bound behaviour-2
  * producer sequence, bound through {@link MeIdentity#restore} with meEpoch {@link #G}:
  * config FRESH journalSeq 1, trade 2, terminal 3, command.first 4, command.conflict 5, release
  * 6, egressSeq non-decreasing in seq order (64, 128, 128, 192, 256, 640), behaviour 2 on records
- * 3 and 5, maxWireVersion 12. A behaviour-2 ME never re-journals an equal duplicate (X4), so the
+ * 3 and 5, maxWireVersion 12. A behaviour-2 ME never re-journals an equal duplicate, so the
  * schema-4 retry fixture is replaced by a CONFLICT in the commandRejection shape (orderId 0,
  * status -1, reason 0, result 2, appliedPosition = egressSeq).</p>
  */

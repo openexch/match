@@ -5,7 +5,7 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 /**
- * Tests for FixedPoint arithmetic — validates overflow safety (C1 fix).
+ * Tests for FixedPoint arithmetic — validates overflow safety.
  */
 public class FixedPointTest {
 
@@ -43,7 +43,7 @@ public class FixedPointTest {
         assertEquals(0.000001, FixedPoint.toDouble(result), 0.0000001);
     }
 
-    // ==================== C1: Overflow Safety ====================
+    // ==================== Overflow Safety ====================
 
     @Test
     public void testMultiplyLargeValues_NoOverflow() {

@@ -7,7 +7,7 @@ import com.match.domain.commands.CreateOrderCommand;
 import com.match.domain.enums.OrderSide;
 import com.match.domain.enums.OrderType;
 import com.match.infrastructure.websocket.PublisherRig;
-import com.match.infrastructure.websocket.S13Seams;
+import com.match.infrastructure.websocket.NegativeControlSeams;
 import com.openexchange.cluster.SnapshotImageReader;
 import io.aeron.cluster.service.Cluster;
 import io.aeron.logbuffer.FragmentHandler;
@@ -30,28 +30,28 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 /**
- * RC2 S13 test scope (contract 11.5): the {@link MeEpochHelloTest} node (an {@link AppClusteredService} on a
+ * Test scope: the {@link MeEpochHelloTest} node (an {@link AppClusteredService} on a
  * {@link MeStubCluster}, not started, restored from a snapshot image) plus a {@link PublisherRig} over its
- * engine and its own broadcaster, and one FORWARDER session. Every S13 API the ME tests touch goes through this
+ * engine and its own broadcaster, and one FORWARDER session. Every epoch-hello / resnapshot API the ME tests touch goes through this
  * class (the seam fields, the onStart restore step, the role-change probe).
  */
-final class S13Node {
+final class EpochHelloNode {
 
     /** Markets of the images: 1 holds a resting bid at 59,000 in the image, 2 is never touched in it. */
     static final int[] MARKETS = {1, 2};
 
     final MeStubCluster cluster = new MeStubCluster();
-    final S2Services.Service svc = new S2Services.Service(true);
+    final LaunchModeServices.Service svc = new LaunchModeServices.Service(true);
     final AppClusteredService s = svc.service;
     final MeEpochHelloTest.RecordingSession session;
     PublisherRig rig;
 
-    S13Node(final long sessionId) {
+    EpochHelloNode(final long sessionId) {
         session = new MeEpochHelloTest.RecordingSession(sessionId);
-        s.restoreRepublish = !S13Seams.off("RESTORE_REPUBLISH");
-        s.resnapshotOnLeader = !S13Seams.off("RESNAPSHOT_ON_LEADER");
+        s.restoreRepublish = !NegativeControlSeams.off("RESTORE_REPUBLISH");
+        s.resnapshotOnLeader = !NegativeControlSeams.off("RESNAPSHOT_ON_LEADER");
         // inverted on purpose: listing this name in -Dmatch.test.disable switches the withdrawn order ON
-        s.resnapshotBeforeIsLeader = S13Seams.off("RESNAPSHOT_BEFORE_IS_LEADER");
+        s.resnapshotBeforeIsLeader = NegativeControlSeams.off("RESNAPSHOT_BEFORE_IS_LEADER");
     }
 
     /** The image: EngineConfig (ARRAY, markets 1 and 2) at 64, one resting bid on market 1 at 192. */
@@ -67,22 +67,22 @@ final class S13Node {
         }
     }
 
-    /** Restore through the codec only (the W-ME1 cases: no W-ME3 involved). */
-    S13Node restoreByCodec(final byte[] image) {
+    /** Restore through the codec only (the resnapshot-on-leader cases: no restored-book republish involved). */
+    EpochHelloNode restoreByCodec(final byte[] image) {
         svc.restore(image);
         assertEquals(0, svc.failFast.get());
         return this;
     }
 
     /** Restore through the onStart restore step at the stub cluster's log position (the snapshot position P). */
-    S13Node restoreByOnStartStep(final byte[] image) {
+    EpochHelloNode restoreByOnStartStep(final byte[] image) {
         s.restoreSnapshot(new OneShotSource(image), NoOpIdleStrategy.INSTANCE, cluster.logPosition);
         assertEquals(0, svc.failFast.get());
         return this;
     }
 
     /** Attach to the stub cluster in {@code role} and open term {@code term}; wire the publishers. */
-    S13Node attach(final Cluster.Role role, final long term) {
+    EpochHelloNode attach(final Cluster.Role role, final long term) {
         cluster.role = role;
         MeStubCluster.attach(s, cluster);
         s.onNewLeadershipTermEvent(term, cluster.logPosition, cluster.time, 0, 0, 7, TimeUnit.MILLISECONDS, 0);
@@ -113,7 +113,7 @@ final class S13Node {
         s.onTimerEvent(s.currentFlushTimerId(), cluster.time);
     }
 
-    /** A node that led {@code agoMs} ago: its periodic resnapshot is not due (F-S13-3). */
+    /** A node that led {@code agoMs} ago: its periodic resnapshot is not due. */
     void ledAgo(final long agoMs) {
         set("lastPeriodicResnapshotMs", System.currentTimeMillis() - agoMs);
     }

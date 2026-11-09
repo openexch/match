@@ -33,13 +33,13 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * RC2 S17 W12, the ME's loud refusals at process level (child JVMs on the production entry point {@code com.match.Main},
+ * The ME's loud refusals at process level (child JVMs on the production entry point {@code com.match.Main},
  * so the exit status asserted is the one a process manager sees):
  * <ul>
- *   <li>M5 (R-ME-1): a cluster snapshot image without the durable magic exits 1 and never answers /ready 200;</li>
- *   <li>M6 (R-KIT-Q): a lone member of a three-member cluster exits 1 within ENGINE_QUORUM_WAIT_MS plus the fatal
+ *   <li>a cluster snapshot image without the durable magic exits 1 and never answers /ready 200;</li>
+ *   <li>a lone member of a three-member cluster exits 1 within ENGINE_QUORUM_WAIT_MS plus the fatal
  *       grace, in both driver modes;</li>
- *   <li>M6b (R-KIT-Q regression): a follower restarted into a live cluster with a low ENGINE_QUORUM_WAIT_MS reaches
+ *   <li>regression: a follower restarted into a live cluster with a low ENGINE_QUORUM_WAIT_MS reaches
  *       /ready and is never tripped (its election goes through FOLLOWER_* states).</li>
  * </ul>
  */
@@ -64,12 +64,12 @@ public class MeStartupRefusalProcessTest {
         }
     }
 
-    // ------------------------------------------------------------------------------------------------- M5
+    // ------------------------------------------------------------------------------------------------- magic-less image
 
     @Test
     public void aMagicLessSnapshotImageExitsOneAndNeverServes() throws Exception {
-        final Path root = dir("match-w12-m5-");
-        final Path shm = shmDir("match-w12-m5-aeron-");
+        final Path root = dir("match-refusal-magic-");
+        final Path shm = shmDir("match-refusal-magic-aeron-");
         final String addresses = "localhost";
 
         // Life 1: a legacy-mode node with no traffic serves, takes one snapshot and stops cleanly.
@@ -85,7 +85,7 @@ public class MeStartupRefusalProcessTest {
         // Stage the magic-less image: the durable magic (if this build wrote one) becomes an order-id generator,
         // the tag's layout. A build whose writer emits a bare image needs no edit.
         final int patched = stripMagic(findDir(root, "archive.catalog"), serviceRecording);
-        System.out.println("M5: patched " + patched + " durable magic(s) in service snapshot recording "
+        System.out.println("magic-less image: patched " + patched + " durable magic(s) in service snapshot recording "
                 + serviceRecording);
         Thread.sleep(11_000); // Aeron refuses a mark file younger than its 10 s liveness timeout
 
@@ -95,7 +95,7 @@ public class MeStartupRefusalProcessTest {
         final Process second = engine(root, shm, 0, addresses, log2, Map.of());
         final int code = awaitExitNeverReady(second, 0, log2, 90_000);
         final String out = Files.readString(log2);
-        System.out.println("M5: exit=" + code + " after " + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0)
+        System.out.println("magic-less image: exit=" + code + " after " + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0)
                 + " ms");
         assertEquals("a magic-less image exits 1: " + out, 1, code);
         assertTrue(out, out.contains("CRITICAL: snapshot refused: snapshot envelope magic missing (length="));
@@ -103,7 +103,7 @@ public class MeStartupRefusalProcessTest {
         assertTrue(out, out.contains("this node will not serve an unverified state"));
     }
 
-    // ------------------------------------------------------------------------------------------------- M6
+    // ------------------------------------------------------------------------------------------------- lone member
 
     @Test
     public void aLoneMemberOfThreeExitsOneWithinTheQuorumWaitEmbeddedDriver() throws Exception {
@@ -116,11 +116,11 @@ public class MeStartupRefusalProcessTest {
     }
 
     private void assertLoneMemberExits(final boolean external) throws Exception {
-        final Path root = dir("match-w12-m6-");
-        final Path shm = shmDir("match-w12-m6-aeron-");
+        final Path root = dir("match-refusal-lone-");
+        final Path shm = shmDir("match-refusal-lone-aeron-");
         final Map<String, String> env = new java.util.HashMap<>(Map.of("ENGINE_QUORUM_WAIT_MS", "3000"));
         if (external) {
-            final Path driverDir = shmDir("match-w12-m6-driver-");
+            final Path driverDir = shmDir("match-refusal-lone-driver-");
             startDriver(driverDir, root.resolve("driver.out"));
             env.put("TRANSPORT_DRIVER_MODE", "external");
             env.put("AERON_DIR", driverDir.toString());
@@ -131,7 +131,7 @@ public class MeStartupRefusalProcessTest {
         final int code = awaitExitNeverReady(lone, 0, log, 3_000 + FATAL_GRACE_MS + 20_000);
         final long ms = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
         final String out = Files.readString(log);
-        System.out.println("M6 (" + (external ? "external" : "embedded") + "): exit=" + code + " after " + ms
+        System.out.println("lone member (" + (external ? "external" : "embedded") + "): exit=" + code + " after " + ms
                 + " ms from spawn");
         assertEquals("a lone member exits 1: " + out, 1, code);
         assertTrue(out, out.contains("FATAL (exit 1): no cluster quorum observed within 3000 ms since the consensus "
@@ -139,12 +139,12 @@ public class MeStartupRefusalProcessTest {
         assertTrue(out, out.contains("quorum watchdog armed"));
     }
 
-    // ------------------------------------------------------------------------------------------------- M6b
+    // ------------------------------------------------------------------------------------------------- rejoining follower
 
     @Test
     public void aFollowerRestartedIntoALiveClusterIsNeverTripped() throws Exception {
-        final Path root = dir("match-w12-m6b-");
-        final Path shm = shmDir("match-w12-m6b-aeron-");
+        final Path root = dir("match-refusal-rejoin-");
+        final Path shm = shmDir("match-refusal-rejoin-aeron-");
         final String addresses = "localhost,localhost,localhost";
         final Process[] nodes = new Process[3];
         for (int i = 0; i < 3; i++) {
@@ -176,17 +176,17 @@ public class MeStartupRefusalProcessTest {
         assertTrue(out, out.contains("quorum watchdog armed: exit 1 if no leader is known within " + waitMs + " ms"));
     }
 
-    // ------------------------------------------------------------------------------------------------- M6c (V9)
+    // ------------------------------------------------------------------------------------------------- long onStart
 
     /**
-     * Review V1/V9: the consensus module sits in INIT while the service container's onStart runs (the snapshot load
+     * The consensus module sits in INIT while the service container's onStart runs (the snapshot load
      * in production). onStart is held for three quorum waits by a JDWP breakpoint: the node must never trip, reach
      * /ready once released, and stay up.
      */
     @Test
     public void aLongServiceOnStartInInitNeverTripsTheWatchdog() throws Exception {
-        final Path root = dir("match-w12-v9-");
-        final Path shm = shmDir("match-w12-v9-aeron-");
+        final Path root = dir("match-refusal-hold-");
+        final Path shm = shmDir("match-refusal-hold-aeron-");
         final int jdwp = freePort();
         final long waitMs = 2_000;
         final Path log = root.resolve("run.out");
@@ -206,7 +206,7 @@ public class MeStartupRefusalProcessTest {
     }
 
     /**
-     * RC2 S17 W12 review V9: hold the service container's onStart for {@code holdMs} with a JDWP breakpoint (the
+     * Hold the service container's onStart for {@code holdMs} with a JDWP breakpoint (the
      * child starts with suspend=y), so the consensus module dwells in INIT waiting for the service's ack, exactly as
      * during a long snapshot load. Only the service thread is suspended; the watchdog thread keeps polling. Returns
      * true once the breakpoint was hit, held and released.
@@ -252,7 +252,7 @@ public class MeStartupRefusalProcessTest {
                                 bp.setSuspendPolicy(com.sun.jdi.request.EventRequest.SUSPEND_EVENT_THREAD);
                                 bp.enable();
                             } else if (e instanceof com.sun.jdi.event.BreakpointEvent) {
-                                System.out.println("[W12-V9] onStart held for " + holdMs + " ms");
+                                System.out.println("[STARTUP-HOLD] onStart held for " + holdMs + " ms");
                                 Thread.sleep(holdMs);
                                 vm.eventRequestManager().deleteAllBreakpoints();
                                 held.set(true);
@@ -271,7 +271,7 @@ public class MeStartupRefusalProcessTest {
                 } catch (final InterruptedException | com.sun.jdi.VMDisconnectedException done) {
                     // the child exited or the hold ended
                 }
-            }, "w12-onstart-hold");
+            }, "onstart-hold");
             events.setDaemon(true);
             events.start();
             vm.resume(); // suspend=y: the child waits for the debugger before main

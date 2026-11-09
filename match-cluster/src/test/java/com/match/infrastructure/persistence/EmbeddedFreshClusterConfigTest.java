@@ -65,7 +65,7 @@ public class EmbeddedFreshClusterConfigTest {
         List<String> hostnames = List.of("localhost");
 
         service = new AppClusteredService();
-        TestAuth.install(); // RC2 S6: the real authenticator over the test key table
+        TestAuth.install(); // The real authenticator over the test key table
 
         ClusterConfig config = ClusterConfig.create(0, 0, hostnames, hostnames, PORT_BASE, baseDir, service);
         config.errorHandler(t -> System.err.println("Cluster error: " + t.getMessage()));
@@ -184,7 +184,7 @@ public class EmbeddedFreshClusterConfigTest {
     }
 
     /**
-     * RC2 S2 (W4 sink wiring): a journal-enabled config-mode node — a SettlementJournal armed
+     * A journal-enabled config-mode node — a SettlementJournal armed
      * through setSettlementJournal before start, its ring drained here — journals exactly one
      * record 5 with journalSeq 1 for a FRESH at behaviour 2. Runs its OWN single-node cluster
      * (own aeron dir, ports and state dir): the class cluster above is already FRESH at 1.
@@ -199,7 +199,7 @@ public class EmbeddedFreshClusterConfigTest {
                 new com.match.infrastructure.journal.SettlementJournal(1 << 16);
         b2Service.setSettlementJournal(journal);
         final List<String> hosts = List.of("localhost");
-        TestAuth.install(); // RC2 S6: the real authenticator over the test key table
+        TestAuth.install(); // The real authenticator over the test key table
 
         final ClusterConfig config = ClusterConfig.create(0, 0, hosts, hosts, portBase, dir, b2Service);
         config.aeronDirectoryName(new File(dir, "aeron").getAbsolutePath());
@@ -327,7 +327,7 @@ public class EmbeddedFreshClusterConfigTest {
                 .bookCapacity(4096)
                 .maxMatchesPerOrder(100)
                 .maxOrdersPerLevel(0)
-                // v12: an unset behaviorVersion is 0, which RC2 S2 refuses (S-b).
+                // v12: an unset behaviorVersion is 0, which behaviour versioning refuses.
                 .behaviorVersion(1);
         encoder.marketsCount(1).next()
                 .marketId(MARKET)

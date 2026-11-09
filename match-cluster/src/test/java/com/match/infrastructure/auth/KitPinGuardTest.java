@@ -9,9 +9,9 @@ import java.util.HexFormat;
 import static org.junit.Assert.assertEquals;
 
 /**
- * RC2 S6 9.2 (FIX-10): the cluster-kit pinned in match carries the S6 authority and helpers, with the bytes the
+ * The cluster-kit pinned in match carries the session authority and helpers, with the bytes the
  * C++ client and the fixture produce. Reflection only, so the same test compiles against a kit without them
- * and fails at run time (ClassNotFoundException) on the pre-S6 pin.
+ * and fails at run time (ClassNotFoundException) on a pin from before the authority.
  */
 public class KitPinGuardTest {
 

@@ -61,7 +61,7 @@ public sealed interface EngineEvent permits EngineEvent.Trade, EngineEvent.Statu
     }
 
     /**
-     * RC2 S5 (9.1): a behaviour-2 record 3 outcome (only the D* verbs produce one; legacy scenarios
+     * A behaviour-2 record 3 outcome (only the D* verbs produce one; legacy scenarios
      * emit none, so their goldens are unchanged).
      */
     record Outcome(long idHigh, long idLow, int result, int status, int reason, boolean oldCancelled, long orderId)

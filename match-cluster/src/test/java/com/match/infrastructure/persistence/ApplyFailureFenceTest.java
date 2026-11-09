@@ -189,7 +189,7 @@ public class ApplyFailureFenceTest {
     private static void dispatch(AppClusteredService service) {
         var b = create(); var header = new Header(0, 16);
         header.buffer(new UnsafeBuffer(new byte[32]));
-        // RC2 S6 (FIX-2): a principal-bearing session; a null session is the R0 halt, not this fence.
+        // A principal-bearing session; a null session is the R0 halt, not this fence.
         service.onSessionMessage(TestAuth.session(1, com.openexchange.cluster.auth.ClusterSessionClass.ADMIN),
                 10, b, 0, b.capacity(), header);
     }

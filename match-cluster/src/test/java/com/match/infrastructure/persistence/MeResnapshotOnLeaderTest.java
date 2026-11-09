@@ -11,18 +11,18 @@ import java.util.List;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S13 W-ME1 (contract 8.1, Q7, CL-F-1): a node that becomes LEADER requests a resnapshot right after its
+ * A node that becomes LEADER requests a resnapshot right after its
  * {@code isLeader} write. A promoted follower's publisher chain is its own (it encoded while broadcast()
- * discarded, F-S13-2), and the periodic bump waits up to 10 s on a node that led recently (F-S13-3), so without
+ * discarded), and the periodic bump waits up to 10 s on a node that led recently, so without
  * the request a surviving session gets no BookSnapshot after an ME failover. Flushes are counted in calls
- * ({@link PublisherRig#flushAll()} then {@link S13Node#busyFlush()}), never in wall time.
+ * ({@link PublisherRig#flushAll()} then {@link EpochHelloNode#busyFlush()}), never in wall time.
  */
 public class MeResnapshotOnLeaderTest {
 
     /** A follower restored from the image, with its session open, books versioned on both markets after the
-     *  restore (no W-ME3 dependence), its publishers flushed as a follower, and a recent lead (1 s ago). */
-    private static S13Node followerWithBooks(final byte[] image, final long sessionId) {
-        final S13Node n = new S13Node(sessionId).restoreByCodec(image);
+     *  restore (no restored-book republish dependence), its publishers flushed as a follower, and a recent lead (1 s ago). */
+    private static EpochHelloNode followerWithBooks(final byte[] image, final long sessionId) {
+        final EpochHelloNode n = new EpochHelloNode(sessionId).restoreByCodec(image);
         n.attach(Cluster.Role.FOLLOWER, 5);
         n.open();
         n.rig.flushAll(); // follower: the session-open generation is consumed, the snapshot discarded
@@ -35,14 +35,14 @@ public class MeResnapshotOnLeaderTest {
 
     @Test
     public void resnapshotReachesSessionsWithinTwoLeaderFlushes() {
-        final S13Node n = followerWithBooks(S13Node.image(), 77);
+        final EpochHelloNode n = followerWithBooks(EpochHelloNode.image(), 77);
         assertTrue("a follower enqueues nothing", n.session.offered.isEmpty());
         n.promote(6);
         for (int i = 0; i < 2; i++) {
             n.rig.flushAll();
             n.busyFlush();
         }
-        for (int m : S13Node.MARKETS) {
+        for (int m : EpochHelloNode.MARKETS) {
             final List<PublisherRig.BookFrame> frames = n.received(m);
             final PublisherRig.BookFrame snap = frames.stream().filter(PublisherRig.BookFrame::isSnapshot)
                     .findFirst().orElse(null);
@@ -59,10 +59,10 @@ public class MeResnapshotOnLeaderTest {
 
     @Test
     public void resnapshotOnLeaderIsEgressOnly() {
-        final byte[] image = S13Node.image();
-        final S13Node leader = followerWithBooks(image, 81);
-        final S13Node a = followerWithBooks(image, 82);
-        final S13Node b = followerWithBooks(image, 83);
+        final byte[] image = EpochHelloNode.image();
+        final EpochHelloNode leader = followerWithBooks(image, 81);
+        final EpochHelloNode a = followerWithBooks(image, 82);
+        final EpochHelloNode b = followerWithBooks(image, 83);
         final byte[] before = leader.snapshot();
         assertArrayEquals(before, a.snapshot());
         assertArrayEquals(before, b.snapshot());
@@ -71,7 +71,7 @@ public class MeResnapshotOnLeaderTest {
         a.demote();
         b.demote();
         for (int i = 0; i < 3; i++) {
-            for (S13Node n : List.of(leader, a, b)) {
+            for (EpochHelloNode n : List.of(leader, a, b)) {
                 n.rig.flushAll();
                 if (n == leader) {
                     n.busyFlush();
@@ -79,7 +79,7 @@ public class MeResnapshotOnLeaderTest {
             }
         }
         assertFalse("the leader delivered its resnapshot", leader.received(1).isEmpty());
-        for (S13Node f : List.of(a, b)) {
+        for (EpochHelloNode f : List.of(a, b)) {
             assertEquals("a follower enqueues nothing", 0, f.marketDataQueued());
             assertTrue("a follower's session received nothing", f.session.offered.isEmpty());
         }
@@ -91,7 +91,7 @@ public class MeResnapshotOnLeaderTest {
 
     @Test
     public void generationBumpAfterIsLeaderNeverLosesTheSnapshot() {
-        final S13Node n = followerWithBooks(S13Node.image(), 91);
+        final EpochHelloNode n = followerWithBooks(EpochHelloNode.image(), 91);
         // a mutation not yet flushed: the probe's flush (between the two writes) has something to encode
         n.create(1, 10_256, 9103, OrderSide.BID, 59_600);
         n.roleChangeProbe(n.rig::flushAll);
@@ -107,7 +107,7 @@ public class MeResnapshotOnLeaderTest {
         if (frames.stream().noneMatch(PublisherRig.BookFrame::isSnapshot)) {
             fail("no BookSnapshot enqueued after promotion: " + frames);
         }
-        S13Node.assertChainedAfterFirstSnapshot("market 1", frames);
+        EpochHelloNode.assertChainedAfterFirstSnapshot("market 1", frames);
         assertEquals("the last frame carries the last command's version", n.bookVersion(1),
                 frames.get(frames.size() - 1).bookVersion);
     }

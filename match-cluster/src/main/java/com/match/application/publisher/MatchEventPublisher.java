@@ -60,7 +60,7 @@ public class MatchEventPublisher implements MatchEventSink {
     // 64K events provides ~1-2 seconds buffer at 50K events/sec peak
     private static final int RING_BUFFER_SIZE = 65536;
 
-    // C-1: bounded spin budget for claimSlotOrHalt before it declares the egress ring wedged.
+    // Bounded spin budget for claimSlotOrHalt before it declares the egress ring wedged.
     // A full egress ring means the per-market publisher thread cannot keep up; parking the
     // consensus thread on ringBuffer.next() would livelock the whole node (this was the
     // mechanism behind the 60s failover blindness). Once this budget is spent with the ring
@@ -72,8 +72,8 @@ public class MatchEventPublisher implements MatchEventSink {
     private final Int2ObjectHashMap<RingBuffer<PublishEvent>> ringBuffers;
     private final Int2ObjectHashMap<MarketEventHandler> handlers;
 
-    // RC2 S3: no trade-id counter here. The engine allocates tradeId and journalSeq before any
-    // sink call (contract section 3); this publisher only carries them.
+    // No trade-id counter here. The engine allocates tradeId and journalSeq before any
+    // sink call; this publisher only carries them.
 
     // P1.5 diag counter (match#32): terminal OrderStatus events (FILLED/CANCELLED/
     // REJECTED) published by the engine, counted BEFORE the Disruptor so egress
@@ -81,7 +81,7 @@ public class MatchEventPublisher implements MatchEventSink {
     // and the diag reader both run on the cluster service thread.
     private long terminalStatusCount;
 
-    // C-6 diag counter: the per-market Disruptor default exception handler (see initMarket)
+    // Diagnostic counter: the per-market Disruptor default exception handler (see initMarket)
     // swallows any exception thrown by a market's MarketEventHandler. That event dies BEFORE
     // a statusSeq is stamped on the wire, so it leaves neither a wire gap nor an OMS-side
     // reconciliation trigger; it is completely invisible without this counter. AtomicLong,
@@ -125,7 +125,7 @@ public class MatchEventPublisher implements MatchEventSink {
                 com.match.application.engine.DurableCommandLedger.MAX_ENTRIES);
     }
 
-    /** RC2 S4: the behaviour-2 view form; the journal copies the fields into the frame. */
+    /** The behaviour-2 view form; the journal copies the fields into the frame. */
     @Override public void publishCommandOutcome(long position, long journalSeq,
                                                 com.match.domain.commands.DurableOutcomeView outcome,
                                                 int ledgerSizeAfter, int ledgerCapacity) {
@@ -140,7 +140,7 @@ public class MatchEventPublisher implements MatchEventSink {
         journal.appendCommandOutcome(journalSeq, position, outcome, ledgerSizeAfter, ledgerCapacity);
     }
 
-    // RC2 S4: record 4 release frames this node could not journal because journaling is off here.
+    // Record 4 release frames this node could not journal because journaling is off here.
     // The release itself applied like on every other replica.
     private final AtomicLong darkCommandReleaseCount = new AtomicLong();
 
@@ -164,7 +164,7 @@ public class MatchEventPublisher implements MatchEventSink {
 
     public long getDarkCommandOutcomeCount() { return darkCommandOutcomeCount.get(); }
 
-    // RC2 S2: EngineConfig record 5 decisions this node could not journal because journaling is
+    // EngineConfig record 5 decisions this node could not journal because journaling is
     // off here. The decision itself applied like on every other replica.
     private final AtomicLong darkEngineConfigCount = new AtomicLong();
 
@@ -226,14 +226,14 @@ public class MatchEventPublisher implements MatchEventSink {
         disruptor.setDefaultExceptionHandler(new ExceptionHandler<PublishEvent>() {
             @Override
             public void handleEventException(Throwable ex, long sequence, PublishEvent event) {
-                // C-6: KEEP SWALLOWING (rethrow would kill this market's publisher thread and
+                // KEEP SWALLOWING (rethrow would kill this market's publisher thread and
                 // wedge all of its egress), but make it counted and LOUD. The event dies here,
                 // before any statusSeq is stamped, so it leaves no wire gap and triggers no
                 // OMS-side reconciliation; this counter and ERROR line are the only trace it
                 // ever leaves. logged at ERROR (not WARN) because the default level is ERROR
                 // and WARN was being suppressed. No rate-limit: these should ~never fire.
                 disruptorExceptionCount.incrementAndGet();
-                logger.error("EGRESS EVENT LOST (C-6): market=" + mktId + " sequence=" + sequence
+                logger.error("EGRESS EVENT LOST: market=" + mktId + " sequence=" + sequence
                         + " swallowed handler exception " + ex.getClass().getName() + ": " + ex.getMessage()
                         + "; event dropped before statusSeq was stamped (no wire gap, no OMS"
                         + " reconciliation); count exported as match_egress_disruptor_exceptions_total");
@@ -289,7 +289,7 @@ public class MatchEventPublisher implements MatchEventSink {
     }
 
     /**
-     * Claim the next egress ring slot for {@code marketId}, or halt the node if the ring is wedged (C-1).
+     * Claim the next egress ring slot for {@code marketId}, or halt the node if the ring is wedged.
      *
      * <p>Happy path (the ring has capacity): a single {@link RingBuffer#remainingCapacity()} read
      * then {@link RingBuffer#next()}, zero allocation. Only when the ring is full do we spin a
@@ -315,7 +315,7 @@ public class MatchEventPublisher implements MatchEventSink {
                 // Allocation here is fine: this path halts the JVM, it is not the hot path.
                 String crit = "CRITICAL: egress ring buffer for market " + marketId + " still full after "
                         + RING_FULL_MAX_SPINS + " spins; halting node to avoid livelocking the consensus thread "
-                        + "(C-1). A wedged egress ring means the market publisher cannot keep up.";
+                        + "(wedged egress ring). A wedged egress ring means the market publisher cannot keep up.";
                 logger.error(crit);
                 System.err.println(crit);
                 Runtime.getRuntime().halt(1);
@@ -328,7 +328,7 @@ public class MatchEventPublisher implements MatchEventSink {
      * Publish trade execution event.
      * ZERO allocations - uses pre-allocated ring buffer slot.
      *
-     * <p>RC2 S3 (G2, K7): the journal append comes FIRST, before the ring lookup, so a member
+     * <p>The journal append comes FIRST, before the ring lookup, so a member
      * without an egress ring for the market still journals the trade; a missing ring costs
      * egress only.</p>
      *
@@ -371,7 +371,7 @@ public class MatchEventPublisher implements MatchEventSink {
             logger.warn("RING BUFFER LOW: market=" + marketId + ", remaining=" + remaining + "/" + bufferSize);
         }
 
-        // Claim a slot, or halt the node if the egress ring is wedged (C-1). Never parks the
+        // Claim a slot, or halt the node if the egress ring is wedged. Never parks the
         // consensus thread on a full ring.
         long sequence = claimSlotOrHalt(ringBuffer, marketId);
         try {
@@ -482,11 +482,11 @@ public class MatchEventPublisher implements MatchEventSink {
     }
 
     /**
-     * RC2 S3: the engine decides which terminals are journaled. {@code journalTerminal} is false
+     * The engine decides which terminals are journaled. {@code journalTerminal} is false
      * for a pre-cancel amend rejection and the old-leg CANCELLED of an accepted cancel-replace
      * (neither closes the OMS order, the AE money key); the wire status itself is unchanged —
      * the OMS's replace leg-routing depends on it. The journal append comes FIRST, before the
-     * ring lookup (finding F-2), so a missing egress ring costs egress only.
+     * ring lookup, so a missing egress ring costs egress only.
      *
      * @param journalTerminal true iff the engine journals this status (only ever with
      *                        {@code orderStatus >= FILLED}; anything else is a programming error)
@@ -586,7 +586,7 @@ public class MatchEventPublisher implements MatchEventSink {
 
     /**
      * Count of OMS-lane Disruptor handler exceptions swallowed by the per-market default
-     * exception handler (C-6). Each one is an egress event lost before its statusSeq was
+     * exception handler. Each one is an egress event lost before its statusSeq was
      * stamped (no wire gap, no OMS reconciliation), so this counter is its only signal.
      * Read off the hot path (metrics scrape thread); should be ~zero. Exported as
      * match_egress_disruptor_exceptions_total.

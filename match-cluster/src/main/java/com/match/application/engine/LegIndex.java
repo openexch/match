@@ -4,14 +4,14 @@ package com.match.application.engine;
 import org.agrona.collections.Long2LongHashMap;
 
 /**
- * RC2 S4 (contract 5.2): the one owner of the {@code orderId -> omsOrderId} correlation map and of
+ * The one owner of the {@code orderId -> omsOrderId} correlation map and of
  * a primitive {@code omsOrderId -> resting leg count}. Every put and remove in {@link Engine} and the
  * snapshot restore go through here, so the two maps cannot drift; the raw map is exposed read-only
  * (the serializer iterates it) and is never mutated outside this class.
  *
  * <p>Maintained in both behaviours. In behaviour 1 the count is unobservable (no output reads it).
  * In behaviour 2 every resting leg carries {@code omsOrderId = idHigh >= 1} and the keys are in
- * bijection with the resting legs (invariant I6), so {@link #count} is the {@code LEG_LIVE} input of
+ * bijection with the resting legs (an invariant), so {@link #count} is the {@code LEG_LIVE} input of
  * an {@code ORDER} release.</p>
  *
  * <p>Single-threaded (service thread). Allocation-free after warm-up: both maps are agrona primitive
@@ -19,7 +19,7 @@ import org.agrona.collections.Long2LongHashMap;
  */
 public final class LegIndex {
 
-    /** The missing value of the correlation map (as before S4). */
+    /** The missing value of the correlation map (as before). */
     public static final long MISSING = -1L;
 
     private final Long2LongHashMap orderIdToOmsOrderId = new Long2LongHashMap(MISSING);

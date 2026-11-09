@@ -24,7 +24,7 @@ import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S3 contract section 3 (G2, K7) and findings F-1 and F-2: tradeId and journalSeq are
+ * TradeId and journalSeq are
  * allocated by the engine before any ring lookup, so a member without egress rings or without
  * any sink allocates exactly what a production member does; the journal appends do not depend
  * on the egress ring; and a sink-less engine keeps the replicated maker bookkeeping.
@@ -105,7 +105,7 @@ public class MeTradeIdWithoutRingBufferTest {
         }
     }
 
-    /** F-1 (review FIX-2): legacy lane only, no acceptDurable. */
+    /** Legacy lane only, no acceptDurable. */
     @Test
     public void sinklessEngineDropsFilledMakerLikeASinkEngine() {
         final Engine c = new Engine("array");
@@ -127,7 +127,7 @@ public class MeTradeIdWithoutRingBufferTest {
         }
     }
 
-    /** RC2 S4 (B1): core-shaped, idHigh = omsOrderId, idLow = n << 2 | kind. */
+    /** Core-shaped, idHigh = omsOrderId, idLow = n << 2 | kind. */
     private static DurableOrderIntent intent(long n, int kind, long userId, long omsOrderId, long oldOrderId,
                                              int side, double price, double qty) {
         return new DurableOrderIntent(omsOrderId, (n << 2) | kind, userId, omsOrderId, oldOrderId, FixedPoint.fromDouble(price),

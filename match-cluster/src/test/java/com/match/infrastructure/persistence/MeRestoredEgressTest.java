@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S6 contract 5.4 (FIX-8): the service registers, at onStart, the sessions the container restored from a
+ * The service registers, at onStart, the sessions the container restored from a
  * snapshot (they never see onSessionOpen), so a restored leader's keep-warm and egress reach them; R0 applies to
  * each restored principal.
  *
@@ -53,7 +53,7 @@ public class MeRestoredEgressTest {
     @Test
     public void aPrincipalLessRestoredSessionHaltsTheNode() {
         final MeStubCluster c = new MeStubCluster();
-        c.sessions.add(new TestAuth.StubSession(12, new byte[0])); // a pre-S6 container snapshot
+        c.sessions.add(new TestAuth.StubSession(12, new byte[0])); // a container snapshot from before authentication
         final AppClusteredService s = new AppClusteredService();
         final int[] stops = {0};
         s.failFast = () -> stops[0]++;

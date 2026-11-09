@@ -1,4 +1,4 @@
-# RC2 S5 (behaviour 2): the amend correction (D6, G27). The core mints quantity = newQty - F0 and
+# The amend correction. The core mints quantity = newQty - F0 and
 # exp = Q - F0; the ME places newQty - F whatever fills landed in the window.
 GENESIS behaviour=2
 MARKET BTC_USD

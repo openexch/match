@@ -7,7 +7,7 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 /**
- * Tests for DirectIndexOrderBook — validates bounds safety (C2 fix).
+ * Tests for DirectIndexOrderBook — validates bounds safety.
  */
 public class DirectIndexOrderBookTest {
 

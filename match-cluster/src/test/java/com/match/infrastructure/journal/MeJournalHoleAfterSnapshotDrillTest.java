@@ -51,7 +51,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * RC2 S3 contract section 9 and 11 (RR2 M3, critic K8), T1 child-process drill. Three forked JVMs
+ * Child-process drill: a journal hole after a snapshot. Three forked JVMs
  * run the production bootstrap ({@link MeJournalDrillNodeMain}) as a three-member behaviour-2
  * cluster with the settlement journal on. A follower's journal writer is held (drain gate) while
  * load flows, the leader snapshots at P, and the follower is killed with SIGKILL right after its
@@ -105,7 +105,7 @@ public class MeJournalHoleAfterSnapshotDrillTest {
         for (int i = 0; i < NODES; i++) {
             ingress.append(i).append("=localhost:").append(port(i, CLIENT_FACING_OFFSET)).append(i + 1 < NODES ? "," : "");
         }
-        // RC2 S6: the FRESH is ADMIN's (R2); the durable load is the FORWARDER's (R3).
+        // The FRESH is ADMIN's (R2); the durable load is the FORWARDER's (R3).
         client = connectAs(com.openexchange.cluster.auth.ClusterSessionClass.ADMIN, ingress.toString());
         send(engineConfigFresh());
         CloseHelper.quietClose(client);
@@ -352,7 +352,7 @@ public class MeJournalHoleAfterSnapshotDrillTest {
                 || k.equals("BASE_DIR") || k.equals("METRICS_PORT") || k.equals("AERON_DIR"));
         env.put("CLUSTER_NODE", Integer.toString(node));
         env.remove("ME_AUTH_CREDENTIAL");
-        env.put("ME_AUTH_KEYS", com.match.infrastructure.persistence.TestAuth.KEYS); // RC2 S6: every node authenticates
+        env.put("ME_AUTH_KEYS", com.match.infrastructure.persistence.TestAuth.KEYS); // Every node authenticates
         env.put("CLUSTER_ADDRESSES", "localhost,localhost,localhost");
         env.put("CLUSTER_PORT_BASE", Integer.toString(portBase));
         env.put("CLUSTER_PORT_STRIDE", Integer.toString(STRIDE));
@@ -360,7 +360,7 @@ public class MeJournalHoleAfterSnapshotDrillTest {
         env.put("METRICS_PORT", Integer.toString(metricsPort(node)));
         env.put("SETTLEMENT_JOURNAL_ENABLED", "true");
         env.put("SETTLEMENT_JOURNAL_DIR", root.resolve("journal" + node).toString());
-        // The contract's MATCH_ENGINE_FROM_CONFIG=1: the parser accepts only the literal true/false.
+        // MATCH_ENGINE_FROM_CONFIG=1: the parser accepts only the literal true/false.
         env.put("MATCH_ENGINE_FROM_CONFIG", "true");
         env.put("TRANSPORT_IDLE_MODE", "backoff");
         env.put("TRANSPORT_DRIVER_THREADING", "shared");
@@ -445,7 +445,7 @@ public class MeJournalHoleAfterSnapshotDrillTest {
     }
 
     /**
-     * "Drained" (contract 11 step 3): every member's journal max seq is equal and equals its
+     * "Drained": every member's journal max seq is equal and equals its
      * {@code match_engine_next_journal_seq - 1}, polled while the load is paused.
      */
     private long awaitDrained(final int... members) {
@@ -528,8 +528,8 @@ public class MeJournalHoleAfterSnapshotDrillTest {
     }
 
     private void note(final String line) {
-        log.append("[S3-DRILL] ").append(line).append('\n');
-        System.out.println("[S3-DRILL] " + line);
+        log.append("[DRILL] ").append(line).append('\n');
+        System.out.println("[DRILL] " + line);
     }
 
     private static void sleep(final long ms) {

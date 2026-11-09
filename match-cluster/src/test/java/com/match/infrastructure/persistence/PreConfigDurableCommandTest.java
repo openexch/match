@@ -22,7 +22,7 @@ import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S2 section 13 addition: a DurableOrderCommand (template 9) logged before any EngineConfig on
+ * A DurableOrderCommand (template 9) logged before any EngineConfig on
  * a config-mode cluster. Wired as production is: the engine has NO event publisher until the
  * FRESH's EnginesCreatedListener brings publishing up. Before the rule the command reached
  * {@code Engine.acceptDurable} and failed on the missing publisher, an apply failure on every

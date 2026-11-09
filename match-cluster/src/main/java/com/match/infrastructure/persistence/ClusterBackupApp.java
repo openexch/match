@@ -65,9 +65,9 @@ public class ClusterBackupApp {
     static final String PROGRESS_FILE_NAME = "backup-progress.json";
 
     public static void main(final String[] args) {
-        // RC2 S6 (A14, BLOCKER-1): an S6 ME authenticates every BackupQuery, and only REPLICA may send one.
+        // The ME authenticates every BackupQuery, and only REPLICA may send one.
         // Refuse to start without ME_AUTH_CREDENTIAL or with another class: a backup that cannot query
-        // would otherwise stall silently (match#36) on the first S6 deploy.
+        // would otherwise stall silently (match#36) on the first authenticated deploy.
         final com.openexchange.cluster.auth.ClusterCredentials credentials =
                 com.openexchange.cluster.auth.ClusterCredentials.requireFromEnvironment(
                         com.match.infrastructure.auth.MatchAuth.POLICY,
@@ -151,9 +151,9 @@ public class ClusterBackupApp {
     }
 
     /**
-     * The backup's ClusterBackup context, the one place it is built (main and the S6 backup-authority cluster
+     * The backup's ClusterBackup context, the one place it is built (main and the backup-authority cluster
      * test use it). {@code credentials} are presented with every BackupQuery: the ME's authenticator judges
-     * them and its class table lets REPLICA query, nobody else (RC2 S6 A14).
+     * them and its class table lets REPLICA query, nobody else.
      */
     static ClusterBackup.Context backupContext(
         final String aeronDirName,

@@ -17,7 +17,7 @@ import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S6 9.2: three ME members behind the real authenticator and class table. Credential-less, wrong-secret
+ * Three ME members behind the real authenticator and class table. Credential-less, wrong-secret
  * and class-mismatch clients are rejected at connect; FORWARDER template 9 is journaled on every member; ADMIN
  * template 10 is refused on every member (equal journals); a member restarted from a snapshot taken while the
  * FORWARDER session was open judges that session's later frames like the others (the restored principal).

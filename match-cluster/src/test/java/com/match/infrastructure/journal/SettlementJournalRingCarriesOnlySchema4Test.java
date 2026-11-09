@@ -19,7 +19,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 /**
- * RC2 S1 (contract 3.5, 8.2): from S1 on the ME ring carries ME journal schema 4 only. After
+ * The ME ring carries ME journal schema 4 only. After
  * trades, terminals, command outcomes, a release and a config append through the real engine and
  * publisher, every frame has schemaId 4 version 1 and its ring message type equals its template
  * id; no frame carries schema 1 (template 28) or schema 3.

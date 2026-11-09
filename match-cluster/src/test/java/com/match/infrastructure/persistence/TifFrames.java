@@ -18,18 +18,18 @@ import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
 import static org.junit.Assert.assertEquals;
 
 /**
- * RC2 S5 test support: core-shaped behaviour-2 frames carrying timeInForce, budgets and the amend
- * reference, the reason codes as wire literals (so the sources compile against the S4 base, where
- * the constants do not exist yet) and journal readers. Every S5 frame goes through the real
+ * Test support: core-shaped behaviour-2 frames carrying timeInForce, budgets and the amend
+ * reference, the reason codes as wire literals (so the sources compile against the earlier base, where
+ * the constants do not exist yet) and journal readers. Every frame goes through the real
  * {@link SbeDemuxer} of a {@link BehaviourTwoLog.Replica}.
  */
-final class S5Frames {
+final class TifFrames {
 
-    private S5Frames() {
+    private TifFrames() {
     }
 
     static final int GTC = 0, IOC = 1, FOK = 2;
-    // Record 2 / record 3 codes (OrderRejectReason; 12-16 are S5's).
+    // Record 2 / record 3 codes (OrderRejectReason; 12-16 are the TIF / amend codes).
     static final int NONE = 0, INVALID_QUANTITY = 6, MATCH_LIMIT = 7, NO_LIQUIDITY = 9;
     static final int IOC_REMAINDER = 12, FOK_UNFILLABLE = 13, BUDGET_EXHAUSTED = 14,
             AMEND_NO_REMAINDER = 15, AMEND_REMAINING_MISMATCH = 16;

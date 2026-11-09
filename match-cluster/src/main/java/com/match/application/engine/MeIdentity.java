@@ -2,7 +2,7 @@
 package com.match.application.engine;
 
 /**
- * RC2 S2: the genesis identity of this ME (contract section 2.1). ONE mutable object owned by
+ * The genesis identity of this ME. ONE mutable object owned by
  * {@link Engine}, created unbound (epoch 0) at construction. It is bound once, by a FRESH at
  * behaviour >= 2, or filled by a snapshot restore, and never rebound. It is never derived from
  * env, time, recordingId or the node.
@@ -18,9 +18,9 @@ package com.match.application.engine;
 public final class MeIdentity {
 
     private volatile long meEpoch;
-    // RC2 S3: written on the service thread only (the one allocator), published with release
+    // Written on the service thread only (the one allocator), published with release
     // semantics and read with acquire so the /metrics scraper (match_engine_next_journal_seq, the
-    // S7 4.4 rollback precheck input) never sees a torn or stale-forever value (review NOTE-1).
+    // core's rollback precheck input) never sees a torn or stale-forever value.
     private long nextJournalSeq;
     private static final java.lang.invoke.VarHandle NEXT_JOURNAL_SEQ;
     static {
@@ -79,9 +79,9 @@ public final class MeIdentity {
     }
 
     /**
-     * The ONE journalSeq allocator (RC2 S3 contract section 2): consume and return the next
-     * journalSeq of records 1-5. Bound identities only. No volatile read on this path (review
-     * NOTE-2): an unbound identity has {@code nextJournalSeq == 0}, a bound one {@code >= 1}.
+     * The ONE journalSeq allocator: consume and return the next
+     * journalSeq of records 1-5. Bound identities only. No volatile read on this path:
+     * an unbound identity has {@code nextJournalSeq == 0}, a bound one {@code >= 1}.
      */
     long allocateJournalSeq() {
         final long seq = nextJournalSeq;
@@ -96,7 +96,7 @@ public final class MeIdentity {
      * Snapshot restore of the identity block (already range-checked by the codec):
      * {@code meEpoch == genesisId > 0}, {@code nextJournalSeq >= 2}, {@code behaviorVersion >= 2}.
      */
-    // RC2 S3 review FIX-2: package-private, so Engine.restoreIdentity (which also turns dense
+    // Package-private, so Engine.restoreIdentity (which also turns dense
     // allocation on) is the only way to bind an engine's identity from a snapshot.
     void restore(final long restoredMeEpoch, final long restoredNextJournalSeq,
                         final long restoredBehaviorVersion) {

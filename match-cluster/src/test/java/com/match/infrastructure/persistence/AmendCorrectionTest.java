@@ -3,7 +3,7 @@ package com.match.infrastructure.persistence;
 
 import com.match.application.engine.BehaviourTwoHarness;
 import com.match.application.orderbook.MatchingEngine;
-import com.match.application.orderbook.S5Probe;
+import com.match.application.orderbook.OrderBookProbe;
 import com.match.domain.FixedPoint;
 import com.match.domain.commands.DurableCommandOutcome;
 import com.match.infrastructure.mejournal.generated.CommandOutcomeDecoder;
@@ -24,11 +24,11 @@ import java.util.Random;
 import static com.match.application.engine.BehaviourTwoHarness.G;
 import static com.match.infrastructure.persistence.BehaviourTwoLog.*;
 import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
-import static com.match.infrastructure.persistence.S5Frames.*;
+import static com.match.infrastructure.persistence.TifFrames.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S5 contract section 5 (D6, G27, W2/W3): the behaviour-2 amend correction. The ME subtracts
+ * The behaviour-2 amend correction. The ME subtracts
  * the in-window fills {@code expectedOldRemaining - actual} from the replacement, so a minted amend
  * can be replayed byte for byte and never overfills. Array and direct.
  */
@@ -47,7 +47,7 @@ public class AmendCorrectionTest {
     }
 
     private Run fresh() {
-        return freshWith(S5Frames.config(direct, 100, 16));
+        return freshWith(TifFrames.config(direct, 100, 16));
     }
 
     private static long fp(double v) {
@@ -78,7 +78,7 @@ public class AmendCorrectionTest {
             assertEquals("the new leg rests newQty - F = 5", fp(5), remainingOf(book(r), o.orderId()));
             assertEquals("filled + resting = 8", fp(8), fp(3) + remainingOf(book(r), o.orderId()));
             assertEquals("old-leg CANCELLED is not journaled", List.of(3), templates(f));
-            assertEquals(1L, S5Probe.amendReduced(r.engine()));
+            assertEquals(1L, OrderBookProbe.amendReduced(r.engine()));
         }
     }
 
@@ -100,10 +100,10 @@ public class AmendCorrectionTest {
                 assertEquals("no record 2: the outcome only", List.of(3), templates(f));
                 assertEquals("one journalSeq consumed", seq + 1, r.engine().meIdentity().nextJournalSeq());
                 assertEquals("L gone", -1L, remainingOf(book(r), l));
-                assertEquals("no leg names h", 0, S4Probe.legCount(r.engine(), 1));
+                assertEquals("no leg names h", 0, DurableLedgerProbe.legCount(r.engine(), 1));
                 assertEquals("no new orderId", gen, r.engine().getOrderIdGenerator());
                 assertEquals(0, book(r).getAskOrders().length);
-                assertEquals(1L, S5Probe.amendNoRemainder(r.engine()));
+                assertEquals(1L, OrderBookProbe.amendNoRemainder(r.engine()));
             }
         }
     }
@@ -115,8 +115,8 @@ public class AmendCorrectionTest {
             final CommandOutcomeDecoder o = outcome(r.send(amendRaw(1, 1, 100, l, ASK, 60_001, 8, LIMIT, GTC, fp(10))));
             assertEquals(DurableCommandOutcome.APPLIED, o.result());
             assertEquals(fp(8), remainingOf(book(r), o.orderId()));
-            if (S5Probe.S5) {
-                assertEquals("not counted as reduced", 0L, S5Probe.amendReduced(r.engine()));
+            if (OrderBookProbe.TIF_APIS) {
+                assertEquals("not counted as reduced", 0L, OrderBookProbe.amendReduced(r.engine()));
             }
         }
     }
@@ -162,7 +162,7 @@ public class AmendCorrectionTest {
             assertEquals("oldCancelled 0", 0, o.oldCancelled());
             assertEquals(List.of(3), templates(f));
             assertArrayEquals("L rests with 10", asks, book(r).getAskOrders());
-            assertEquals(1L, S5Probe.amendRemainingMismatch(r.engine()));
+            assertEquals(1L, OrderBookProbe.amendRemainingMismatch(r.engine()));
             // L is still tradable.
             fill(r, 2, 1);
         }
@@ -173,12 +173,12 @@ public class AmendCorrectionTest {
         try (Run r = fresh()) {
             final long l = leg(r, 1, 10);
             final long[] asks = book(r).getAskOrders();
-            final int ledger = S4Probe.ledgerSize(r.engine());
+            final int ledger = DurableLedgerProbe.ledgerSize(r.engine());
             final CommandOutcomeDecoder o = outcome(r.send(amendRaw(1, 1, 100, l, ASK, 60_001, 8, LIMIT, GTC, 0)));
             assertEquals(DurableCommandOutcome.INVALID, o.result());
             assertEquals(0, o.reason());
             assertEquals(ledger, o.ledgerSize());
-            assertEquals(1L, S5Probe.invalidAmendReference(r.engine()));
+            assertEquals(1L, OrderBookProbe.invalidAmendReference(r.engine()));
             assertArrayEquals("L intact", asks, book(r).getAskOrders());
         }
     }
@@ -188,12 +188,12 @@ public class AmendCorrectionTest {
         try (Run r = fresh()) {
             final long l = leg(r, 1, 10);
             final long[] asks = book(r).getAskOrders();
-            final int ledger = S4Probe.ledgerSize(r.engine());
+            final int ledger = DurableLedgerProbe.ledgerSize(r.engine());
             final CommandOutcomeDecoder o = outcome(r.send(amendRaw(1, 1, 100, l, ASK, 60_001, 8, MARKET, GTC, fp(10))));
             assertEquals(DurableCommandOutcome.INVALID, o.result());
             assertEquals(0, o.reason());
             assertEquals("not recorded", ledger, o.ledgerSize());
-            assertEquals(1L, S5Probe.invalidAmendType(r.engine()));
+            assertEquals(1L, OrderBookProbe.invalidAmendType(r.engine()));
             assertArrayEquals("L intact", asks, book(r).getAskOrders());
         }
         if (direct) {
@@ -274,8 +274,8 @@ public class AmendCorrectionTest {
         int reducedSeen = 0, noRemainderSeen = 0;
         for (long seed = 1; seed <= 40; seed++) {
             final Random rnd = new Random(seed);
-            try (Run a = freshWith(S5Frames.config(false, 100, 0));
-                 Run d = freshWith(S5Frames.config(true, 100, 32))) {
+            try (Run a = freshWith(TifFrames.config(false, 100, 0));
+                 Run d = freshWith(TifFrames.config(true, 100, 32))) {
                 final Map<Long, CoreOrder> orders = new HashMap<>();
                 final Map<Long, Long> filled = new HashMap<>();
                 final List<byte[]> sent = new ArrayList<>();
@@ -311,7 +311,7 @@ public class AmendCorrectionTest {
                         }
                         final long expected = c.target - f0;
                         if (expected <= 0) {
-                            continue; // S8 precondition: NOT_OPEN at remainingQty 0
+                            continue; // precondition: NOT_OPEN at remainingQty 0
                         }
                         c.attempt++;
                         frame = durableRaw(c.h, (c.attempt << 2) | UPDATE, UPDATE, c.user, c.h, c.leg, ASK,
@@ -377,11 +377,11 @@ public class AmendCorrectionTest {
                                 resting <= Math.max(0, c.target - f));
                     }
                 }
-                assertArrayEquals("seed " + seed + ": ledger blocks", S4Probe.ledgerBlock(a.engine()),
-                        S4Probe.ledgerBlock(d.engine()));
+                assertArrayEquals("seed " + seed + ": ledger blocks", DurableLedgerProbe.ledgerBlock(a.engine()),
+                        DurableLedgerProbe.ledgerBlock(d.engine()));
             }
         }
-        System.out.println("[S5] amendNeverOverfillsFuzz: 40 seeds, amends applied with in-window fills "
+        System.out.println("[TIF] amendNeverOverfillsFuzz: 40 seeds, amends applied with in-window fills "
                 + reducedSeen + ", no-remainder amends " + noRemainderSeen);
         assertTrue("non-vacuous: amends applied", reducedSeen > 50);
         assertTrue("non-vacuous: no-remainder amends", noRemainderSeen > 5);

@@ -23,7 +23,7 @@ import static com.match.infrastructure.persistence.DurableLedgerV2Test.*;
 import static org.junit.Assert.*;
 
 /**
- * RC2 S6 contract 6 (M Q12, FIX-9): the ME snapshot loader waits for end of stream. Script E (an empty start)
+ * The ME snapshot loader waits for end of stream. Script E (an empty start)
  * and script T (a pause between chunks) restore the whole engine for a behaviour-2 and a behaviour-1 image; a
  * closed image, a zero-byte image and a codec refusal each fence the service and run failFast.
  */
@@ -168,7 +168,7 @@ public class MeLoaderWaitsForEndOfStreamTest {
         }
     }
 
-    /** One refusal case (review FIX-1: one method per row, so each has its own RED line). */
+    /** One refusal case (one method per row, so each has its own RED line). */
     private static void assertRefusalStopsTheNode(final String name, final Script script) throws Exception {
         final int[] stops = {0};
         final boolean[] fencedFirst = {false};

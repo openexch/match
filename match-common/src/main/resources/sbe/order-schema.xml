@@ -40,7 +40,7 @@
             <validValue name="DELETE_LEVEL">2</validValue>
         </enum>
         <!-- v10: order-book engine implementation selector, carried on EngineConfig so every
-             replica creates the SAME implementation from the logged config (A-3 generalized). -->
+             replica creates the SAME implementation from the logged config (generalized). -->
         <enum name="EngineImpl" encodingType="uint8">
             <validValue name="ARRAY">0</validValue>
             <validValue name="DIRECT">1</validValue>
@@ -89,8 +89,8 @@
         <field name="expectedOldRemaining" id="14" type="int64" sinceVersion="12"/>
     </sbe:message>
 
-    <!-- v12: command-id release (new, group of up to 48 entries, entry block 17). Served from S4
-         under behaviour 2; the S1 demuxer only counts it as unserved. -->
+    <!-- v12: command-id release (new, group of up to 48 entries, entry block 17). Served
+         under behaviour 2; before that the demuxer only counts it as unserved. -->
     <sbe:message name="ReleaseCommandIds" id="10" sinceVersion="12">
         <!-- The core dispatchSeq of the group's first entry, diagnostics only. -->
         <field name="releaseSeq" id="1" type="int64"/>
@@ -162,7 +162,7 @@
          batch forms (TradeExecutionBatch/OrderStatusBatch, book snapshot/delta). Their
          ids stay reserved; no other message was renumbered. -->
 
-    <!-- v10 (finding A-3 generalized): engine-creation config as a LOGGED ingress command,
+    <!-- v10 (generalized): engine-creation config as a LOGGED ingress command,
          so every replica creates its engines from values replicated via the cluster log —
          never from a node-local env/file. ADDITIVE: this bump ships the template only; the
          demuxer has no handler yet, so dispatch falls into the deterministic
@@ -208,7 +208,7 @@
         <!-- v8: uint8 (was int64) — an Aeron cluster member id, always 0-2 today. -->
         <field name="nodeId" id="1" type="uint8"/>
         <field name="timestamp" id="2" type="int64"/>
-        <!-- v12: block 9 -> 17. The recorded genesisId; S1 encodes 0. -->
+        <!-- v12: block 9 -> 17. The recorded genesisId; behaviour 1 encodes 0. -->
         <field name="meEpoch" id="3" type="int64" sinceVersion="12"/>
     </sbe:message>
 
@@ -324,7 +324,7 @@
                  (sinceVersion=7): old peers skip it via the group blockLength; new peers reading
                  a pre-v7 stream get the null value. -->
             <field name="egressSeq" id="13" type="int64" sinceVersion="7"/>
-            <!-- v9 (C-5): the DETERMINISTIC cluster timestamp of the command that produced this
+            <!-- v9: the DETERMINISTIC cluster timestamp of the command that produced this
                  status, carried per-entry (event.getTimestamp(), set as the cluster timestamp on
                  PublishEvent from the acceptOrder cluster parameter). Replaces reliance on the
                  message-level flush timestamp for per-order timing. HARD-CUT v9 field (no
@@ -352,7 +352,7 @@
                  of the command that produced this trade, so the OMS has one monotonic order key
                  across the status and trade streams. Group TAIL extension (sinceVersion=7). -->
             <field name="egressSeq" id="11" type="int64" sinceVersion="7"/>
-            <!-- v9 (C-5): the DETERMINISTIC cluster timestamp of the command that produced this
+            <!-- v9: the DETERMINISTIC cluster timestamp of the command that produced this
                  trade, carried per-entry (event.getTimestamp(), the acceptOrder cluster
                  parameter). Same per-entry cluster time as OrderStatusBatch.orders.clusterTimestamp.
                  HARD-CUT v9 field (no sinceVersion). -->

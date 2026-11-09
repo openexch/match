@@ -74,7 +74,7 @@ public class AppClusteredService implements ClusteredService {
     private final SbeDemuxer sbeDemuxer = new SbeDemuxer(engine);
 
     // Slice C: the EngineConfig decision table (fresh-create / adopt+cross-check / duplicate /
-    // reject). failFast is the fail-fast exit — same principle as the A-9 egress-init exits: a
+    // reject). failFast is the fail-fast exit — same principle as the egress-init fail-fast exits: a
     // node that provably diverges from the cluster's declared truth (or cannot bring up egress)
     // must not serve; the other nodes keep quorum.
     //
@@ -92,7 +92,7 @@ public class AppClusteredService implements ClusteredService {
     // fail-fast (IDENTICAL_ERROR threshold, halt(2)). Because hooks are skipped, callers must
     // log their evidence BEFORE invoking the seam, and NO caller may assume hooks ran.
     //
-    // Package-private mutable seam so tests can swap the hook for a recorder (the bare A-9
+    // Package-private mutable seam so tests can swap the hook for a recorder (the bare fail-fast
     // System.exit had no seam; this one starts with one) — the state machine dereferences it
     // per call, so a swap after construction takes effect. The default body lives in
     // failFastHalt() so the forked-JVM test (FailFastHaltProcessTest) exercises the exact
@@ -109,7 +109,7 @@ public class AppClusteredService implements ClusteredService {
     static void failFastHalt() {
         Runtime.getRuntime().halt(1);
     }
-    // RC2 S2: record 5 goes through a DEFERRING adapter. This field initializer runs before the
+    // Record 5 goes through a DEFERRING adapter. This field initializer runs before the
     // eventPublisher field below is initialized, so the publisher is dereferenced per call
     // (this.eventPublisher inside the lambda body), never captured here (it would be null).
     private final com.match.application.engine.EngineConfigStateMachine engineConfigStateMachine =
@@ -126,7 +126,7 @@ public class AppClusteredService implements ClusteredService {
     // protocol-level keep-alive (never enters the Raft log) — NOT by this.
     private static final long EGRESS_KEEP_WARM_INTERVAL_MS = 1_000;
 
-    // RC2 S12 W9 (D-S12-1, F-ME-1): the epoch hello. The keep-warm above is sent only when NO egress reached ANY
+    // The epoch hello. The keep-warm above is sent only when NO egress reached ANY
     // session for 1 s, so a forwarder that connects to a busy ME never sees the meEpoch it must bind before it
     // registers with the core. Every session opened on the leader, and every session present when the flush
     // timer first fires as leader in a new term, gets one ClusterHeartbeat (the keep-warm encoding, current
@@ -164,7 +164,7 @@ public class AppClusteredService implements ClusteredService {
      * bootstrap because it owns the second (journal) archive's lifecycle.
      */
     public void setSettlementJournal(final com.match.infrastructure.journal.SettlementJournal journal) {
-        // RC2 S2: the journal stamps meEpoch from THE engine's identity (a reference, not a copy).
+        // The journal stamps meEpoch from THE engine's identity (a reference, not a copy).
         if (journal != null) {
             journal.bindIdentity(engine.meIdentity());
         }
@@ -172,7 +172,7 @@ public class AppClusteredService implements ClusteredService {
         settlementJournal = journal;
     }
 
-    // RC2 S3: the armed journal (null = dark), read by the backpressure gauge only.
+    // The armed journal (null = dark), read by the backpressure gauge only.
     private volatile com.match.infrastructure.journal.SettlementJournal settlementJournal;
 
     // Store cluster reference for snapshot idle strategy and broadcasting
@@ -207,7 +207,7 @@ public class AppClusteredService implements ClusteredService {
         consensusReadiness = new com.openexchange.cluster.ConsensusReadiness(context, readiness);
     }
 
-    // RC2 S6 (contract 3.5): the consensus module's authenticator and authorisation service, the same
+    // The consensus module's authenticator and authorisation service, the same
     // instances ClusterConfig hands Aeron, read here for the gauges only. Null when the service runs
     // without ClusterConfig (in-process tests); the gauges then read 0.
     private volatile com.openexchange.cluster.auth.ClusterAuthenticator sessionAuthenticator;
@@ -221,11 +221,11 @@ public class AppClusteredService implements ClusteredService {
     }
 
     /**
-     * RC2 S6 R0 (contract 3.2, 3.4): a session without a valid principal reached the log, a restored
-     * container session or a message. Authentication is always on, so only a pre-S6 log or snapshot (or a
+     * A session without a valid principal reached the log, a restored
+     * container session or a message. Authentication is always on, so only a log or snapshot from before authentication (or a
      * session id Aeron does not know) can produce one. The decision reads replicated bytes only, so every
      * member halts at the same log position instead of replaying a divergent, engine-less state.
-     * RC2 S17 W12: the class-code decision and the message are the kit's {@link PrincipalGate}, one rule for
+     * The class-code decision and the message are the kit's {@link PrincipalGate}, one rule for
      * both engines; this node prints the CRITICAL line, fences its callbacks and fail-fasts.
      */
     private void requirePrincipal(final byte[] encodedPrincipal, final String where, final long sessionId,
@@ -306,7 +306,7 @@ public class AppClusteredService implements ClusteredService {
     private final AtomicLong marketDataBytes = new AtomicLong(0);
     private final AtomicLong omsEgressBytes = new AtomicLong(0);
 
-    // C-3: per-drain work cap. drainQueue() processes at most this many messages per call, so a
+    // Per-drain work cap. drainQueue() processes at most this many messages per call, so a
     // freshly promoted leader inheriting a full warm-standby omsEgressQueue (up to
     // OMS_EGRESS_QUEUE_CAPACITY = 262144 entries) does not stall behind one unbounded drain before it
     // can handle a new command (the AE 60s failover-blindness mechanism). Override with env
@@ -326,7 +326,7 @@ public class AppClusteredService implements ClusteredService {
     // for the EGRESS-DIAG lines below.
 
     // Simple wrapper for queued SBE messages (holds copy of buffer content)
-    // Package-private (was private) so the C-3 drain-cap test can enqueue synthetic messages.
+    // Package-private (was private) so the drain-cap test can enqueue synthetic messages.
     static final class QueuedMessage {
         final byte[] data;
         final int length;
@@ -465,10 +465,10 @@ public class AppClusteredService implements ClusteredService {
     };
 
     // Drains queued egress to every connected session. Moved verbatim out of the aeronBroadcaster
-    // anonymous class onto the enclosing class (behavior identical, only re-indented) so the C-3
+    // anonymous class onto the enclosing class (behavior identical, only re-indented) so the
     // per-drain cap has a package-private unit-test seam; the two call sites in flush() bind here.
     //
-    // C-3: one call processes at most EGRESS_DRAIN_MAX messages. Without the cap a freshly promoted
+    // One call processes at most EGRESS_DRAIN_MAX messages. Without the cap a freshly promoted
     // leader empties its entire warm-standby omsEgressQueue before it can process one new command,
     // stalling the node at the worst moment (the AE 60s failover-blindness mechanism). The remainder
     // stays queued and the next flush drains it; nothing is lost, only the per-cycle work is bounded.
@@ -535,7 +535,7 @@ public class AppClusteredService implements ClusteredService {
             }
             processed++;
         }
-        // C-3: stopped early with work still queued, so this drain was capped. The backlog is
+        // Stopped early with work still queued, so this drain was capped. The backlog is
         // deferred to the next flush (no loss). Count it (loud on the first hit and every 1000th)
         // so a takeover inheriting a deep queue is observable; a value pinned high in steady state
         // means egress cannot keep up with ingress.
@@ -550,7 +550,7 @@ public class AppClusteredService implements ClusteredService {
         return egressSessionMetrics.deliveredThisDrain();
     }
 
-    // C-3 config: env MATCH_EGRESS_DRAIN_MAX wins over -Dmatch.egress.drain.max wins over the default.
+    // Drain-cap config: env MATCH_EGRESS_DRAIN_MAX wins over -Dmatch.egress.drain.max wins over the default.
     // Package-private and pure (takes the raw values) so the parse, the default, and the refusal are
     // unit testable. An explicitly set but unparseable or non-positive value is refused at startup
     // rather than silently defaulted (the strict-config house style; same posture as SnapshotCadence).
@@ -574,7 +574,7 @@ public class AppClusteredService implements ClusteredService {
         return value;
     }
 
-    // package-private: lets the C-3 drain-cap test size its input to the configured cap.
+    // package-private: lets the drain-cap test size its input to the configured cap.
     static int egressDrainMax() {
         return EGRESS_DRAIN_MAX;
     }
@@ -603,7 +603,7 @@ public class AppClusteredService implements ClusteredService {
                 + " engine-creation mode");
     }
 
-    // package-private: metric source (match_egress_drain_capped_total) and C-3 test assertion.
+    // package-private: metric source (match_egress_drain_capped_total) and drain-cap test assertion.
     long drainCappedTotal() {
         return drainCapped.get();
     }
@@ -632,16 +632,16 @@ public class AppClusteredService implements ClusteredService {
         System.out.flush();
 
         // Load snapshot if available. cluster.logPosition() is the snapshot's position here (see
-        // startDurability), the P of the RC2 S13 W-ME3 republish.
+        // startDurability), the P of the restored-book republish.
         if (snapshotImage != null) {
             restoreSnapshot(com.openexchange.cluster.SnapshotImageReader.of(snapshotImage), cluster.idleStrategy(),
                     cluster.logPosition());
         }
 
-        // RC2 S6 (contract 5.4): the container restored the sessions open at the snapshot before onStart,
+        // The container restored the sessions open at the snapshot before onStart,
         // and they never see onSessionOpen. Register them for egress, or a leader restored from a snapshot
         // taken after a client's SessionOpen sends that client nothing (keep-warm included) until it
-        // reconnects. Egress only, no replicated state. R0 applies to each restored principal.
+        // reconnects. Egress only, no replicated state. The R0 halt applies to each restored principal.
         registerRestoredSessions(cluster);
 
         // Initialize event publishing for all markets
@@ -736,13 +736,13 @@ public class AppClusteredService implements ClusteredService {
             metricsServer = new com.match.infrastructure.metrics.NodeMetricsServer(nodeMetrics)
                     .counter("match_orders_submitted_total", "Orders admitted by the engine", sbeDemuxer::createOrderCount)
                     .counter("match_ingress_schema_rejects_total",
-                            "Ingress frames dropped for a schemaId/version mismatch before decode (G-2)",
+                            "Ingress frames dropped for a schemaId/version mismatch before decode",
                             sbeDemuxer::schemaRejectCount)
                     .counter("match_ingress_decode_rejects_total",
                             "Ingress frames rejected before application for invalid frame bounds or body decoding",
                             sbeDemuxer::decodeRejectCount)
                     .counter("match_ingress_unserved_templates_total",
-                            "Ingress frames of a defined but not yet served template (v12 ReleaseCommandIds 10), counted and never applied (RC2 S1)",
+                            "Ingress frames of a defined but not yet served template (v12 ReleaseCommandIds 10), counted and never applied",
                             sbeDemuxer::unservedTemplateCount)
                     .counter("match_ingress_apply_errors_total",
                             "Unexpected application faults that fence this instance and trigger immediate process exit",
@@ -751,46 +751,46 @@ public class AppClusteredService implements ClusteredService {
                     // version set this build supports (just 1 for now); the counters are the
                     // EngineConfig decision table + the fresh-cluster order guard.
                     .gauge("match_supported_behavior_versions",
-                            "Behavior versions this build supports, as a bitmask (bit v-1): 3 = {1, 2} (RC2 S2; the slice C value 1 is the same encoding of {1})",
+                            "Behavior versions this build supports, as a bitmask (bit v-1): 3 = {1, 2} (the earlier single-behaviour value 1 is the same encoding of {1})",
                             () -> com.match.application.engine.EngineConfigStateMachine.SUPPORTED_BEHAVIOR_VERSIONS_MASK)
                     .gauge("match_engine_behavior_version",
-                            "Recorded behaviour version of the replicated EngineConfig; 0 when none is recorded (RC2 S2)",
+                            "Recorded behaviour version of the replicated EngineConfig; 0 when none is recorded",
                             engineConfigStateMachine::recordedBehaviorVersion)
                     .gauge("match_supported_max_wire_version",
-                            "Highest order-schema version this build decodes (RC2 S2)",
+                            "Highest order-schema version this build decodes",
                             () -> (long) com.match.application.engine.EngineConfigStateMachine.SUPPORTED_MAX_WIRE_VERSION)
                     .gauge("match_engine_max_wire_version",
-                            "Recorded wire ceiling (maxWireVersion) of the replicated EngineConfig; 0 when none or behaviour 1 (RC2 S2)",
+                            "Recorded wire ceiling (maxWireVersion) of the replicated EngineConfig; 0 when none or behaviour 1",
                             engineConfigStateMachine::recordedMaxWireVersion)
                     .gauge("match_engine_me_epoch",
-                            "Recorded ME epoch (the genesisId bound by a FRESH at behaviour >= 2); 0 when unbound. Compare as text (identity, not magnitude) (RC2 S2)",
+                            "Recorded ME epoch (the genesisId bound by a FRESH at behaviour >= 2); 0 when unbound. Compare as text (identity, not magnitude)",
                             () -> engine.meIdentity().meEpoch())
                     .gauge("match_engine_next_journal_seq",
-                            "The next ME journalSeq this engine will allocate (0 while unbound); minus one is the last journalSeq allocated. Input of the core's rollback precheck (RC2 S3)",
+                            "The next ME journalSeq this engine will allocate (0 while unbound); minus one is the last journalSeq allocated. Input of the core's rollback precheck",
                             () -> engine.meIdentity().nextJournalSeq())
                     .counter("match_journal_ring_backpressure_events_total",
-                            "Journal entries that met a full settlement-journal ring at least once (the service thread then blocks); node-local (RC2 S3)",
+                            "Journal entries that met a full settlement-journal ring at least once (the service thread then blocks); node-local",
                             () -> {
                                 final com.match.infrastructure.journal.SettlementJournal j = settlementJournal;
                                 return j == null ? 0L : j.backpressureEvents();
                             })
                     .counter("match_engine_config_stale_total",
-                            "EngineConfig commands at behaviour >= 2 with configVersion <= the recorded one (RC2 S2)",
+                            "EngineConfig commands at behaviour >= 2 with configVersion <= the recorded one",
                             engineConfigStateMachine::staleCount)
                     .counter("match_engine_config_bumps_total",
-                            "EngineConfig BUMP decisions: recorded configVersion and wire ceiling raised (RC2 S2)",
+                            "EngineConfig BUMP decisions: recorded configVersion and wire ceiling raised",
                             engineConfigStateMachine::bumpCount)
                     .counter("match_ingress_above_ceiling_invalid_total",
-                            "DurableOrderCommand frames above the recorded wire ceiling, journaled as INVALID (record 3 result 8) (RC2 S2)",
+                            "DurableOrderCommand frames above the recorded wire ceiling, journaled as INVALID (record 3 result 8)",
                             sbeDemuxer::aboveCeilingInvalidCount)
                     .counter("match_ingress_above_ceiling_drops_total",
-                            "Frames of any other template above the recorded wire ceiling, dropped without mutation or journal (RC2 S2)",
+                            "Frames of any other template above the recorded wire ceiling, dropped without mutation or journal",
                             sbeDemuxer::aboveCeilingDropCount)
                     .counter("match_dark_engine_config_records_total",
-                            "EngineConfig FRESH/BUMP decisions applied but not journaled because the settlement journal is off on this node (RC2 S2)",
+                            "EngineConfig FRESH/BUMP decisions applied but not journaled because the settlement journal is off on this node",
                             eventPublisher::getDarkEngineConfigCount)
                     .gauge("match_engine_from_config",
-                            "Engine-creation mode of THIS node (1 = config mode, 0 = legacy). A launch parameter like CLUSTER_ADDRESSES: it must be uniform across members — a mixed cluster forks replicated state on any pre-config order. The operator layer verifies uniformity here before admitting genesis traffic (slice C)",
+                            "Engine-creation mode of THIS node (1 = config mode, 0 = legacy). A launch parameter like CLUSTER_ADDRESSES: it must be uniform across members — a mixed cluster forks replicated state on any pre-config order. The operator layer verifies uniformity here before admitting genesis traffic",
                             () -> engineFromConfigMode ? 1L : 0L)
                     // #224: the EFFECTIVE engine-creation values — the recorded replicated config
                     // when one exists, else the exact node-local derivation the adopt cross-check
@@ -815,140 +815,140 @@ public class AppClusteredService implements ClusteredService {
                             "Canonical hash of THIS node's effective engine-creation config: SHA-256 of the canonical string (see EngineConfigState.canonicalString), first 8 bytes as unsigned 64-bit big-endian; 0 pre-config. Compare as text — identity, not magnitude (#224)",
                             engineConfigStateMachine::effectiveConfigHash)
                     .counter("match_engine_config_duplicates_total",
-                            "EngineConfig commands identical to the recorded config — idempotent no-op ACKs (slice C)",
+                            "EngineConfig commands identical to the recorded config — idempotent no-op ACKs",
                             engineConfigStateMachine::duplicateCount)
                     .counter("match_engine_config_rejects_total",
-                            "EngineConfig commands rejected: every REJECTED_* decision of the decision table, structurally invalid included (slice C, RC2 S2)",
+                            "EngineConfig commands rejected: every REJECTED_* decision of the decision table, structurally invalid included",
                             engineConfigStateMachine::rejectCount)
                     .counter("match_preconfig_order_rejects_total",
-                            "Order commands (CreateOrder, CancelOrder, UpdateOrder, DurableOrderCommand) rejected by the fresh-cluster guard — arrived before any EngineConfig, no engine existed, nothing applied or journaled; always 0 in legacy mode (slice C, RC2 S2)",
+                            "Order commands (CreateOrder, CancelOrder, UpdateOrder, DurableOrderCommand) rejected by the fresh-cluster guard — arrived before any EngineConfig, no engine existed, nothing applied or journaled; always 0 in legacy mode",
                             sbeDemuxer::preConfigOrderRejectCount)
                     .counter("match_orders_terminal_total", "Terminal order statuses published", eventPublisher::terminalStatusCount)
                     .counter("match_egress_disruptor_exceptions_total",
-                            "OMS-lane Disruptor handler exceptions swallowed (event lost pre-statusSeq); should be ~zero (C-6)",
+                            "OMS-lane Disruptor handler exceptions swallowed (event lost pre-statusSeq); should be ~zero",
                             eventPublisher::disruptorExceptionCount)
                     .counter("match_egress_oversize_drops_total",
                             "Egress frames larger than the session publication's max message length (term length / 8), lost for that session; should stay 0",
                             egressOversizeDrops::get)
                     .counter("match_durable_duplicates_suppressed_total",
-                            "Equal-intent duplicates of a recorded durable command suppressed under behaviour 2: nothing journaled, no journalSeq consumed (RC2 S3 X4)",
+                            "Equal-intent duplicates of a recorded durable command suppressed under behaviour 2: nothing journaled, no journalSeq consumed",
                             engine::suppressedDuplicateCount)
-                    // RC2 S4 (contract 6.4): the behaviour-2 ledger v2 gauges (0 without a v2
+                    // The behaviour-2 ledger v2 gauges (0 without a v2
                     // ledger) and one plain series per cause (NodeMetricsServer has no labels).
                     // Volatile reads of service-thread writes.
                     .gauge("match_command_ledger_size",
-                            "Inflight entries of the behaviour-2 durable command ledger v2; the size record 3/4 report (RC2 S4)",
+                            "Inflight entries of the behaviour-2 durable command ledger v2; the size record 3/4 report",
                             engine::ledgerSizeGauge)
                     .gauge("match_command_ledger_capacity",
-                            "Recorded commandLedgerCapacity C of the ledger v2; 0 at behaviour 1 (RC2 S4)",
+                            "Recorded commandLedgerCapacity C of the ledger v2; 0 at behaviour 1",
                             engine::ledgerCapacityGauge)
                     .gauge("match_command_ledger_floors",
-                            "UP_TO floors held by the ledger v2 (RC2 S4)",
+                            "UP_TO floors held by the ledger v2",
                             engine::ledgerFloorsGauge)
                     .gauge("match_command_ledger_tombstone_ranges",
-                            "Merged ORDER tombstone ranges of the ledger v2; grows only with never-released ids (RC2 S4)",
+                            "Merged ORDER tombstone ranges of the ledger v2; grows only with never-released ids",
                             engine::ledgerRangesGauge)
                     .counter("match_durable_released_total",
-                            "Durable commands refused RELEASED (record 3 result 7): the id is under a floor or a tombstone (RC2 S4 B2)",
+                            "Durable commands refused RELEASED (record 3 result 7): the id is under a floor or a tombstone",
                             engine::releasedCount)
                     .counter("match_durable_invalid_wire_total",
-                            "Behaviour-2 durable commands with a v11 header journaled INVALID (RC2 S4 B0)",
+                            "Behaviour-2 durable commands with a v11 header journaled INVALID",
                             engine::invalidWireCount)
                     .counter("match_durable_invalid_kind_bits_total",
-                            "Behaviour-2 durable commands with (idLow & 3) != kind journaled INVALID (RC2 S4 B1)",
+                            "Behaviour-2 durable commands with (idLow & 3) != kind journaled INVALID",
                             engine::invalidKindBitsCount)
                     .counter("match_durable_invalid_owner_id_total",
-                            "Behaviour-2 durable commands with omsOrderId != idHigh journaled INVALID (RC2 S4 B1, decision A3)",
+                            "Behaviour-2 durable commands with omsOrderId != idHigh journaled INVALID",
                             engine::invalidOwnerIdCount)
                     .counter("match_durable_invalid_sign_total",
-                            "Behaviour-2 durable commands with idHigh < 1 or idLow < 0 journaled INVALID (RC2 S4 B1)",
+                            "Behaviour-2 durable commands with idHigh < 1 or idLow < 0 journaled INVALID",
                             engine::invalidSignCount)
                     .counter("match_durable_invalid_tif_total",
-                            "Behaviour-2 durable commands with a timeInForce outside the allow-list journaled INVALID (RC2 S5 3.1)",
+                            "Behaviour-2 durable commands with a timeInForce outside the allow-list journaled INVALID",
                             engine::invalidTifCount)
                     .counter("match_durable_invalid_amend_reference_total",
-                            "Behaviour-2 UPDATEs with expectedOldRemaining 0 journaled INVALID (RC2 S5 3.1)",
+                            "Behaviour-2 UPDATEs with expectedOldRemaining 0 journaled INVALID",
                             engine::invalidAmendReferenceCount)
                     .counter("match_durable_invalid_amend_type_total",
-                            "Behaviour-2 UPDATEs with orderType MARKET journaled INVALID (RC2 S5 3.1)",
+                            "Behaviour-2 UPDATEs with orderType MARKET journaled INVALID",
                             engine::invalidAmendTypeCount)
                     .counter("match_tif_ioc_total",
-                            "Behaviour-2 IOC limit creates applied (RC2 S5)",
+                            "Behaviour-2 IOC limit creates applied",
                             engine::iocCount)
                     .counter("match_tif_ioc_remainder_total",
-                            "Behaviour-2 IOC limit creates that ended CANCELLED with a remainder (RC2 S5)",
+                            "Behaviour-2 IOC limit creates that ended CANCELLED with a remainder",
                             engine::iocRemainderCount)
                     .counter("match_tif_fok_total",
-                            "Behaviour-2 FOK limit creates applied (RC2 S5)",
+                            "Behaviour-2 FOK limit creates applied",
                             engine::fokCount)
                     .counter("match_tif_fok_unfillable_total",
-                            "Behaviour-2 FOK limit creates CANCELLED FOK_UNFILLABLE by the pre-walk (RC2 S5)",
+                            "Behaviour-2 FOK limit creates CANCELLED FOK_UNFILLABLE by the pre-walk",
                             engine::fokUnfillableCount)
                     .counter("match_market_budget_exhausted_total",
-                            "Behaviour-2 market buys ended by the budget before the quantity bound (RC2 S5 section 4)",
+                            "Behaviour-2 market buys ended by the budget before the quantity bound",
                             engine::marketBudgetExhaustedCount)
                     .counter("match_amend_reduced_total",
-                            "Behaviour-2 amends that placed a leg reduced by in-window fills (RC2 S5 5.1)",
+                            "Behaviour-2 amends that placed a leg reduced by in-window fills",
                             engine::amendReducedCount)
                     .counter("match_amend_no_remainder_total",
-                            "Behaviour-2 amends whose in-window fills reached the new quantity: leg cancelled, nothing placed (RC2 S5 5.1)",
+                            "Behaviour-2 amends whose in-window fills reached the new quantity: leg cancelled, nothing placed",
                             engine::amendNoRemainderCount)
                     .counter("match_amend_remaining_mismatch_total",
-                            "Behaviour-2 amends refused because the leg's remaining exceeds expectedOldRemaining (RC2 S5 5.1)",
+                            "Behaviour-2 amends refused because the leg's remaining exceeds expectedOldRemaining",
                             engine::amendRemainingMismatchCount)
                     .counter("match_durable_capacity_total",
-                            "Durable commands refused CAPACITY at the recorded C (RC2 S4 B4)",
+                            "Durable commands refused CAPACITY at the recorded C",
                             engine::capacityCount)
                     .counter("match_release_applied_total",
-                            "ReleaseCommandIds entries APPLIED (a floor rise or a tombstone) (RC2 S4)",
+                            "ReleaseCommandIds entries APPLIED (a floor rise or a tombstone)",
                             engine::releaseAppliedCount)
                     .counter("match_release_noop_total",
-                            "ReleaseCommandIds entries that changed no state (RC2 S4)",
+                            "ReleaseCommandIds entries that changed no state",
                             engine::releaseNoopCount)
                     .counter("match_release_leg_live_total",
-                            "ORDER releases refused LEG_LIVE: a leg naming the order still rests (RC2 S4)",
+                            "ORDER releases refused LEG_LIVE: a leg naming the order still rests",
                             engine::releaseLegLiveCount)
                     .counter("match_release_noop_frames_total",
-                            "ReleaseCommandIds frames whose entries were all NOOP: nothing journaled, no journalSeq (RC2 S4, decision A1)",
+                            "ReleaseCommandIds frames whose entries were all NOOP: nothing journaled, no journalSeq",
                             engine::releaseNoopFrameCount)
                     .counter("match_dark_command_releases_total",
-                            "Record 4 release frames applied but not journaled because the settlement journal is off on this node (RC2 S4)",
+                            "Record 4 release frames applied but not journaled because the settlement journal is off on this node",
                             eventPublisher::getDarkCommandReleaseCount)
                     .counter("match_legacy_lane_rejects_total",
-                            "Legacy CreateOrder/CancelOrder/UpdateOrder frames refused at behaviour 2 (RC2 S4, decision A2)",
+                            "Legacy CreateOrder/CancelOrder/UpdateOrder frames refused at behaviour 2",
                             sbeDemuxer::legacyLaneRejectCount)
                     .counter("match_dark_command_outcomes_total",
                             "Durable command outcomes applied but not journaled because the settlement journal is off on this node; OMS cannot resolve them from this node",
                             eventPublisher::getDarkCommandOutcomeCount)
                     .counter("match_overflow_rejects_total", "Orders rejected for fixed-point overflow", engine::getOverflowRejectCount)
                     .counter("match_invalid_qty_rejects_total", "Orders rejected for non-positive quantity", engine::getInvalidQuantityRejectCount)
-                    .counter("match_trades_total", "Trades executed (trade id high-water mark; engine-owned, RC2 S3)", engine::getTradeIdGenerator)
+                    .counter("match_trades_total", "Trades executed (trade id high-water mark; engine-owned)", engine::getTradeIdGenerator)
                     .counter("match_dropped_market_msgs_total", "Lossy market-data egress drops", droppedMessages::get)
                     .counter("match_follower_egress_skipped_total", "Lossy market-data egress skipped on followers (no consumer)", followerSkipped::get)
                     .counter("match_dropped_oms_egress_total", "Reliable OMS egress drops (should stay 0)", droppedOmsEgress::get)
                     .counter("match_egress_offer_giveups_total", "Frames lost to exhausted backpressure retries at session.offer (should stay 0)", egressOfferGiveUps::get)
-                    .counter("match_egress_drain_capped_total", "Egress drains that hit the C-3 per-cycle cap (EGRESS_DRAIN_MAX) with work still queued; backlog deferred to the next flush (no loss). Climbs during a leader takeover inheriting a deep queue", this::drainCappedTotal)
+                    .counter("match_egress_drain_capped_total", "Egress drains that hit the per-cycle drain cap (EGRESS_DRAIN_MAX) with work still queued; backlog deferred to the next flush (no loss). Climbs during a leader takeover inheriting a deep queue", this::drainCappedTotal)
                     .counter("match_publisher_dropped_trade_total", "Reliable OMS trade-egress dropped by market publishers (buffer-full or flush error; should stay 0)", eventPublisher::droppedTradeEgressTotal)
                     .counter("match_publisher_dropped_status_total", "Reliable OMS status-egress dropped by market publishers (buffer-full or flush error; should stay 0)", eventPublisher::droppedStatusEgressTotal)
                     .counter("match_unknown_timers_total", "Fired cluster timers with no runnable", timerManager::getUnknownTimerCount)
-                    .counter("match_flush_timer_fires_total", "Egress flush timer fires while leading (RC2 S6: per-term id)", () -> flushTimerFireCount)
+                    .counter("match_flush_timer_fires_total", "Egress flush timer fires while leading (per-term id)", () -> flushTimerFireCount)
                     .counter("match_epoch_hello_sent_total",
-                            "ClusterHeartbeat epoch hellos sent to new sessions from the leader's flush timer (RC2 S12 W9)",
+                            "ClusterHeartbeat epoch hellos sent to new sessions from the leader's flush timer",
                             () -> epochHelloSentCount)
                     .gauge("match_flush_timer_term",
-                            "Leadership term of the last armed flush timer id (base + term * 1e6); -1 before any (RC2 S6)",
+                            "Leadership term of the last armed flush timer id (base + term * 1e6); -1 before any",
                             () -> flushTimerTerm)
                     .counter("match_ingress_unauthorized_total",
-                            "Ingress frames refused by the session-class rows: no mutation, journal, journalSeq or egress (RC2 S6)",
+                            "Ingress frames refused by the session-class rows: no mutation, journal, journalSeq or egress",
                             sbeDemuxer::unauthorizedRejectCount)
                     .counter("match_auth_sessions_accepted_total",
-                            "Sessions the consensus module authenticated against ME_AUTH_KEYS on this node (RC2 S6)",
+                            "Sessions the consensus module authenticated against ME_AUTH_KEYS on this node",
                             () -> { final var a = sessionAuthenticator; return a == null ? 0L : a.acceptedCount(); })
                     .counter("match_auth_sessions_rejected_total",
-                            "Sessions rejected at connect on this node: no, wrong or mismatched credentials, or an empty table (RC2 S6)",
+                            "Sessions rejected at connect on this node: no, wrong or mismatched credentials, or an empty table",
                             () -> { final var a = sessionAuthenticator; return a == null ? 0L : a.rejectedCount(); })
                     .counter("match_backup_queries_denied_total",
-                            "BackupQuery requests denied by the class table on this node: only REPLICA may query (RC2 S6, A14)",
+                            "BackupQuery requests denied by the class table on this node: only REPLICA may query",
                             () -> { final var z = sessionAuthorisation; return z == null ? 0L
                                     : z.deniedCount(com.openexchange.cluster.auth.ClassAuthorisationService.BACKUP_QUERY); })
                     .counter("match_aeron_errors_total", "Aeron error handler invocations", AeronCluster.AERON_ERROR_COUNT::get)
@@ -1130,16 +1130,16 @@ public class AppClusteredService implements ClusteredService {
     // silently killed the chain (the egress wedge). 1e12 is far above any value the counter could
     // ever reach (~4/s) so it can never collide, even across a mixed-version rolling deploy.
     //
-    // RC2 S6 (contract 5.1, F-3, critic K3): the id is now PER LEADERSHIP TERM, base + term * 1e6
+    // The id is now PER LEADERSHIP TERM, base + term * 1e6
     // (TermTimerId, the AE arithmetic). The consensus module counts every TimerEvent it consumes while no
     // timer with that id is pending and swallows that many later schedules of the id; a fixed id re-armed
-    // by the leader only would therefore die on the first failover (RC1 S5 rule 16). A member can lead
+    // by the leader only would therefore die on the first failover. A member can lead
     // only a later term, whose id no follower count has ever seen. Any id >= the base is the flush timer.
     static final long FLUSH_TIMER_BASE = 1_000_000_000_000L;
 
-    // RC2 S6 (5.2): the leadership term of the last NewLeadershipTermEvent, live or replayed, in log order.
+    // The leadership term of the last NewLeadershipTermEvent, live or replayed, in log order.
     private long leadershipTermId = -1;
-    // RC2 S6 (5.3 item 5): the last armed flush id and its term (gauge), and the fires on this member.
+    // The last armed flush id and its term (gauge), and the fires on this member.
     private volatile long lastArmedFlushTimerId = -1;
     private volatile long flushTimerTerm = -1;
 
@@ -1148,7 +1148,7 @@ public class AppClusteredService implements ClusteredService {
         return com.openexchange.cluster.TermTimerId.of(FLUSH_TIMER_BASE, leadershipTermId);
     }
 
-    /** Test seam (5.3 item 5): the id of the last flush timer this service scheduled, -1 before any. */
+    /** Test seam: the id of the last flush timer this service scheduled, -1 before any. */
     long lastArmedFlushTimerId() {
         return lastArmedFlushTimerId;
     }
@@ -1162,7 +1162,7 @@ public class AppClusteredService implements ClusteredService {
     }
 
     private void scheduleMarketDataFlush() {
-        // Cluster time, not wall clock (5.3 item 3): the deadline is a replicated input of the timer.
+        // Cluster time, not wall clock: the deadline is a replicated input of the timer.
         final long deadline = cluster.time()
                 + cluster.timeUnit().convert(MARKET_DATA_FLUSH_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
         final long id = currentFlushTimerId();
@@ -1200,7 +1200,7 @@ public class AppClusteredService implements ClusteredService {
     }
 
     /**
-     * RC2 S6 (5.2, 5.3 item 1): record the term and arm its flush id on EVERY member, live and on replay.
+     * Record the term and arm its flush id on EVERY member, live and on replay.
      * The leader's timer fires and its TimerEvent cancels the followers' pending copy; afterwards only the
      * leader re-arms. This replaces the inherited fixed-id copy a promoted member used to depend on, so a
      * new leader on an idle market keeps its flush, keep-warm and resnapshot without any ingress. The
@@ -1222,7 +1222,7 @@ public class AppClusteredService implements ClusteredService {
         if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
             aeronBroadcaster.flush();
 
-            // RC2 S12 W9: the epoch hello, before the keep-warm (which a busy ME never sends).
+            // The epoch hello, before the keep-warm (which a busy ME never sends).
             sendEpochHellos();
 
             // Egress keep-warm: idle markets produce no market data, but the
@@ -1262,8 +1262,8 @@ public class AppClusteredService implements ClusteredService {
                         + " lastEgressAgeMs=" + (now - lastEgressSendMs)
                         + " flushTimerScheduled=" + flushTimerScheduled);
             }
-            // RC2 S6 (5.3 item 2): only the leader re-arms, always the CURRENT term's id (a reschedule,
-            // never a second chain). A stale-term timer (item 4) lands here once and moves the chain to
+            // Only the leader re-arms, always the CURRENT term's id (a reschedule,
+            // never a second chain). A stale-term timer lands here once and moves the chain to
             // the current id. A follower schedules nothing: the leader's TimerEvents drive its copy.
             scheduleMarketDataFlush();
             flushTimerScheduled = true;
@@ -1325,7 +1325,7 @@ public class AppClusteredService implements ClusteredService {
             logger.info("Event publishing initialized for {} markets with Aeron broadcaster",
                 MarketConfig.ALL_MARKETS.length);
         } catch (Exception e) {
-            // A-9: fail-fast. An egress-less node keeps matching, but its trades and status never
+            // Fail-fast. An egress-less node keeps matching, but its trades and status never
             // reach OMS/AE, so orders vanish silently, and its tradeId counter forks on a partially
             // initialized replica. The node exits before joining the cluster instead of serving
             // blind; the other two nodes keep quorum. If the cause is permanent this becomes a clean
@@ -1350,7 +1350,7 @@ public class AppClusteredService implements ClusteredService {
      * replicated config instead of MarketConfig.ALL_MARKETS. Two callers, mutually exclusive by
      * the state machine: onStart after restoring a config-bearing snapshot, and
      * {@link #onEnginesCreatedFromConfig} when a fresh cluster accepts its logged EngineConfig.
-     * Failure is the same A-9 fail-fast: an egress-less node loses orders silently, so it exits
+     * Failure is the same fail-fast: an egress-less node loses orders silently, so it exits
      * before serving; the other nodes keep quorum.
      */
     private void initializeEventPublishingFromConfig(
@@ -1374,7 +1374,7 @@ public class AppClusteredService implements ClusteredService {
             logger.info("Event publishing initialized for {} markets from replicated EngineConfig",
                 config.markets.length);
         } catch (Exception e) {
-            // A-9 principle, config path: see the legacy catch above for the full reasoning.
+            // Fail-fast principle, config path: see the legacy catch above for the full reasoning.
             final String reason = e.getClass().getName() + ": " + e.getMessage();
             final String critical = "CRITICAL: event publishing failed to initialize from"
                     + " EngineConfig (" + reason + "); an egress-less node loses orders silently"
@@ -1445,7 +1445,7 @@ public class AppClusteredService implements ClusteredService {
         aeronBroadcaster.broadcastReliable(preConfigRejectBuffer, 0, length);
     }
 
-    /** RC2 S6 (5.4): the sessions the container restored before onStart; package-private for tests. */
+    /** The sessions the container restored before onStart; package-private for tests. */
     void registerRestoredSessions(final Cluster cluster) {
         final int[] restored = {0};
         cluster.forEachClientSession(session -> {
@@ -1459,9 +1459,9 @@ public class AppClusteredService implements ClusteredService {
         }
     }
 
-    // Sessions registered from the container snapshot at the last onStart (tests: review NOTE-4). A restored
+    // Sessions registered from the container snapshot at the last onStart (tests). A restored
     // session gets no resnapshot request of its own; it receives the next periodic one (10 s) or one triggered by
-    // another session open (review NOTE-9; S13's resnapshot on LEADER builds on this).
+    // another session open (the resnapshot on LEADER builds on this).
     private volatile int restoredSessionCount;
 
     int restoredSessionCount() {
@@ -1469,7 +1469,7 @@ public class AppClusteredService implements ClusteredService {
     }
 
     /**
-     * RC2 S6 (contract 6, M Q12): read the snapshot image to END OF STREAM through the kit reader (an empty
+     * Read the snapshot image to END OF STREAM through the kit reader (an empty
      * first poll or a pause between chunks is not the end), then hand even a zero-byte payload to the codec,
      * which refuses it: an image without a snapshot is not an empty state. Every refusal (image closed before
      * end of stream, zero bytes, codec reject, the restore cross-check) fences the service, logs CRITICAL,
@@ -1479,7 +1479,7 @@ public class AppClusteredService implements ClusteredService {
                       final org.agrona.concurrent.IdleStrategy idleStrategy) {
         System.out.println("[SNAPSHOT] loadSnapshot called, image position: " + snapshotImage.position());
 
-        // A-2 fix: the snapshot is offered as one OR MORE Aeron messages (chunked on the way out to
+        // The snapshot is offered as one OR MORE Aeron messages (chunked on the way out to
         // stay under maxMessageLength). FragmentAssembler reassembles each MESSAGE from its MTU
         // fragments; we then ACCUMULATE the reassembled messages, in arrival order, into one
         // contiguous payload and decode it ONCE. The snapshot is written by a single
@@ -1517,7 +1517,7 @@ public class AppClusteredService implements ClusteredService {
     }
 
     /**
-     * The onStart restore step: {@link #loadSnapshot}, then (RC2 S13 W-ME3, contract 8.3) every configured
+     * The onStart restore step: {@link #loadSnapshot}, then every configured
      * market's book version is raised to {@code snapshotPosition} and its top of book published past the
      * dirty gate. Without the republish a restored node publishes book version 0 and, on the array engine,
      * an empty top for every market without a command since the restore, so its resnapshots send nothing
@@ -1534,12 +1534,12 @@ public class AppClusteredService implements ClusteredService {
         }
     }
 
-    // RC2 S13 test seams (contract 11.7), package-private, never written by main code: true in production.
-    // RESTORE_REPUBLISH off = the W-ME3 republish is skipped.
+    // Test seams, package-private, never written by main code: true in production.
+    // RESTORE_REPUBLISH off = the restored-book republish is skipped.
     boolean restoreRepublish = true;
-    // RESNAPSHOT_ON_LEADER off = no resnapshot request on a role change to LEADER (W-ME1).
+    // RESNAPSHOT_ON_LEADER off = no resnapshot request on a role change to LEADER.
     boolean resnapshotOnLeader = true;
-    // RESNAPSHOT_BEFORE_IS_LEADER on = the withdrawn draft order (bump, then isLeader); CL-F-1.
+    // RESNAPSHOT_BEFORE_IS_LEADER on = the withdrawn draft order (bump, then isLeader).
     boolean resnapshotBeforeIsLeader = false;
     // Runs between the isLeader write and the resnapshot request of a promotion (null in production), so a
     // test can interleave a publisher flush exactly there (generationBumpAfterIsLeaderNeverLosesTheSnapshot).
@@ -1550,20 +1550,20 @@ public class AppClusteredService implements ClusteredService {
      * Separated from loadSnapshot for clarity — this expects the FULL snapshot
      * data, not individual fragments.
      */
-    // Package-private for the RC2 S2 restore tests (SnapshotIdentityBlockTest, EngineConfigCrossCheckTest).
+    // Package-private for the restore tests (SnapshotIdentityBlockTest, EngineConfigCrossCheckTest).
     boolean processSnapshotPayload(final DirectBuffer buf, final int offset, final int length) {
         // Decode via the shared codec (same class that wrote the bytes in onTakeSnapshot).
         // The codec restores the engine's order books + order-id generator in place and hands
         // back the scalars we own externally.
         final SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(buf, offset, length, engine);
 
-        // RC2 S3: the trade-id generator was restored into the engine in place by the codec.
+        // The trade-id generator was restored into the engine in place by the codec.
         System.out.println("[SNAPSHOT] Restored OrderIdGenerator=" + decoded.orderIdGenerator
                 + " TradeIdGenerator=" + decoded.tradeIdGenerator);
 
         if (decoded.timerCorrelationIdPresent) {
             // Legacy counter only — the egress flush timer uses its own reserved id range
-            // (FLUSH_TIMER_BASE + term * 1e6, RC2 S6) recognized by range in onTimerEvent and armed
+            // (FLUSH_TIMER_BASE + term * 1e6) recognized by range in onTimerEvent and armed
             // at every NewLeadershipTermEvent, so it never depends on this counter. A stray old
             // counter-id timer re-delivered after recovery just routes to TimerManager and logs one
             // harmless "unknown timer".
@@ -1579,7 +1579,7 @@ public class AppClusteredService implements ClusteredService {
         // that diverges from the cluster's declared truth must exit here (fail-fast), never
         // serve — HEALTHY is not the same as running the right config.
         //
-        // RC2 S2: the node-local check runs after every restore that brought a recorded config,
+        // The node-local check runs after every restore that brought a recorded config,
         // in BOTH launch modes: (a) supported behaviour, (b) wire ceiling within this jar, (c)
         // legacy-mode creation values, (d) behaviour >= 2 on a legacy-mode node.
         if (decoded.engineConfigPresent) {
@@ -1590,7 +1590,7 @@ public class AppClusteredService implements ClusteredService {
             }
         }
 
-        // RC2 S17 W12 (R-ME-2): a restore that dropped an order never serves. Node-local fail-fast of the A-9 /
+        // A restore that dropped an order never serves. Node-local fail-fast of the
         // checkAfterRestore kind: rejectedOrders depends on this node's launch mode and env-built geometry, so a
         // member that cannot hold the replicated books exits; it never serves a different state. loadSnapshot turns
         // the throw into the CRITICAL refusal, readiness 503 and failFast.
@@ -1631,12 +1631,12 @@ public class AppClusteredService implements ClusteredService {
 
     private void applyOnSessionOpen(final ClientSession session, final long timestamp) {
         context.setClusterTime(timestamp);
-        // RC2 S6 R0: a SessionOpen without a valid principal is pre-S6 history (authentication is always on).
+        // A SessionOpen without a valid principal is history from before authentication (authentication is always on).
         requirePrincipal(session.encodedPrincipal(), "session open", session.id(),
                 cluster == null ? -1L : cluster.logPosition());
         clientSessions.addSession(session);
         if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
-            epochHelloPending.add(session.id()); // RC2 S12 W9: sent from the next leader flush
+            epochHelloPending.add(session.id()); // Sent from the next leader flush
         }
         System.out.println("New client session connected: " + session.id()
                 + " (total sessions=" + clientSessions.getAllSessions().size() + ")");   // match#25 diag: track session count
@@ -1649,7 +1649,7 @@ public class AppClusteredService implements ClusteredService {
         // Arm the market data flush timer chain. Same lazy pattern as
         // onSessionMessage: timers scheduled during replay are no-ops and the
         // flag is reset in onRoleChange, so live events must (re-)arm it.
-        // RC2 S6 (5.3 item 2): leader only; the term event already armed every member.
+        // Leader only; the term event already armed every member.
         if (!flushTimerScheduled && cluster != null && cluster.role() == Cluster.Role.LEADER) {
             scheduleMarketDataFlush();
             flushTimerScheduled = true;
@@ -1674,7 +1674,7 @@ public class AppClusteredService implements ClusteredService {
     private void applyOnSessionClose(final ClientSession session, final long timestamp, final CloseReason closeReason) {
         context.setClusterTime(timestamp);
         clientSessions.removeSession(session);
-        epochHelloPending.remove(session.id()); // RC2 S12 W9
+        epochHelloPending.remove(session.id());
         // match#140: drop this session from per-session egress observability so a normally-closed
         // session can never freeze match_egress_session_last_offer_age_ms high (stale last-offer ms).
         egressSessionMetrics.removeSession(session.id());
@@ -1728,7 +1728,7 @@ public class AppClusteredService implements ClusteredService {
         // sampled messages; recording is plain-long writes on this thread.
         final boolean sampled = nodeMetrics.shouldSample();
         final long t0 = sampled ? System.nanoTime() : 0;
-        // RC2 S6 (contract 3.1): the class from the replicated principal Aeron hands with the session
+        // The class from the replicated principal Aeron hands with the session
         // (SessionOpen on every member, the container snapshot on a restored one), read in place with no
         // allocation. A null session (an id Aeron does not know) reads as class 0: R0 halts.
         final byte[] principal = session == null ? null : session.encodedPrincipal();
@@ -1746,7 +1746,7 @@ public class AppClusteredService implements ClusteredService {
 
         // Schedule the idle/keep-warm flush timer lazily (can't schedule from onStart —
         // cluster not ready).
-        // cluster not ready). RC2 S6 (5.3 item 2): leader only.
+        // cluster not ready). Leader only.
         if (!flushTimerScheduled && cluster != null && cluster.role() == Cluster.Role.LEADER) {
             scheduleMarketDataFlush();
             flushTimerScheduled = true;
@@ -1791,7 +1791,7 @@ public class AppClusteredService implements ClusteredService {
     }
 
     /**
-     * RC2 S12 W9: one ClusterHeartbeat (the keep-warm encoding with the current meEpoch) to every session in
+     * One ClusterHeartbeat (the keep-warm encoding with the current meEpoch) to every session in
      * {@link #epochHelloPending}. On the first leader flush of a term (the term the flush timer was armed for, not
      * the role change) every present session is added first. A session leaves the set on a positive offer only.
      */
@@ -1826,7 +1826,7 @@ public class AppClusteredService implements ClusteredService {
         }
     }
 
-    /** Test seam (RC2 S12 W9): hellos sent on this node, and sessions still waiting for one. */
+    /** Test seam: hellos sent on this node, and sessions still waiting for one. */
     long epochHelloSentCount() {
         return epochHelloSentCount;
     }
@@ -1862,7 +1862,7 @@ public class AppClusteredService implements ClusteredService {
     /**
      * Encode the ClusterHeartbeat keep-warm into {@code dst} and return its length. Package-private
      * for MeEpochIdentityTest. {@code meEpoch} (v12) is the recorded epoch from the engine's bound
-     * identity, 0 while unbound (RC2 S2 section 5).
+     * identity, 0 while unbound.
      */
     int encodeKeepWarm(final org.agrona.MutableDirectBuffer dst, final int memberId, final long nowMs) {
         keepWarmEncoder.wrapAndApplyHeader(dst, 0, keepWarmHeaderEncoder);
@@ -1895,7 +1895,7 @@ public class AppClusteredService implements ClusteredService {
         // TimerManager runnable map (which isn't restored on recovery — the desync source). This makes
         // onFlushTimer fire deterministically on EVERY node after any recover/replay, so the chain
         // cannot silently die. Any other timer id still routes through TimerManager.
-        // RC2 S6 (5.1): every id at or above the base is the flush timer, whatever its term.
+        // Every id at or above the base is the flush timer, whatever its term.
         if (com.openexchange.cluster.TermTimerId.isKind(correlationId, FLUSH_TIMER_BASE)) {
             onFlushTimer();
             return;
@@ -1935,7 +1935,7 @@ public class AppClusteredService implements ClusteredService {
                 + " TimerCorrelationId=" + timerCorrelationId
                 + " totalBytes=" + pos);
 
-        // A-2 fix: CHUNK the snapshot. A single offer() throws IllegalArgumentException the moment
+        // CHUNK the snapshot. A single offer() throws IllegalArgumentException the moment
         // the payload exceeds the publication's maxMessageLength (snapshot term / 8) — and the old
         // retry loop only caught NEGATIVE-return back-pressure, never the size-exceeded throw, so a
         // snapshot larger than maxMessageLength failed PERMANENTLY (log never pruned, tmpfs fills).
@@ -1952,8 +1952,7 @@ public class AppClusteredService implements ClusteredService {
         // Block until the Aeron Archive has read all the bytes we offered into its on-disk
         // recording file. Without this, onTakeSnapshot returns while the recording is still in
         // flight; if the node is killed before Archive flushes the catalog stopPosition, the
-        // recording is pruned on restart and recovery fails with `unknown recording id`. See
-        // /tmp/cluster-forensic2-033046/ROOT-CAUSE-V2.md for the full repro.
+        // recording is pruned on restart and recovery fails with `unknown recording id`.
         awaitSnapshotRecorded(snapshotPublication);
         nodeMetrics.stampSnapshot(System.currentTimeMillis()); // match#33: wall-clock stamp, metrics only
         // The baseline for the next snapshot, on EVERY member and whoever asked
@@ -2085,10 +2084,10 @@ public class AppClusteredService implements ClusteredService {
             runRoleChangeProbe();
         }
         isLeader = promoted;
-        // RC2 S13 W-ME1 (contract 8.1, Q7): a new leader resnapshots every market at once. Its publishers' chains
-        // are their own (a follower encodes and advances while broadcast() discards, F-S13-2), and the periodic
-        // bump would wait up to 10 s on a node that led recently (lastPeriodicResnapshotMs is node-local,
-        // F-S13-3). The request comes AFTER the volatile isLeader write (CL-F-1): a publisher flush that sees the
+        // A new leader resnapshots every market at once. Its publishers' chains
+        // are their own (a follower encodes and advances while broadcast() discards), and the periodic
+        // bump would wait up to 10 s on a node that led recently (lastPeriodicResnapshotMs is node-local).
+        // The request comes AFTER the volatile isLeader write: a publisher flush that sees the
         // new generation also sees isLeader == true, so the snapshot it encodes is enqueued, never discarded.
         // Node-local egress state only: the generation is not in the snapshot or the log.
         if (promoted && resnapshotOnLeader && !resnapshotBeforeIsLeader) {
@@ -2102,12 +2101,12 @@ public class AppClusteredService implements ClusteredService {
         // waiting on: the consensus module reads that toggle only while leading,
         // so a request left in flight would block this node's cadence forever.
         snapshotCadence.roleChanged(isLeader);
-        // Reset the flush-chain flag on every role change. RC2 S6 (5.3): the role is set before the
+        // Reset the flush-chain flag on every role change. The role is set before the
         // new term's first entry is polled, so the NewLeadershipTermEvent that follows arms the term's
         // id on every member and sets the flag again; the leader-only lazy arm in onSessionOpen/
         // onSessionMessage is a reschedule of that same id, never a second chain.
         if (newRole != Cluster.Role.LEADER) {
-            epochHelloPending.clear(); // RC2 S12 W9: only the leader sends hellos
+            epochHelloPending.clear(); // Only the leader sends hellos
         }
         flushTimerScheduled = false;
     }

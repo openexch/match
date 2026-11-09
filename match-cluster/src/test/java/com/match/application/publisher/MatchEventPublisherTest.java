@@ -99,7 +99,7 @@ public class MatchEventPublisherTest {
 
     // ==================== Snapshot Support ====================
 
-    // RC2 S3: the trade-id generator moved to the engine (EngineTradeIdTest); the publisher holds
+    // The trade-id generator moved to the engine (EngineTradeIdTest); the publisher holds
     // no counter and carries the engine's tradeId.
 
     // ==================== Trade Execution Publishing ====================
@@ -269,10 +269,10 @@ public class MatchEventPublisherTest {
         assertEquals(2, handler2.events.get(0).marketId);
     }
 
-    // ==================== C-1: claimSlotOrHalt slot claiming ====================
+    // ==================== claimSlotOrHalt slot claiming ====================
 
     /**
-     * C-1: every publish method now claims its ring slot through claimSlotOrHalt, which halts the
+     * Every publish method now claims its ring slot through claimSlotOrHalt, which halts the
      * node only when the ring stays full past the spin budget. This drives a burst that stays well
      * within ring capacity (the full-ring branch is never entered), asserting that (a) the helper
      * returns a valid slot for every publish so all events are delivered, and (b) the node is NOT
@@ -315,10 +315,10 @@ public class MatchEventPublisherTest {
         }
     }
 
-    // ==================== C-6: swallowed Disruptor handler exceptions ====================
+    // ==================== Swallowed Disruptor handler exceptions ====================
 
     /**
-     * C-6: a MarketEventHandler that throws must NOT silently vanish. The per-market
+     * A MarketEventHandler that throws must NOT silently vanish. The per-market
      * Disruptor default exception handler swallows the throw (rethrowing would kill the
      * publisher thread), but it must (a) increment disruptorExceptionCount so the loss is
      * observable, and (b) leave the publisher thread alive so later events still flow.
@@ -407,7 +407,7 @@ public class MatchEventPublisherTest {
     }
 
     /**
-     * C-1 helper: minimal handler that only counts delivered events (no per-event allocation
+     * claimSlotOrHalt helper: minimal handler that only counts delivered events (no per-event allocation
      * growth), so a burst test can push thousands of events cheaply.
      */
     private static class CountingHandler implements MarketEventHandler {
@@ -430,7 +430,7 @@ public class MatchEventPublisherTest {
     }
 
     /**
-     * C-6 helper: throws on its FIRST event (to trip the Disruptor exception handler), then
+     * Exception-handler helper: throws on its FIRST event (to trip the Disruptor exception handler), then
      * captures every event after that (to prove the publisher thread survived the throw).
      */
     private static class ThrowOnceHandler implements MarketEventHandler {

@@ -16,7 +16,7 @@ import static org.junit.Assert.*;
 
 /**
  * Slice C: the snapshot's trailing engineConfig block. With NO config recorded no config block is
- * written (clean EOF of the body where the block would start = no config). RC2 S17 W12 (R-ME-1): every
+ * written (clean EOF of the body where the block would start = no config). Every
  * image carries the durable envelope and, at behaviour 1, the v1 ledger block (0 entries allowed); a bare
  * legacy or v9-era image is refused.
  */
@@ -95,7 +95,7 @@ public class SnapshotCodecEngineConfigTest {
     }
 
     /**
-     * RC2 S17 W12 (R-ME-1, M1b; was configlessSnapshotAppendsNothing): the RC2 writer ALWAYS emits the envelope.
+     * The current writer ALWAYS emits the envelope.
      * With no config recorded the image is the v9 body (8 orderIdGen + 8 tradeIdGen + 4 numMarkets + 5 markets *
      * (4 id + 4 nBid + 4 nAsk) + 8 timer + 4 omsMapCount = 92 bytes), then the v1 ledger block with 0 entries
      * (1 marker + 4 version + 4 count = 9 bytes), inside envelope 1 (20 bytes): 121 bytes, not one more.
@@ -126,12 +126,12 @@ public class SnapshotCodecEngineConfigTest {
     }
 
     /**
-     * RC2 S17 W12 (M1c R-a): a pre-genesis config-mode image (no engines, numMarkets 0, no config) written by the
+     * A pre-genesis config-mode image (no engines, numMarkets 0, no config) written by the
      * new writer carries the envelope, restores and serves.
      */
     @Test
     public void preGenesisConfigModeImageCarriesTheEnvelopeAndServes() {
-        S2Services.Service source = new S2Services.Service(true);
+        LaunchModeServices.Service source = new LaunchModeServices.Service(true);
         assertFalse(source.engine().hasEngines());
         ExpandableArrayBuffer b = new ExpandableArrayBuffer();
         int len = SnapshotCodec.serialize(source.engine(), 0L, b);
@@ -139,19 +139,19 @@ public class SnapshotCodecEngineConfigTest {
                 20 + 8 + 8 + 4 + 8 + 4 + 9, len);
         assertEquals(SnapshotCodec.DURABLE_MAGIC, b.getLong(0));
 
-        S2Services.Service node = new S2Services.Service(true);
+        LaunchModeServices.Service node = new LaunchModeServices.Service(true);
         assertTrue("the node serves the image", node.load(Arrays.copyOf(b.byteArray(), len)));
         assertEquals(0, node.failFast.get());
         assertFalse(node.engine().hasEngines());
     }
 
     /**
-     * RC2 S17 W12 (M1c R-b): a behaviour-1 legacy-mode image with resting orders and an empty ledger restores on a
+     * A behaviour-1 legacy-mode image with resting orders and an empty ledger restores on a
      * legacy-mode node with 0 dropped and serves.
      */
     @Test
     public void behaviourOneLegacyImageWithAnEmptyLedgerServes() {
-        S2Services.Service source = new S2Services.Service(false);
+        LaunchModeServices.Service source = new LaunchModeServices.Service(false);
         source.engine().getEngine(Engine.MARKET_BTC_USD).addOrderNoMatch(1, 100, true, 6_000_000_000_000L, 100_000_000L);
         source.engine().getOrderIdToOmsOrderId().put(1, 9001);
         assertEquals(0, source.engine().commandLedger().size());
@@ -159,13 +159,13 @@ public class SnapshotCodecEngineConfigTest {
         source.engine().setTradeIdGenerator(1L); int len = SnapshotCodec.serialize(source.engine(), 0L, b);
         assertEquals(SnapshotCodec.ENVELOPE_V1, b.getInt(8));
 
-        S2Services.Service node = new S2Services.Service(false);
+        LaunchModeServices.Service node = new LaunchModeServices.Service(false);
         assertTrue("the legacy node serves", node.load(Arrays.copyOf(b.byteArray(), len)));
         assertEquals(0, node.failFast.get());
         assertFalse("the resting bid restored", node.engine().getEngine(Engine.MARKET_BTC_USD).isBidEmpty());
     }
 
-    /** RC2 S17 W12 (M1c R-c): a behaviour-1 image with a non-empty v1 ledger is unchanged (envelope 1). */
+    /** A behaviour-1 image with a non-empty v1 ledger is unchanged (envelope 1). */
     @Test
     public void behaviourOneImageWithANonEmptyLedgerIsUnchanged() {
         Engine source = new Engine();
@@ -201,15 +201,15 @@ public class SnapshotCodecEngineConfigTest {
         b.putLong(p, 100_000_000L); p += 8;   // qty 1.0
         b.putInt(p, 0);   p += 4;             // numAskOrders = 0
         b.putLong(p, 1_000_000_000_000L); p += 8; // timerCorrelationId
-        b.putInt(p, 1);   p += 4;             // omsMapCount = 1 (the v9 A-1 tail)
+        b.putInt(p, 1);   p += 4;             // omsMapCount = 1 (the v9 tail)
         b.putLong(p, 1);  p += 8;             // orderId
         b.putLong(p, 9001); p += 8;           // omsOrderId
-        // EOF of the body, exactly where a slice C config block would start. RC2 S17 W12: the bare v9 image is
-        // refused; the same body framed as the RC2 writer frames it (empty v1 ledger, envelope 1) loads.
+        // EOF of the body, exactly where an EngineConfig block would start. The bare v9 image is
+        // refused; the same body framed as the current writer frames it (empty v1 ledger, envelope 1) loads.
         final int bareLength = p;
         assertThrows(IllegalStateException.class,
                 () -> SnapshotCodec.deserialize(b, 0, bareLength, new Engine()));
-        final byte[] image = S2Services.envelopeV1(Arrays.copyOf(b.byteArray(), p));
+        final byte[] image = LaunchModeServices.envelopeV1(Arrays.copyOf(b.byteArray(), p));
 
         Engine e = new Engine();
         SnapshotCodec.Decoded d = SnapshotCodec.deserialize(new org.agrona.concurrent.UnsafeBuffer(image), 0,
@@ -261,8 +261,8 @@ public class SnapshotCodecEngineConfigTest {
     /**
      * Cross-mode operator error: a CONFIG-mode node restoring a legacy (config-less) snapshot
      * that carries resting orders has no engines to restore into and no config to build them
-     * from. The codec still counts the stranded orders (its ERROR line is the diagnosis); RC2 S17
-     * W12 (R-ME-2, M2): the service refuses the image, fail-fasts once and never serves.
+     * from. The codec still counts the stranded orders (its ERROR line is the diagnosis);
+     * the service refuses the image, fail-fasts once and never serves.
      */
     @Test
     public void configModeRestoreOfLegacyBooksIsLoudStateLoss() {
@@ -279,11 +279,11 @@ public class SnapshotCodecEngineConfigTest {
                 2, decoded.rejectedOrders);
         assertFalse("no engines conjured from nothing", configMode.hasEngines());
 
-        S2Services.Service node = new S2Services.Service(true);
+        LaunchModeServices.Service node = new LaunchModeServices.Service(true);
         final byte[] image = Arrays.copyOf(b.byteArray(), len);
         final String[] err = new String[1];
         final boolean[] served = new boolean[1];
-        err[0] = S2Services.stderrOf(() -> served[0] = node.load(image));
+        err[0] = LaunchModeServices.stderrOf(() -> served[0] = node.load(image));
         assertFalse("the node refuses the image", served[0]);
         assertEquals("failFast once", 1, node.failFast.get());
         assertTrue(err[0], err[0].contains("CRITICAL: snapshot refused: [SNAPSHOT] 2 order(s) dropped during restore"));
