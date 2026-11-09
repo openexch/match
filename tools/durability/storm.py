@@ -12,7 +12,7 @@ Composes the existing pieces rather than reinventing them:
                                      terminal-vs-OPEN, match#32)
   * tools/durability/diag_counters — engine counter harvest from node logs
 
-Operational rules honored (docs/incidents/2026-07-02, match#35/#37):
+Operational rules honored (the 2026-07-02 stranded-follower incident, match#35/#37):
   * The market gateway is DETACHED during the storm (it OOMs under load until
     P3.3 lands) and restored afterwards.
   * requires the truthful status API (admin-gateway#13 item 1): pre-flight

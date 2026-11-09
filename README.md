@@ -1,272 +1,119 @@
-# Match Engine
+# match
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Java](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/projects/jdk/21/)
-[![Aeron](https://img.shields.io/badge/Aeron%20Cluster-1.51.0-green.svg)](https://github.com/aeron-io/aeron)
+The Open Exchange matching engine: a deterministic order matching service that runs as a 3-node [Aeron Cluster](https://github.com/aeron-io/aeron) (Raft). Java 21.
 
-Ultra-low latency order matching engine built on a 3-node [Aeron Cluster](https://github.com/aeron-io/aeron) (Raft consensus). Designed for 24/7 operation with zero downtime.
+**Status: nightly prerelease** (`v1.0.0-nightly.20261105`). Not for production use.
 
-## The Open Exchange stack
+User documentation (architecture, configuration, operations, API): **https://openexchange.dev/docs**. Release notes: [GitHub Releases](https://github.com/openexch/match/releases).
 
-This is the anchor repo of **Open Exchange**, open-source exchange
-infrastructure released as one product across four repos:
+## Where it fits in v1
 
 | Repo | Role |
 |---|---|
-| [match](https://github.com/openexch/match) | Matching engine cluster (this repo) |
-| [oms](https://github.com/openexch/oms) | Order management: REST/gRPC edge, auth, risk, balances, Postgres ledger |
-| [admin-gateway](https://github.com/openexch/admin) | Process manager and operations API |
-| [trading-ui](https://github.com/openexch/trading-ui) | Trading and admin web interface |
+| **match** (this repo) | Matching engine cluster, market-data gateway, load generator |
+| [assets](https://github.com/openexch/assets) | Order and ledger core: order lifecycle, risk, holds and the ledger in one Java Aeron cluster |
+| [cluster-kit](https://github.com/openexch/cluster-kit) | Shared cluster machinery used by both engines (lifecycle, ports, auth, snapshot cadence) |
+| [cluster-tools](https://github.com/openexch/cluster-tools) | C++ cluster client, ME forwarder, settlement bridge, projectors |
+| [tools](https://github.com/openexch/tools) | Probe and test tooling |
 
-Start here:
+The engine consumes order commands from its replicated log, matches them with price-time priority, and publishes trades, order status and book data on cluster egress. It also writes a per-node ME journal (trades, terminals, command outcomes) to an Aeron Archive for downstream consumers.
 
-- **[docs/QUICKSTART.md](docs/QUICKSTART.md)**: fresh clone to a working stack
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: the umbrella architecture, what we provide vs. what an integrator owns, and the version/compatibility matrix
-- **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**: every runtime knob across the four repos
+## Modules
 
-Open Exchange is the **infrastructure layer**: matching, order management,
-ledger, operations. KYC/AML, custody, identity, and regulatory compliance
-are the integrator's responsibility (see the scope table in the
-architecture doc). Beta software; no external security audit yet; provided
-as is under Apache-2.0.
+| Module | Contents | Artifact |
+|---|---|---|
+| `match-common` | Domain types, `FixedPoint` (10^8 scale), SBE schemas and generated codecs, `TransportConfig` | `match-common` jar (published to GitHub Packages for consumers) |
+| `match-cluster` | Clustered service, engine, order books, publisher, ME journal, backup agent, bundle capture | `match-cluster/target/match-cluster.jar` (main class `com.match.Main`) |
+| `match-gateway` | Market-data WebSocket gateway (`MarketGatewayMain`, port 8081) and edge publisher. Used by the v0.5 demo stack | `match-gateway/target/match-gateway.jar` (no main class in the manifest) |
+| `match-loadtest` | Load generator (`com.match.loadtest.LoadGenerator`) | `match-loadtest/target/match-loadtest.jar` |
 
-## Key Features
+Other directories: `deploy/` (media driver launcher, OS tuning, OOM protection units), `edge/market-relay/` (Cloudflare Worker that fans out market data), `grafana/` (Prometheus and Grafana starter config), `tools/` (multi-node durability harnesses).
 
-- **Sub-microsecond matching** — Zero-allocation hot path with O(1) order book operations via direct array indexing
-- **Create, cancel, and modify** — Full order lifecycle including atomic cancel-and-replace for price/quantity updates
-- **Fault-tolerant clustering** — 3-node Raft consensus with automatic leader election, snapshots, and log replay
-- **Real-time market data** — WebSocket streaming of order book updates, trades, order status, and market statistics
-- **5 market pairs** — BTC, ETH, SOL, XRP, DOGE against USD (canonical definitions in `MarketInfo`)
-- **Fixed-point arithmetic** — 8-decimal precision (10^8 scaling) throughout, no floating-point in the hot path
-- **Rolling updates** — Zero-downtime deployments via Admin API
-- **Chaos engineering** — Built-in failure injection suite for resilience testing
-- **Load testing** — Configurable scenarios from 1k to 10k+ orders/sec
+Wire schemas live in `match-common/src/main/resources/sbe/`:
 
-## Architecture
+- `order-schema.xml`: schema id 1, version 12 (ingress commands and egress)
+- `me-journal-schema.xml`: schema id 4, version 1 (the ME journal stream)
+- `settlement-journal-schema.xml`: schema id 3, version 1 (legacy, kept for older readers)
 
-```
-                    ┌──────────────┐  ┌────────────────────┐  ┌──────────────────┐
-                    │   Order     │  │  Market Gateway   │  │  Admin Gateway   │
-                    │  Gateway    │  │   WebSocket       │  │   (Go)           │
-                    │  HTTP :8080 │  │   WS :8081        │  │   HTTP :8082     │
-                    └──────┬──────┘  └───▲──────────────┘  └──────┬───────────┘
-                           │ ingress     │ egress                  │ process mgmt
-                           ▼             │                         ▼
-                    ┌─────────────────────────────────────────────────────────┐
-                    │                 Aeron Cluster (Raft)                    │
-                    │                                                         │
-                    │   ┌───────────┐  ┌───────────┐  ┌───────────┐          │
-                    │   │  Node 0   │◄►│  Node 1   │◄►│  Node 2   │          │
-                    │   │  :9000+   │  │  :9100+   │  │  :9200+   │          │
-                    │   └───────────┘  └───────────┘  └───────────┘          │
-                    │                                                         │
-                    │   Engine → DirectIndexOrderBook → SBE Egress           │
-                    └─────────────────────────────────────────────────────────┘
-```
+## Build and test
 
-## Tech Stack
+Requirements: Linux, Java 21, Maven 3.9+.
 
-| Component | Technology |
-|-----------|-----------|
-| Matching Engine | Java 21, Aeron Cluster 1.51.0, Agrona |
-| Serialization | Simple Binary Encoding (SBE) 1.38.1 |
-| Event Processing | LMAX Disruptor 4.0.0 |
-| Network I/O | Netty 4.2 |
-| Admin Gateway | Go |
-| Build | Maven, Make |
-
-## Quick Start
-
-### Prerequisites
-
-- Java 21+
-- Maven 3+
-- Go 1.22+
-- Linux (Ubuntu/Debian recommended)
-
-### Install & Run
+The build depends on `com.openexchange:cluster-kit` at the version pinned in `pom.xml` (`cluster-kit.version`). It is resolved from GitHub Packages, which requires a token with `read:packages` even for public packages:
 
 ```bash
-# Install system dependencies
-make install-deps
-
-# Build everything and start all services
-make install
-
-# Verify cluster is running
-curl http://localhost:8082/api/admin/status
+export GITHUB_ACTOR=<your-github-user>
+export GITHUB_TOKEN=<token with read:packages>
+mvn -B -s .mvn-settings.xml clean verify
 ```
 
-### Build Only
+This is the same command CI runs. Alternatively, install that exact cluster-kit version into `~/.m2` from a cluster-kit checkout and build without `-s .mvn-settings.xml`.
+
+Useful targets:
 
 ```bash
-make build-java      # Build Java modules
-make build           # Build everything
+mvn -B -s .mvn-settings.xml clean package -DskipTests   # jars only
+mvn -s .mvn-settings.xml -pl match-common generate-sources  # regenerate SBE codecs after a schema edit (CI fails on drift)
+make determinism       # determinism corpus + snapshot replay suite
+make update-goldens    # regenerate determinism goldens after an intentional output change
 ```
 
-## Project Structure
+`TimescaleIntegrationTest` (market-data persistence) runs only when `MARKET_PG_TEST_URL` points at a TimescaleDB instance; otherwise it skips.
 
-```
-match/
-├── match-common/       # Shared domain models, SBE schema, constants
-├── match-cluster/      # Aeron Cluster service + matching engine
-├── match-gateway/      # Order (HTTP) and Market (WebSocket) gateways
-├── match-loadtest/     # Load testing and benchmarking tools
-├── admin-gateway/      # Go-based admin/process management service
-├── scripts/            # Chaos engineering and test scripts
-├── docs/               # Technical documentation
-└── Makefile            # Build, deploy, and operations automation
-```
-
-## Order Flow
-
-```
-1. REST /api/v1/orders → OMS (port 8080) → Risk + Ledger hold
-2. → Aeron ingress → Cluster consensus (Raft)
-3. → Engine.acceptOrder() → Dispatch CREATE / CANCEL / UPDATE
-4. → DirectMatchingEngine → O(1) price lookup → Price-time priority matching
-5. → SBE-encoded TradeExecution + OrderStatus via egress
-6. → Market Gateway → WebSocket broadcast (order book + order status) → clients
-```
-
-Supported commands:
-- **CREATE** — New limit, market, or limit-maker order
-- **CANCEL** — Cancel by orderId (tries both book sides)
-- **UPDATE** — Atomic cancel-and-replace with new price/quantity
-
-## API
-
-### Submit Order
+## Running a node
 
 ```bash
-curl -X POST http://localhost:8080/order \
-  -H "Content-Type: application/json" \
-  -d '{
-    "userId": "user1",
-    "market": "BTC-USD",
-    "orderSide": "BUY",
-    "orderType": "LIMIT",
-    "price": 100000.00,
-    "quantity": 0.5
-  }'
+CLUSTER_NODE=0 \
+CLUSTER_ADDRESSES=host0,host1,host2 \
+BASE_DIR=/var/lib/match/node0 \
+ME_AUTH_KEYS='<keyId>:<CLASS>:<secretHex>::users=*;...' \
+java -jar match-cluster/target/match-cluster.jar
 ```
 
-### Market Data (WebSocket)
+The jar manifest carries the required `Add-Opens`, so a plain `java -jar` works. Aeron needs a writable `/dev/shm` and raised socket buffers (`sudo make tune-persist`, see `deploy/tuning/system-tuning.sh`).
 
-```javascript
-const ws = new WebSocket('ws://localhost:8081/ws');
+The backup agent runs from the same jar: `java -cp match-cluster/target/match-cluster.jar com.match.infrastructure.persistence.ClusterBackupApp`.
 
-// Subscribe to a market (required to receive data)
-ws.onopen = () => {
-  ws.send(JSON.stringify({ action: 'subscribe', marketId: 1 }));
-};
+## Key configuration
 
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  // BOOK_SNAPSHOT, BOOK_DELTA, TRADE_EXECUTION, etc.
-};
+All knobs are environment variables (most also accept a system property). The full reference is on the website: https://openexchange.dev/docs (Configuration).
 
-// Other client commands:
-// { "action": "refresh", "marketId": 1 }
-// { "action": "unsubscribe", "marketId": 1 }
-// { "action": "getOrderBook", "marketId": 1 }
-// { "action": "getTrades", "limit": 50 }
-// { "action": "ping" }
-```
+| Variable | Default | Purpose |
+|---|---|---|
+| `CLUSTER_NODE` | `0` | Member id |
+| `CLUSTER_ADDRESSES` | `localhost` | Comma-separated member hosts |
+| `CLUSTER_PORT_BASE` | `9000` | Base port; per-member offsets come from cluster-kit `ClusterPorts` |
+| `BASE_DIR` | `<cwd>/node<N>` | Cluster data directory |
+| `METRICS_PORT` | `9500 + nodeId` | Prometheus `/metrics` |
+| `ME_AUTH_KEYS` | unset (every session rejected) | Node key table: `keyId:CLASS:secretHex::users=*` entries joined by `;`. Classes: `GATEWAY`, `FORWARDER`, `ADMIN`, `REPLICA`. A malformed table stops the node at boot |
+| `ME_AUTH_CREDENTIAL` | unset (client refuses to start) | Client credential `keyId:CLASS:secretHex`, required by the backup agent (`REPLICA`), market gateway (`GATEWAY`) and load generator |
+| `MATCH_ENGINE_FROM_CONFIG` | `false` | `true` creates engines from the replicated `EngineConfig` message instead of the built-in market set |
+| `MATCH_ENGINE_IMPL` | `array` | Order book implementation: `array` or `direct` |
+| `SETTLEMENT_JOURNAL_ENABLED` / `SETTLEMENT_JOURNAL_DIR` | `false` / none | Enables the ME journal; the directory must be on disk, not tmpfs |
+| `SNAPSHOT_LOG_BYTES`, `SNAPSHOT_INTERVAL_MINUTES`, `SNAPSHOT_PRUNE_ENABLED` | see cluster-kit | Snapshot cadence and log pruning (shared with the assets engine) |
+| `TRANSPORT_DRIVER_MODE` | `embedded` | `external` connects to a standalone media driver (`deploy/media-driver/launch-driver.sh`) |
+| `TRANSPORT_IDLE_MODE`, `TRANSPORT_MTU`, `TRANSPORT_TERM_LENGTH`, `TRANSPORT_INTERFACE` | see `TransportConfig` | Aeron transport tuning |
 
-### Admin API
+Invalid values are refused at startup rather than silently defaulted.
 
-The Admin Gateway (Go) acts as the process manager for the entire system — cluster nodes, gateways, and operational tasks are all managed through its API.
+## Load testing
 
 ```bash
-# Cluster status
-curl http://localhost:8082/api/admin/status
-
-# Process management
-curl http://localhost:8082/api/admin/processes                        # List all processes
-curl -X POST http://localhost:8082/api/admin/processes/start-all      # Start all (dependency order)
-curl -X POST http://localhost:8082/api/admin/processes/stop-all       # Stop all (reverse order)
-curl -X POST http://localhost:8082/api/admin/processes/node0/start    # Start specific process
-curl -X POST http://localhost:8082/api/admin/processes/node0/stop     # Stop specific process
-
-# Operations
-curl -X POST http://localhost:8082/api/admin/rolling-update           # Zero-downtime deployment
-curl -X POST http://localhost:8082/api/admin/snapshot                 # Take cluster snapshot
-curl -X POST http://localhost:8082/api/admin/rebuild-admin            # Self-update admin gateway
-
-# Logs & monitoring
-curl "http://localhost:8082/api/admin/logs?node=0&lines=100"
-curl http://localhost:8082/api/admin/progress                         # Operation progress
+ME_AUTH_CREDENTIAL=<keyId>:GATEWAY:<secretHex> ./run-load-test.sh quick
 ```
 
-Managed processes: `node0`, `node1`, `node2`, `backup`, `order`, `market`
+Scenarios: `quick`, `baseline`, `market-maker`, `stress`, `spike`, `deep-book`, `endurance`, `progressive`, `custom <rate> <duration> <threads> <scenario>`. Set `LOADGEN_CORES` to pin the generator away from the cluster's cores.
 
-## Load Testing
+## Further reading in this repo
 
-```bash
-./run-load-test.sh quick        # Smoke test: 1k/s for 10s
-./run-load-test.sh baseline     # Baseline: 1k/s for 60s
-./run-load-test.sh stress       # Stress: 10k/s for 60s
-./run-load-test.sh endurance    # Endurance: 2k/s for 1 hour
-./run-load-test.sh progressive  # Ramp: 1k → 10k/s
-```
+- `docs/settlement-journal-semantics.md`: when the journal emits a terminal for an amend
+- `docs/ingress-apply-failures.md`: decode failures versus application faults
+- `docs/gateway-port-spec.md`: the market gateway's book dedup and staleness rules
 
-## Configuration
+## Contributing and security
 
-Key parameters in `InfrastructureConstants.java`:
-
-| Parameter | Value |
-|-----------|-------|
-| Order Gateway Port | 8080 |
-| Market Gateway Port | 8081 |
-| Admin Gateway Port | 8082 |
-| Cluster Base Port | 9000 |
-| Term Buffer | 16 MB |
-| Socket Buffer | 4 MB |
-| Session Timeout | 10s |
-| Gateway Heartbeat | 100ms |
-
-### Session authority (RC2 S6)
-
-Every cluster session authenticates; there is no anonymous mode. Each ME node reads its key table
-from `ME_AUTH_KEYS` (or `-Dmatch.auth.keys`); every client presents `ME_AUTH_CREDENTIAL` (or
-`-Dmatch.auth.credential`). An empty table rejects every session (logged once); a malformed table stops
-the node at boot.
-
-- Key table: `keyId:CLASS:secretHex::users=*` entries joined by `;`. The ME has no user scope, so the
-  users field is always `users=*`; a missing or empty users field and an id list are refused at boot.
-- Classes: `GATEWAY` (market gateway, egress only at behaviour 2), `FORWARDER` (the durable lane,
-  templates 9 and 10), `ADMIN` (EngineConfig in every state, open-order reads), `REPLICA` (the backup:
-  BackupQuery only, no ingress).
-- Credential: `keyId:CLASS:secretHex` (64 hex digits). The backup refuses to start without a `REPLICA`
-  credential, the market gateway without a `GATEWAY` one.
-- A pre-S6 log or snapshot carries principal-less sessions: the node halts with
-  `principal-less session in log: pre-S6 history, clean genesis required`.
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Commit your changes
-4. Push to the branch and open a Pull Request
-
-For bug reports and feature requests, please use [GitHub Issues](https://github.com/openexch/match/issues).
-
-## Support
-
-This project is **free to use** under the Apache 2.0 license.
-
-For **advanced help**, custom deployments, performance tuning, or consulting — reach out:
-
-- **Email**: info@openexch.io
-- **GitHub Issues**: [openexch/match/issues](https://github.com/openexch/match/issues)
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in the [security policy](https://github.com/openexch/.github/blob/main/SECURITY.md).
 
 ## License
 
-This project is licensed under the [Apache License 2.0](LICENSE).
-
-```
-Copyright 2026 Ziya Emre Bulutlar
-```
+[Apache License 2.0](LICENSE).

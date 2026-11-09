@@ -245,7 +245,7 @@ jobs:
       # refuse to deploy from it.
       # On a tag, the release version goes INTO the jar manifest before it is
       # published. The pom is deliberately not bumped (the tag is the version,
-      # per docs/RELEASING.md), which would otherwise leave the jar unable to say
+      # see CONTRIBUTING.md), which would otherwise leave the jar unable to say
       # which release it belongs to. Stamped here rather than guessed later.
       - name: Stamp the release version into the jar
         if: steps.dest.outputs.release == 'true'
