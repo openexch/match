@@ -44,7 +44,7 @@ public class AeronCluster {
 
     /**
      * Runs the node until it stops, then exits through the kit's {@link EngineLifecycle} (the same code
-     * the AE runs): a fatal fault or a failed start exits non-zero, SIGTERM closes within
+     * the core runs): a fatal fault or a failed start exits non-zero, SIGTERM closes within
      * {@code ENGINE_SHUTDOWN_TIMEOUT_MS}, a cluster termination exits 0. Never returns normally while the node is
      * running.
      */

@@ -11,7 +11,7 @@ User documentation (architecture, configuration, operations, API): **https://ope
 | Repo | Role |
 |---|---|
 | **match** (this repo) | Matching engine cluster, market-data gateway, load generator |
-| [assets](https://github.com/openexch/assets) | Order and ledger core: order lifecycle, risk, holds and the ledger in one Java Aeron cluster |
+| [core](https://github.com/openexch/core) | Order and ledger core: order lifecycle, risk, holds and the ledger in one Java Aeron cluster |
 | [cluster-kit](https://github.com/openexch/cluster-kit) | Shared cluster machinery used by both engines (lifecycle, ports, auth, snapshot cadence) |
 | [cluster-tools](https://github.com/openexch/cluster-tools) | C++ cluster client, ME forwarder, settlement bridge, projectors |
 | [tools](https://github.com/openexch/tools) | Probe and test tooling |
@@ -90,7 +90,7 @@ All knobs are environment variables (most also accept a system property). The fu
 | `MATCH_ENGINE_FROM_CONFIG` | `false` | `true` creates engines from the replicated `EngineConfig` message instead of the built-in market set |
 | `MATCH_ENGINE_IMPL` | `array` | Order book implementation: `array` or `direct` |
 | `SETTLEMENT_JOURNAL_ENABLED` / `SETTLEMENT_JOURNAL_DIR` | `false` / none | Enables the ME journal; the directory must be on disk, not tmpfs |
-| `SNAPSHOT_LOG_BYTES`, `SNAPSHOT_INTERVAL_MINUTES`, `SNAPSHOT_PRUNE_ENABLED` | see cluster-kit | Snapshot cadence and log pruning (shared with the assets engine) |
+| `SNAPSHOT_LOG_BYTES`, `SNAPSHOT_INTERVAL_MINUTES`, `SNAPSHOT_PRUNE_ENABLED` | see cluster-kit | Snapshot cadence and log pruning (shared with the core) |
 | `TRANSPORT_DRIVER_MODE` | `embedded` | `external` connects to a standalone media driver (`deploy/media-driver/launch-driver.sh`) |
 | `TRANSPORT_IDLE_MODE`, `TRANSPORT_MTU`, `TRANSPORT_TERM_LENGTH`, `TRANSPORT_INTERFACE` | see `TransportConfig` | Aeron transport tuning |
 

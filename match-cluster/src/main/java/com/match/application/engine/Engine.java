@@ -1279,7 +1279,7 @@ public class Engine {
 
             // A fully-consumed maker gets an explicit terminal FILLED. The OMS derives maker fill
             // state from the TradeExecutions above (late/duplicate statuses for terminal orders are
-            // dropped there), but the settlement journal derives the AE's TerminalRelease from
+            // dropped there), but the settlement journal derives the core's TerminalRelease from
             // terminal statuses — without this the maker's hold is never feed-released. Quantities
             // are zeros like processCancel's ack: trades are the quantity source of record.
             if (engine.isMatchMakerFilled(i)) {
@@ -1566,7 +1566,7 @@ public class Engine {
     /**
      * Replace-cancel variant: publishes the old leg's CANCELLED on the wire (the OMS's replace
      * leg-routing depends on it) but keeps it OUT of the settlement journal — it shares the live
-     * replacement's omsOrderId, and a journaled terminal would feed the AE a TerminalRelease that
+     * replacement's omsOrderId, and a journaled terminal would feed the core a TerminalRelease that
      * strips the still-open order's hold.
      */
     private void publishReplaceCancelStatus(int marketId, long timestamp, long orderId, long userId,

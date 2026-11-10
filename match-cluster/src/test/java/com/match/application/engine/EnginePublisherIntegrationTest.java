@@ -561,12 +561,12 @@ public class EnginePublisherIntegrationTest {
         for (CapturedEvent ev : findByType(PublishEventType.ORDER_STATUS_UPDATE)) {
             if (ev.orderId == makerOrderId && ev.orderStatus == OrderStatusType.FILLED) {
                 makerFilled = true;
-                assertEquals("maker terminal must carry the maker's omsOrderId (the AE money key)",
+                assertEquals("maker terminal must carry the maker's omsOrderId (the core money key)",
                     111L, ev.omsOrderId);
                 assertEquals(100L, ev.userId);
             }
         }
-        assertTrue("fully-consumed maker must get a terminal FILLED — the AE hold release rides on it",
+        assertTrue("fully-consumed maker must get a terminal FILLED: the core hold release rides on it",
             makerFilled);
     }
 
@@ -637,7 +637,7 @@ public class EnginePublisherIntegrationTest {
             assertTrue("old-leg CANCELLED must still be published on the wire (OMS leg-routing)", sawWireCancel);
             assertTrue("replacement leg must be NEW", newOrderId != 0);
             assertEquals("replace-cancel must NOT reach the settlement journal — it shares the live "
-                + "replacement's omsOrderId and would strip the order's AE hold",
+                + "replacement's omsOrderId and would strip the order's core hold",
                 0, journal.appendedTerminals());
 
             engine.acceptOrder(MARKET_ID, Engine.CMD_CANCEL, cancelCmd(100L, newOrderId), System.nanoTime());

@@ -17,7 +17,7 @@ import static org.junit.Assert.fail;
 /**
  * drainQueue() must bound the work one call does to EGRESS_DRAIN_MAX messages, so a freshly
  * promoted leader inheriting a full warm-standby omsEgressQueue cannot stall behind a single
- * unbounded drain before it processes any new command (the AE 60s failover-blindness mechanism).
+ * unbounded drain before it processes any new command (the core's 60s failover-blindness mechanism).
  *
  * <p>drainQueue was moved out of the aeronBroadcaster anonymous inner class onto AppClusteredService
  * (behavior identical) precisely so it has a package-private test seam. The drain is exercised with

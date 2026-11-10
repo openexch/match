@@ -98,7 +98,7 @@ public interface MatchingEngine {
      * True if this match fully consumed the maker order (it was removed from the book by it).
      * Recorded at match time so the caller can emit the maker's terminal FILLED status — the
      * settlement journal derives TerminalRelease from terminals, so a maker completion without
-     * this signal leaks the maker's AE hold forever.
+     * this signal leaks the maker's core hold forever.
      */
     boolean isMatchMakerFilled(int matchIndex);
 

@@ -219,7 +219,7 @@ public class SbeDemuxer {
 
     /**
      * The session-class code of a trusted in-process caller. Passes every class row
-     * (R1-R4); never a wire class. For in-process tests and tools only, as the AE's {@code dispatchTrusted}.
+     * (R1-R4); never a wire class. For in-process tests and tools only, as the core's {@code dispatchTrusted}.
      */
     static final int TRUSTED = -1;
 

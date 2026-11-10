@@ -122,7 +122,7 @@ public interface MatchEventSink {
      * The engine's terminal journal decision travels with the status. The engine sets
      * {@code journalTerminal} for every FILLED / CANCELLED / REJECTED it publishes through its
      * plain status path, and clears it for the pre-cancel amend rejection and the replace
-     * old-leg CANCELLED (neither closes the OMS order, the AE money key). A sink journals a
+     * old-leg CANCELLED (neither closes the OMS order, the core money key). A sink journals a
      * terminal iff the engine says so, at the engine's {@code journalSeq}. Sinks without a
      * settlement journal can ignore both: this default delegates to the egress-only form.
      */

@@ -23,7 +23,7 @@ import static org.junit.Assert.assertTrue;
 
 /**
  * The production entry point on an EXTERNAL media driver, both in child JVMs,
- * so the exit status asserted is the one a process manager sees. The AE runs the same test on the same kit code
+ * so the exit status asserted is the one a process manager sees. The core runs the same test on the same kit code
  * ({@code com.openexchange.cluster.EngineLifecycle}).
  *
  * <p>RED evidence: {@code -Dengine.driver.classpath=<pre-fix match-cluster.jar>} runs the child on that jar instead of this

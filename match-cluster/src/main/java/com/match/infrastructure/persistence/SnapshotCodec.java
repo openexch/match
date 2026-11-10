@@ -165,8 +165,8 @@ public final class SnapshotCodec {
         // node that replayed from genesis and one that restored a snapshot. Make markets lazily created,
         // dynamically listed, or removable and that stops holding — the snapshot bytes would start
         // depending on the order markets were first traded, and comparing two nodes' snapshots would
-        // report divergence on books that agree. Sort by marketId here if that day comes. (The assets
-        // engine had exactly this defect in its account/hold maps; see BalanceSnapshotCodec.)
+        // report divergence on books that agree. Sort by marketId here if that day comes. (The core
+        // had exactly this defect in its account/hold maps; see BalanceSnapshotCodec.)
         final Int2ObjectHashMap<MatchingEngine>.KeyIterator keyIt = engines.keySet().iterator();
         while (keyIt.hasNext()) {
             final int marketId = keyIt.nextInt();

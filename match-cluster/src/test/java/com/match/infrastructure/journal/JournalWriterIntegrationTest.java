@@ -35,7 +35,7 @@ import static org.junit.Assert.assertTrue;
  * End-to-end proof of the journal's write half: service-thread appends -> ring ->
  * {@link JournalWriterAgent} -> recorded publication on a real (test-local) Archive ->
  * positioned REPLAY reads back exactly what was appended, in order. The replay path here
- * is the same one the Assets-Engine settlement bridge will use.
+ * is the same one the core settlement bridge will use.
  *
  * Fully isolated from the live stack: embedded media driver in a random tmp dir, archive
  * in a JUnit temp dir, high test-only control port.

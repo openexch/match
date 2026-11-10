@@ -14,10 +14,10 @@ import java.util.List;
  * <p>The journal is a per-node SECOND archive (see {@link SettlementJournalRuntime}) recording a
  * publication on {@link InfrastructureConstants#settlementJournalChannel()} stream
  * {@link InfrastructureConstants#SETTLEMENT_JOURNAL_STREAM_ID}. It is the money-settlement record and
- * the Assets-Engine rebuild input, so purging it is dangerous: deleting a byte whose {@code egressSeq}
+ * the core rebuild input, so purging it is dangerous: deleting a byte whose {@code egressSeq}
  * a rebuild still needs is an UNRECOVERABLE lost settlement. This tool therefore purges ONLY below a
  * caller-supplied {@code safeEgressSeq} watermark — the egressSeq up to which settlement has been
- * durably applied downstream (the Assets Engine), so nothing at or above it may be reclaimed.
+ * durably applied downstream (the core), so nothing at or above it may be reclaimed.
  *
  * <p>It mirrors the live-safe reclamation pattern of
  * {@link com.match.infrastructure.persistence.ArchiveHousekeeping}: a connected {@link AeronArchive}
