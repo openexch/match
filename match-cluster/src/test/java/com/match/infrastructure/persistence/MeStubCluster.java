@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
- * A minimal {@link Cluster} for driving one {@link AppClusteredService} in process (as the AE's
+ * A minimal {@link Cluster} for driving one {@link AppClusteredService} in process (as the core's
  * TermTimerIdAfterApplierTest): settable role and cluster time, recorded timer schedules (optionally fed into
  * an {@link ExpiredTimerCountModel}), and a settable set of restored client sessions.
  */

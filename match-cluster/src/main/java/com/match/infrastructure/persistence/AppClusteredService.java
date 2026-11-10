@@ -309,7 +309,7 @@ public class AppClusteredService implements ClusteredService {
     // Per-drain work cap. drainQueue() processes at most this many messages per call, so a
     // freshly promoted leader inheriting a full warm-standby omsEgressQueue (up to
     // OMS_EGRESS_QUEUE_CAPACITY = 262144 entries) does not stall behind one unbounded drain before it
-    // can handle a new command (the AE 60s failover-blindness mechanism). Override with env
+    // can handle a new command (the core's 60s failover-blindness mechanism). Override with env
     // MATCH_EGRESS_DRAIN_MAX or -Dmatch.egress.drain.max; read once at startup. An explicitly set but
     // unparseable or non-positive value is REFUSED at startup (see resolveEgressDrainMax), never
     // silently defaulted, matching the SnapshotCadence tunables. The leftover backlog is never
@@ -470,7 +470,7 @@ public class AppClusteredService implements ClusteredService {
     //
     // One call processes at most EGRESS_DRAIN_MAX messages. Without the cap a freshly promoted
     // leader empties its entire warm-standby omsEgressQueue before it can process one new command,
-    // stalling the node at the worst moment (the AE 60s failover-blindness mechanism). The remainder
+    // stalling the node at the worst moment (the core's 60s failover-blindness mechanism). The remainder
     // stays queued and the next flush drains it; nothing is lost, only the per-cycle work is bounded.
     // The return value and the per-message / per-session retry logic are unchanged.
     boolean drainQueue(Queue<QueuedMessage> queue, AtomicLong queuedBytes, List<ClientSession> sessions) {
@@ -1131,7 +1131,7 @@ public class AppClusteredService implements ClusteredService {
     // ever reach (~4/s) so it can never collide, even across a mixed-version rolling deploy.
     //
     // The id is now PER LEADERSHIP TERM, base + term * 1e6
-    // (TermTimerId, the AE arithmetic). The consensus module counts every TimerEvent it consumes while no
+    // (TermTimerId, the core arithmetic). The consensus module counts every TimerEvent it consumes while no
     // timer with that id is pending and swallows that many later schedules of the id; a fixed id re-armed
     // by the leader only would therefore die on the first failover. A member can lead
     // only a later term, whose id no follower count has ever seen. Any id >= the base is the flush timer.
@@ -1326,13 +1326,13 @@ public class AppClusteredService implements ClusteredService {
                 MarketConfig.ALL_MARKETS.length);
         } catch (Exception e) {
             // Fail-fast. An egress-less node keeps matching, but its trades and status never
-            // reach OMS/AE, so orders vanish silently, and its tradeId counter forks on a partially
+            // reach OMS/core, so orders vanish silently, and its tradeId counter forks on a partially
             // initialized replica. The node exits before joining the cluster instead of serving
             // blind; the other two nodes keep quorum. If the cause is permanent this becomes a clean
             // fail-fast loop for the operator to fix, not a silent half-alive node.
             final String reason = e.getClass().getName() + ": " + e.getMessage();
             final String critical = "CRITICAL: event publishing failed to initialize (" + reason
-                    + "); an egress-less node loses orders silently (OMS/AE never see them). "
+                    + "); an egress-less node loses orders silently (OMS/core never see them). "
                     + "Exiting so this node never joins the cluster; the other two nodes keep quorum.";
             logger.error(critical);
             System.err.println(critical); // visible even if the logger is suppressed
@@ -1378,7 +1378,7 @@ public class AppClusteredService implements ClusteredService {
             final String reason = e.getClass().getName() + ": " + e.getMessage();
             final String critical = "CRITICAL: event publishing failed to initialize from"
                     + " EngineConfig (" + reason + "); an egress-less node loses orders silently"
-                    + " (OMS/AE never see them). Exiting so this node never serves blind; the"
+                    + " (OMS/core never see them). Exiting so this node never serves blind; the"
                     + " other nodes keep quorum.";
             logger.error(critical);
             System.err.println(critical);
@@ -1473,7 +1473,7 @@ public class AppClusteredService implements ClusteredService {
      * first poll or a pause between chunks is not the end), then hand even a zero-byte payload to the codec,
      * which refuses it: an image without a snapshot is not an empty state. Every refusal (image closed before
      * end of stream, zero bytes, codec reject, the restore cross-check) fences the service, logs CRITICAL,
-     * runs failFast and rethrows, as the AE does. Package-private with a source seam for the loader tests.
+     * runs failFast and rethrows, as the core does. Package-private with a source seam for the loader tests.
      */
     void loadSnapshot(final com.openexchange.cluster.SnapshotImageReader.Source snapshotImage,
                       final org.agrona.concurrent.IdleStrategy idleStrategy) {

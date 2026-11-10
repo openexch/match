@@ -42,7 +42,7 @@ import java.util.regex.Pattern;
 
 /**
  * Test harness: three {@link AppClusteredService} members
- * in config mode in one JVM on the shared-host port stride (the AE pattern of
+ * in config mode in one JVM on the shared-host port stride (the core pattern of
  * {@code SweepSurvivesLeaderChangeClusterTest}), each with its settlement journal armed and its
  * ring drained in-process into a per-member frame list, plus one reference client on its own
  * media driver. Members can be closed and restarted on the same state directories. Quiet idle
@@ -165,7 +165,7 @@ final class MeClusterHarness implements AutoCloseable {
             live = true;
         }
 
-        /** Close container then driver (a stop, as the AE kill pattern); the journal ring is drained last. */
+        /** Close container then driver (a stop, as the core kill pattern); the journal ring is drained last. */
         void close() {
             live = false;
             CloseHelper.quietClose(container);

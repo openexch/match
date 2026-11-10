@@ -28,7 +28,7 @@
             <artifactId>match-common</artifactId>
         </dependency>
 
-        <!-- Shared with the assets engine: snapshot bundles, staging archive,
+        <!-- Shared with the core: snapshot bundles, staging archive,
              watermark-bounded housekeeping. -->
         <dependency>
             <groupId>com.openexchange</groupId>

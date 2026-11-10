@@ -29,7 +29,7 @@ import java.nio.file.Path;
  *   SETTLEMENT_JOURNAL_ENABLED  - "true" to enable (default false = dark, zero behavior change)
  *   SETTLEMENT_JOURNAL_DIR      - REQUIRED when enabled. Must be a DISK path (never tmpfs):
  *                                 this journal is the money-settlement record and the
- *                                 Assets-Engine rebuild input; /dev/shm dies with power.
+ *                                 core rebuild input; /dev/shm dies with power.
  *   SETTLEMENT_JOURNAL_RING_BYTES - ring capacity, power of two (default 64MB)
  */
 public final class SettlementJournalRuntime implements AutoCloseable {

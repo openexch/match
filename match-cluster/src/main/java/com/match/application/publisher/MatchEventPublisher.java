@@ -484,7 +484,7 @@ public class MatchEventPublisher implements MatchEventSink {
     /**
      * The engine decides which terminals are journaled. {@code journalTerminal} is false
      * for a pre-cancel amend rejection and the old-leg CANCELLED of an accepted cancel-replace
-     * (neither closes the OMS order, the AE money key); the wire status itself is unchanged —
+     * (neither closes the OMS order, the core money key); the wire status itself is unchanged:
      * the OMS's replace leg-routing depends on it. The journal append comes FIRST, before the
      * ring lookup, so a missing egress ring costs egress only.
      *

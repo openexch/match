@@ -188,8 +188,8 @@ jobs:
           # Only the modules this job publishes, and their in-reactor
           # dependencies. A full reactor build would also build what this job
           # never ships (match-gateway), and building it to throw it away is
-          # work either way. (The assets repo's twin of this step has an extra
-          # cross-repo install here; match needs none.)
+          # work either way. Cross-repo dependencies resolve pinned from
+          # Packages, as in the core repo's twin of this step.
           mvn -B -s .mvn-settings.xml clean package -pl "${JARS// /,}" -am -DskipTests \
             -DbuildSha=$(git rev-parse --short=7 HEAD)
         env:
@@ -374,7 +374,7 @@ jobs:
         run: echo "published s3://${BUCKET}/${DEST}"
 
       # ---- cross-repo wire artifact ----
-      # assets and oms consume com.match:match-common. Until now they resolved it by
+      # core and oms consume com.match:match-common. Until now they resolved it by
       # checking out match at FLOATING main and mvn-installing a permanently-static
       # "1.0" into ~/.m2 — a mutable coordinate whose bytes change under every
       # consumer silently (and whose stale local copies decode the wire wrongly with
@@ -429,7 +429,7 @@ jobs:
             echo "CONSUMER_BUMP_TOKEN not set; skipping consumer bump PRs (pins go stale until it exists)."
             exit 0
           fi
-          for REPO in assets oms; do
+          for REPO in core oms; do
             BRANCH="bump/match-common"
             BASE=$(gh api "repos/openexch/${REPO}/git/ref/heads/main" --jq .object.sha)
             # Create the branch, or force it back onto main if a previous bump is
@@ -456,7 +456,7 @@ jobs:
               -f content="$(printf '%s' "$NEW" | base64 -w0)" \
               -f sha="$SHA" -f branch="$BRANCH" >/dev/null
             # oms also records the producing sha for its e2e checkout pin. One
-            # file per producer, so this bump and the assets one never touch the
+            # file per producer, so this bump and the core one never touch the
             # same lines and stay independently mergeable. oms's e2e fails if
             # this write is skipped while the pom pin moved, so a partial bump
             # is loud rather than a green build of a combination nobody ships.

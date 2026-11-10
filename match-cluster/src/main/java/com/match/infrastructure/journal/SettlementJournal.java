@@ -27,7 +27,7 @@ import java.nio.ByteBuffer;
  * order status into an in-memory SPSC ring, drained by {@link JournalWriterAgent} into a
  * recorded (archived) publication.
  *
- * The journal is a money-loss surface: consumers (the Assets Engine settlement bridge)
+ * The journal is a money-loss surface: consumers (the core settlement bridge)
  * release residual holds off it, and a missing entry is an unrecoverable lost settlement.
  * It is therefore LOSSLESS BY CONSTRUCTION: {@code append*} runs on the deterministic
  * cluster service thread on EVERY replica, before any of the sheddable egress machinery

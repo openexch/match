@@ -262,7 +262,7 @@ public class MeSessionAuthorityTest {
         assertTrue("halted with the R0 exception, got " + thrown[0], thrown[0] instanceof IllegalStateException
                 && thrown[0].getMessage() != null && thrown[0].getMessage().contains("clean genesis required"));
         assertEquals("failFast ran once", 1, stops[0]);
-        assertTrue(log, log.contains("principal-less session in log: pre-S6 history, clean genesis required"));
+        assertTrue(log, log.contains("principal-less session in log: history from before session principals, clean genesis required"));
         if (!sessionOpen) {
             // the node is fenced: a valid ADMIN frame is not applied either
             assertThrows(IllegalStateException.class, () -> s.onSessionMessage(TestAuth.session(7, ClusterSessionClass.ADMIN),
