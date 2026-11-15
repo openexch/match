@@ -20,6 +20,9 @@ public class TickerStats {
     private volatile long lastUpdateMs = 0;
     private volatile boolean hasData = false;
     private volatile String cachedJson;
+    // The same fields as cachedJson without the "type" key, for the all-market
+    // TICKERS frame. Null while the market has no price (the UI shows a dash).
+    private volatile String cachedEntryJson;
 
     // Rolling-24h baseline computed from the persisted 1m candles, plus
     // live-since-baseline accumulators. When the baseline is fresh the ticker
@@ -72,7 +75,7 @@ public class TickerStats {
             }
             liveQuoteVol += price * quantity;
             lastUpdateMs = System.currentTimeMillis();
-            cachedJson = buildJson();
+            rebuildCache();
         } finally {
             lock.unlockWrite(stamp);
         }
@@ -106,7 +109,7 @@ public class TickerStats {
                 lastUpdateMs = asOfMs;
                 hasData = true;
             }
-            cachedJson = buildJson();
+            rebuildCache();
         } finally {
             lock.unlockWrite(stamp);
         }
@@ -130,6 +133,16 @@ public class TickerStats {
     }
 
     /**
+     * This market's entry for the all-market TICKERS frame: the TICKER_STATS
+     * fields minus "type", e.g. {"marketId":1,"market":"BTC-USD","lastPrice":...}.
+     * Null until the market has a price. A single volatile read of a string
+     * built under the write lock, so it is never torn.
+     */
+    public String toEntryJson() {
+        return cachedEntryJson;
+    }
+
+    /**
      * Check if this ticker has received any trade data.
      */
     public boolean hasData() {
@@ -143,7 +156,15 @@ public class TickerStats {
         return lastPrice;
     }
 
-    private String buildJson() {
+    /** Called under the write lock. */
+    private void rebuildCache() {
+        String fields = buildFields();
+        cachedJson = "{\"type\":\"TICKER_STATS\"," + fields + "}";
+        cachedEntryJson = hasData && lastPrice > 0 ? "{" + fields + "}" : null;
+    }
+
+    /** The ticker's JSON fields without braces and without "type". */
+    private String buildFields() {
         boolean fresh = baselineAsOfMs > 0
                 && System.currentTimeMillis() - baselineAsOfMs < BASELINE_FRESH_MS;
         double open, high, low, volume;
@@ -174,9 +195,9 @@ public class TickerStats {
         double priceChange = open > 0 && lastPrice > 0 ? lastPrice - open : 0;
         double pctChange = open > 0 ? (priceChange / open * 100) : 0;
         return String.format(
-            "{\"type\":\"TICKER_STATS\",\"marketId\":%d,\"market\":\"%s\"," +
+            "\"marketId\":%d,\"market\":\"%s\"," +
             "\"lastPrice\":%.8f,\"priceChange\":%.8f,\"priceChangePercent\":%.4f," +
-            "\"high24h\":%.8f,\"low24h\":%.8f,\"volume24h\":%.2f,\"timestamp\":%d}",
+            "\"high24h\":%.8f,\"low24h\":%.8f,\"volume24h\":%.2f,\"timestamp\":%d",
             marketId, marketName, lastPrice, priceChange, pctChange,
             high, low, volume, lastUpdateMs);
     }

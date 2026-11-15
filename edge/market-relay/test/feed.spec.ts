@@ -365,3 +365,93 @@ describe('publisher displacement', () => {
     expect(body.publishers).toBe(1);
   });
 });
+
+// Kept LAST in the file: once a TICKERS frame is cached on the shared DO, every
+// later subscribe also receives it, which would shift the exact frame
+// sequences the earlier tests assert.
+describe('all-market TICKERS', () => {
+  function tickersFrame(ts: number, entries: { id: number; price: number }[]) {
+    return {
+      type: 'TICKERS',
+      tickers: entries.map((e) => ({
+        marketId: e.id, market: `TST-${e.id}`, lastPrice: e.price, priceChange: 0,
+        priceChangePercent: 0, high24h: e.price, low24h: e.price, volume24h: 1, timestamp: ts,
+      })),
+      timestamp: ts,
+    };
+  }
+
+  it('fans out to every viewer whatever its market, never routed by a nested marketId', async () => {
+    const pub = await connectPublisher();
+    const a = newMarket();
+    const b = newMarket();
+    await seedMarket(pub, a);
+    await seedMarket(pub, b);
+    const va = await connect('/ws');
+    const vb = await connect('/ws');
+    const subA = take(va, 5);
+    const subB = take(vb, 5);
+    va.send(JSON.stringify({ action: 'subscribe', marketId: a.id }));
+    vb.send(JSON.stringify({ action: 'subscribe', marketId: b.id }));
+    await subA;
+    await subB;
+
+    // First nested entry is market b: a marketId router would send it to vb only.
+    const frame = JSON.stringify(tickersFrame(1000, [{ id: b.id, price: 2 }, { id: a.id, price: 1 }]));
+    const gotA = take(va, 1);
+    const gotB = take(vb, 1);
+    pub.send(frame);
+    expect(await gotA).toEqual([frame]);
+    expect(await gotB).toEqual([frame]);
+  });
+
+  it('caches the latest frame and replays it to a new viewer on subscribe, after the ticker', async () => {
+    const pub = await connectPublisher();
+    const m = newMarket();
+    await seedMarket(pub, m);
+    const frame = JSON.stringify(tickersFrame(2000, [{ id: m.id, price: 7 }]));
+    pub.send(frame);
+    await sleep(50);
+
+    const viewer = await connect('/ws');
+    const frames = take(viewer, 6);
+    viewer.send(JSON.stringify({ action: 'subscribe', marketId: m.id }));
+    const got = await frames;
+    expect(got.map((f) => JSON.parse(f).type)).toEqual([
+      'SUBSCRIPTION_CONFIRMED', 'TICKER_STATS', 'TICKERS', 'BOOK_SNAPSHOT', 'TRADES_BATCH', 'CANDLE_HISTORY',
+    ]);
+    expect(got[2]).toBe(frame);
+  });
+
+  it('an older bundle never replaces a newer cached frame; a newer bundle does, without a broadcast', async () => {
+    const pub = await connectPublisher();
+    const m = newMarket();
+    await seedMarket(pub, m);
+    const live = JSON.stringify(tickersFrame(5000, [{ id: m.id, price: 50 }]));
+    pub.send(live);
+    pub.send(bundle(tickersFrame(4000, [{ id: m.id, price: 40 }])));
+    await sleep(50);
+
+    const tickersOnSubscribe = async () => {
+      const v = await connect('/ws');
+      const frames = take(v, 6);
+      v.send(JSON.stringify({ action: 'subscribe', marketId: m.id }));
+      return { v, tickers: (await frames).find((f) => JSON.parse(f).type === 'TICKERS') };
+    };
+
+    const first = await tickersOnSubscribe();
+    expect(first.tickers).toBe(live);
+
+    // A newer bundle refreshes the cache but is not broadcast to viewers.
+    let broadcast = false;
+    first.v.addEventListener('message', (ev) => {
+      if (JSON.parse(ev.data as string).type === 'TICKERS') broadcast = true;
+    });
+    const newer = tickersFrame(6000, [{ id: m.id, price: 60 }]);
+    pub.send(bundle(newer));
+    await sleep(50);
+    expect(broadcast).toBe(false);
+    const second = await tickersOnSubscribe();
+    expect(JSON.parse(second.tickers!)).toEqual(newer);
+  });
+});

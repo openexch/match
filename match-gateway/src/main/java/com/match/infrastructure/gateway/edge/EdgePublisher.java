@@ -50,7 +50,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *    ClusterStatus broadcasts call {@link #publish};
  *  - EDGE_CACHE bundles every MARKET_EDGE_BUNDLE_MS (default 5s): the cached
  *    book snapshot, ticker, recent trades, and 1m candle history per market,
- *    wrapped in {"type":"EDGE_CACHE","frame":...} so the relay refreshes its
+ *    plus one all-market TICKERS frame, wrapped in {"type":"EDGE_CACHE","frame":...} so the relay refreshes its
  *    subscribe-time cache without re-broadcasting to viewers. The book bundle
  *    also bounds the relay's delta replay buffer.
  *
@@ -359,6 +359,9 @@ public final class EdgePublisher implements AutoCloseable {
             enqueueCache(stateManager.getTrades().toJsonForMarket(50, marketId));
             enqueueCache(stateManager.buildCandleHistoryJson(marketId, "1m", 200));
         }
+        // All-market TICKERS frame, once per bundle (not per market): refreshes and
+        // persists the relay's replay-to-new-viewers copy without a viewer broadcast.
+        enqueueCache(stateManager.buildTickersFrameJson());
     }
 
     private void enqueueCache(String innerFrame) {

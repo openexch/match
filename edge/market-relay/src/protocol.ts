@@ -19,6 +19,10 @@ export interface Frame {
   version?: number;
   fromVersion?: number;
   trades?: unknown[];
+  /** TICKERS: every market's ticker in one frame. It has NO top-level
+   *  marketId, so it routes to every viewer. */
+  tickers?: unknown[];
+  timestamp?: number;
   /** EDGE_CACHE envelope: the wrapped frame to cache without broadcasting. */
   frame?: Frame;
 }
@@ -28,6 +32,9 @@ export const RECENT_TRADES_CAP = 50;
 
 /** Replay-buffer bound; a hole past this age is healed by client refresh. */
 export const DELTA_BUFFER_CAP = 1000;
+
+/** The all-market ticker frame type (match-gateway AllMarketTickersPublisher). */
+export const TICKERS_TYPE = 'TICKERS';
 
 export function frameMarketId(f: Frame): number | undefined {
   return typeof f.marketId === 'number' ? f.marketId : undefined;
