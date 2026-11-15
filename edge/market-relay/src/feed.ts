@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   DELTA_BUFFER_CAP,
   RECENT_TRADES_CAP,
+  TICKERS_TYPE,
   emptyBookSnapshot,
   frameMarketId,
   mergeRecentTrades,
@@ -36,6 +37,14 @@ interface DeltaEntry {
   raw: string;
 }
 
+/** The latest all-market TICKERS frame, verbatim, with its gateway timestamp. */
+interface TickersCache {
+  raw: string;
+  ts: number;
+}
+
+const TICKERS_KEY = 'tickers';
+
 const PERSISTED_FIELDS: (keyof MarketState)[] = ['market', 'snapshot', 'snapshotVersion', 'ticker', 'candles', 'trades'];
 
 /**
@@ -50,6 +59,9 @@ export class MarketFeed extends DurableObject<Env> {
   private deltas = new Map<number, DeltaEntry[]>();
   /** viewer socket -> subscribed marketId (rebuilt from attachments on wake) */
   private viewers = new Map<WebSocket, number>();
+  /** Latest TICKERS frame: replayed to each subscribing viewer, so a new
+   *  viewer's market picker is not blank until the next change. */
+  private tickers: TickersCache | null = null;
   private lastPublishMs = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -65,6 +77,7 @@ export class MarketFeed extends DurableObject<Env> {
       for (const [key, state] of stored) {
         this.markets.set(Number(key.slice(4)), state);
       }
+      this.tickers = (await ctx.storage.get<TickersCache>(TICKERS_KEY)) ?? null;
       for (const ws of ctx.getWebSockets('viewer')) {
         const att = ws.deserializeAttachment() as { m?: number } | null;
         if (att && typeof att.m === 'number') this.viewers.set(ws, att.m);
@@ -136,7 +149,19 @@ export class MarketFeed extends DurableObject<Env> {
     this.lastPublishMs = Date.now();
 
     if (frame.type === 'EDGE_CACHE') {
-      if (frame.frame) this.cacheFrame(frame.frame, true);
+      if (frame.frame?.type === TICKERS_TYPE) {
+        this.cacheTickers(JSON.stringify(frame.frame), frame.frame, true);
+      } else if (frame.frame) {
+        this.cacheFrame(frame.frame, true);
+      }
+      return;
+    }
+
+    if (frame.type === TICKERS_TYPE) {
+      // Every viewer, whatever market it subscribes to. Routed by type, never
+      // by marketId: its entries carry nested marketIds.
+      this.cacheTickers(raw, frame, false);
+      for (const viewer of this.viewers.keys()) this.trySend(viewer, raw);
       return;
     }
 
@@ -209,6 +234,18 @@ export class MarketFeed extends DurableObject<Env> {
     }
   }
 
+  /** Keep the newest TICKERS frame. A bundle is built on another gateway
+   *  thread and can arrive after a newer live frame, so an older timestamp
+   *  never replaces a newer one. Only bundles persist (live frames arrive up
+   *  to once a second; a bundle follows within seconds). */
+  private cacheTickers(raw: string, frame: Frame, bundle: boolean): void {
+    if (!Array.isArray(frame.tickers)) return;
+    const ts = typeof frame.timestamp === 'number' ? frame.timestamp : 0;
+    if (this.tickers && ts < this.tickers.ts) return;
+    this.tickers = { raw, ts };
+    if (bundle) void this.ctx.storage.put(TICKERS_KEY, this.tickers);
+  }
+
   // ── viewer side (mirrors MarketDataWebSocket.channelRead0) ──────────────
 
   private onViewerMessage(ws: WebSocket, msg: ViewerMessage): void {
@@ -224,6 +261,7 @@ export class MarketFeed extends DurableObject<Env> {
         ws.send(JSON.stringify({ type: 'SUBSCRIPTION_CONFIRMED', marketId: msg.marketId }));
         const state = this.markets.get(msg.marketId);
         if (state?.ticker) ws.send(state.ticker);
+        if (this.tickers) ws.send(this.tickers.raw);
         this.sendInitialState(ws, msg.marketId);
         return;
       }
@@ -354,6 +392,7 @@ export class MarketFeed extends DurableObject<Env> {
     }
     return {
       viewers: this.viewers.size,
+      tickersAgeMs: this.tickers?.ts ? Date.now() - this.tickers.ts : null,
       // A closing (displaced) socket lingers in getWebSockets until its
       // close handshake completes; only OPEN sockets are real publishers.
       publishers: this.ctx.getWebSockets('pub').filter((ws) => ws.readyState === WebSocket.READY_STATE_OPEN).length,

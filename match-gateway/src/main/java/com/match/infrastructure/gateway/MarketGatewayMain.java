@@ -5,6 +5,7 @@ import com.match.infrastructure.admin.ClusterStatus;
 import com.match.infrastructure.gateway.edge.EdgePublisher;
 import com.match.infrastructure.gateway.persistence.MarketDataPersistence;
 import com.match.infrastructure.gateway.state.GatewayStateManager;
+import com.match.infrastructure.websocket.AllMarketTickersPublisher;
 import com.match.infrastructure.websocket.MarketDataWebSocket;
 
 /**
@@ -20,6 +21,7 @@ public class MarketGatewayMain implements AutoCloseable {
     private final ClusterStatus clusterStatus;
     private final MarketDataPersistence persistence; // never null: the gateway does not run without it
     private final EdgePublisher edgePublisher; // null when MARKET_EDGE_URL unset
+    private final AllMarketTickersPublisher tickersPublisher;
 
     public MarketGatewayMain() {
         this.clusterStatus = new ClusterStatus();
@@ -48,6 +50,10 @@ public class MarketGatewayMain implements AutoCloseable {
             this.clusterStatus.setEdgeTee(edgePublisher::publish);
         }
 
+        // All-market TICKERS frame: own scheduler thread, never the egress thread.
+        // An invalid MARKET_TICKERS_INTERVAL_MS fails startup loudly.
+        this.tickersPublisher = AllMarketTickersPublisher.create(stateManager, marketDataWebSocket);
+
         // Wire state manager as egress listener (handles state updates and broadcasts)
         this.stateManager.setWebSocket(marketDataWebSocket);
         this.aeronGateway.setEgressListener(stateManager);
@@ -67,6 +73,8 @@ public class MarketGatewayMain implements AutoCloseable {
         marketDataWebSocket.start();
 
         clusterStatus.setMarketChannels(marketDataWebSocket.getChannels());
+
+        tickersPublisher.start();
     }
 
     public void startPolling() {
@@ -75,6 +83,9 @@ public class MarketGatewayMain implements AutoCloseable {
 
     @Override
     public void close() {
+        if (tickersPublisher != null) {
+            tickersPublisher.close();
+        }
         if (edgePublisher != null) {
             edgePublisher.close();
         }

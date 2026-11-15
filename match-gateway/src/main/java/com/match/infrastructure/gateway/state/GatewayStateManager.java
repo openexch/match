@@ -617,6 +617,54 @@ public class GatewayStateManager implements AeronGateway.EgressMessageListener {
         return stats != null ? stats.toJson() : null;
     }
 
+    // ==================== All-market TICKERS frame ====================
+
+    /** Frame type of the all-market ticker frame; "type" is the first key so a prefix test classifies it. */
+    public static final String TICKERS_TYPE = "TICKERS";
+    public static final String TICKERS_FRAME_PREFIX = "{\"type\":\"" + TICKERS_TYPE + "\"";
+
+    /**
+     * The TICKERS frame's array: one TICKER_STATS-shaped entry (minus "type") per market
+     * that has a price, ordered by marketId, e.g.
+     * {@code [{"marketId":1,"market":"BTC-USD","lastPrice":...,"timestamp":...}]}.
+     * "[]" while no market has a price. Bounded by the number of markets the gateway has
+     * seen; no market count is assumed. Reads only the cached per-market strings, so it is
+     * safe from any thread and never touches the egress thread.
+     */
+    public String buildTickersArrayJson() {
+        Integer[] ids = tickerStatsByMarket.keySet().toArray(new Integer[0]);
+        java.util.Arrays.sort(ids);
+        StringBuilder sb = new StringBuilder(64 + ids.length * 200).append('[');
+        boolean first = true;
+        for (Integer id : ids) {
+            TickerStats stats = tickerStatsByMarket.get(id);
+            String entry = stats != null ? stats.toEntryJson() : null;
+            if (entry == null) {
+                continue;
+            }
+            if (!first) {
+                sb.append(',');
+            }
+            sb.append(entry);
+            first = false;
+        }
+        return sb.append(']').toString();
+    }
+
+    /**
+     * Wrap a tickers array in the TICKERS frame. Deliberately has NO top-level marketId:
+     * the frame goes to every market-data client whatever market it subscribes to.
+     */
+    public static String buildTickersFrameJson(String tickersArray, long timestamp) {
+        return TICKERS_FRAME_PREFIX + ",\"tickers\":" + tickersArray + ",\"timestamp\":" + timestamp + "}";
+    }
+
+    /** The current TICKERS frame, or null while no market has a price. */
+    public String buildTickersFrameJson() {
+        String array = buildTickersArrayJson();
+        return "[]".equals(array) ? null : buildTickersFrameJson(array, System.currentTimeMillis());
+    }
+
     /**
      * Get the candle provider for REST/WebSocket queries.
      */

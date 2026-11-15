@@ -197,6 +197,14 @@ public class MarketDataWebSocket implements AutoCloseable {
             return;
         }
 
+        // All-market frames (TICKERS) carry per-market entries with nested "marketId"
+        // keys; the prefix scan in extractMarketId would pick up the first nested one and
+        // send the frame to that market's group only. Classify them first.
+        if (isAllMarketFrame(jsonMessage)) {
+            deliverToAll(jsonMessage);
+            return;
+        }
+
         // Extract marketId from message for filtering
         int marketId = extractMarketId(jsonMessage);
         // Trades/candles whose initial snapshot is fetched async may need to be held
@@ -217,6 +225,38 @@ public class MarketDataWebSocket implements AutoCloseable {
                 deliver(ch, jsonMessage, deferrable);
             }
         }
+    }
+
+    /**
+     * Broadcast a frame to EVERY connected market-data client, whatever market it is
+     * subscribed to, and tee it to the edge relay. Never consults extractMarketId, so a
+     * nested marketId cannot narrow the audience. Used for the all-market TICKERS frame.
+     */
+    public void broadcastToAll(String jsonMessage) {
+        if (jsonMessage == null) {
+            return;
+        }
+        com.match.infrastructure.gateway.edge.EdgePublisher edge = edgePublisher;
+        if (edge != null) {
+            edge.publish(jsonMessage);
+        }
+        deliverToAll(jsonMessage);
+    }
+
+    private void deliverToAll(String jsonMessage) {
+        ChannelGroup all = channels;
+        if (all == null || all.isEmpty()) {
+            return;
+        }
+        for (Channel ch : all) {
+            // Never deferred: TICKERS has no async initial snapshot to wait behind.
+            writeOrConflate(ch, jsonMessage);
+        }
+    }
+
+    /** Gateway-built compact JSON keeps "type" first, so a prefix test classifies it. */
+    static boolean isAllMarketFrame(String json) {
+        return json != null && json.startsWith(GatewayStateManager.TICKERS_FRAME_PREFIX);
     }
 
     /**
@@ -338,6 +378,18 @@ public class MarketDataWebSocket implements AutoCloseable {
         }
 
         /**
+         * Send the current all-market TICKERS frame as soon as the WebSocket handshake
+         * completes, so a new client's market picker is not blank until the next change.
+         */
+        @Override
+        public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+            if (evt instanceof WebSocketServerProtocolHandler.HandshakeComplete) {
+                sendAllTickers(ctx);
+            }
+            super.userEventTriggered(ctx, evt);
+        }
+
+        /**
          * Fired when the outbound buffer crosses a watermark. On drain (writable again)
          * a client that had frames conflated away gets a fresh full state so it resumes
          * from NOW instead of a gap: snapshot semantics supersede the dropped deltas.
@@ -356,6 +408,8 @@ public class MarketDataWebSocket implements AutoCloseable {
                     sendTickerStats(ctx, marketId);
                     sendInitialState(ctx, marketId);
                 }
+                // Dropped TICKERS frames are healed the same way (they carry no marketId).
+                sendAllTickers(ctx);
             }
             ctx.fireChannelWritabilityChanged();
         }
@@ -421,6 +475,8 @@ public class MarketDataWebSocket implements AutoCloseable {
 
                         // Send ticker stats for this market
                         sendTickerStats(ctx, marketId);
+                        // And every market's ticker, so the picker is filled immediately
+                        sendAllTickers(ctx);
 
                         // Send initial state from state manager (only if matches requested market)
                         sendInitialState(ctx, marketId);
@@ -479,6 +535,16 @@ public class MarketDataWebSocket implements AutoCloseable {
                 String tickerJson = stateManager.getTickerStats(marketId);
                 if (tickerJson != null) {
                     ctx.writeAndFlush(new TextWebSocketFrame(tickerJson));
+                }
+            }
+        }
+
+        /** The current TICKERS frame, built from cached ticker strings; nothing while no market has a price. */
+        private void sendAllTickers(ChannelHandlerContext ctx) {
+            if (stateManager != null) {
+                String frame = stateManager.buildTickersFrameJson();
+                if (frame != null) {
+                    ctx.writeAndFlush(new TextWebSocketFrame(frame));
                 }
             }
         }
