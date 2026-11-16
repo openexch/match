@@ -55,6 +55,72 @@ public final class NodeMetrics {
         lastSnapshotMs = epochMs;
     }
 
+    /**
+     * Where the last snapshot this node took or loaded sits in the log, and the hash of the state it holds, as
+     * one pair read by a scraper: a position and a hash from two different stamps would show as a false
+     * divergence for one poll.
+     *
+     * @param logPosition the snapshot's log position ({@link #NEVER} before any snapshot)
+     * @param stateHash   the unsigned 32-bit state hash, or {@link #UNKNOWN_HASH}
+     */
+    public record SnapshotState(long logPosition, long stateHash) {
+        public SnapshotState {
+            checkStateHash(stateHash);
+        }
+
+        public boolean hashKnown() {
+            return stateHash != UNKNOWN_HASH;
+        }
+    }
+
+    /** {@link SnapshotState#logPosition()} before this node took or loaded any snapshot. */
+    public static final long NEVER = -1L;
+    /** {@link SnapshotState#stateHash()} when no hash is known; the series is then omitted. */
+    public static final long UNKNOWN_HASH = -1L;
+    static final long MAX_STATE_HASH = 0xFFFF_FFFFL;
+
+    // A sequence lock over two longs, so the service thread publishes the pair without allocating. One writer
+    // (the service thread); an odd sequence means a stamp is in progress. All three fields are volatile, so the
+    // reader's sequence check orders against the writer's field writes without extra fences.
+    private volatile long snapshotStateSeq;
+    private volatile long snapshotPosition = NEVER;
+    private volatile long snapshotStateHash = UNKNOWN_HASH;
+
+    private static void checkStateHash(final long stateHash) {
+        if (stateHash < UNKNOWN_HASH || stateHash > MAX_STATE_HASH) {
+            throw new IllegalArgumentException("state hash out of the unsigned 32-bit range: " + stateHash);
+        }
+    }
+
+    /**
+     * Service thread only, after a snapshot was taken or loaded: publish its position and hash as one pair.
+     * Allocates nothing. A hash outside {@code 0..4294967295} and not {@link #UNKNOWN_HASH} is refused before
+     * anything is written, so the previous pair stays readable.
+     */
+    public void stampSnapshotState(long logPosition, long stateHash) {
+        checkStateHash(stateHash);
+        final long seq = snapshotStateSeq;
+        snapshotStateSeq = seq + 1;
+        snapshotPosition = logPosition;
+        snapshotStateHash = stateHash;
+        snapshotStateSeq = seq + 2;
+    }
+
+    /** The last stamped snapshot state, both values from one stamp; any thread. */
+    public SnapshotState snapshotState() {
+        while (true) {
+            final long before = snapshotStateSeq;
+            if ((before & 1L) == 0) {
+                final long position = snapshotPosition;
+                final long hash = snapshotStateHash;
+                if (snapshotStateSeq == before) {
+                    return new SnapshotState(position, hash);
+                }
+            }
+            Thread.onSpinWait();
+        }
+    }
+
     public void setRole(int roleOrdinal) {
         this.role = roleOrdinal;
     }

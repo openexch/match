@@ -168,6 +168,87 @@ public class NodeMetricsServerTest {
                 out.contains("match_test_unsigned 18446744073709551615"));
     }
 
+    /** The value of a series line {@code name value}, or null when the series is absent. */
+    private static String series(String body, String name) {
+        for (String line : body.split("\n")) {
+            if (line.startsWith(name + " ")) {
+                return line.substring(name.length() + 1);
+            }
+        }
+        return null;
+    }
+
+    @Test
+    public void snapshotPositionIsMinusOneAndTheHashIsOmittedBeforeAnySnapshot() {
+        String out = new NodeMetricsServer(new NodeMetrics()).render();
+        assertEquals("never snapshotted", "-1", series(out, "match_snapshot_last_log_position"));
+        assertNull("an unknown hash is omitted, never rendered as a value three nodes could agree on",
+                series(out, "match_snapshot_state_hash"));
+        assertFalse(out.contains("match_snapshot_state_hash"));
+    }
+
+    @Test
+    public void snapshotStateRendersThePositionAndTheUnsignedHashOfOneStamp() {
+        NodeMetrics metrics = new NodeMetrics();
+        metrics.stampSnapshotState(1_048_576L, 0xFFFF_FFFEL);
+        String out = new NodeMetricsServer(metrics).render();
+        assertEquals("1048576", series(out, "match_snapshot_last_log_position"));
+        assertEquals("unsigned decimal, never a minus sign", "4294967294", series(out, "match_snapshot_state_hash"));
+        assertTrue(out.contains("# TYPE match_snapshot_state_hash gauge"));
+        assertTrue(out.contains("# TYPE match_snapshot_last_log_position gauge"));
+    }
+
+    @Test
+    public void aStampWithoutAHashShowsThePositionAndOmitsTheHash() {
+        NodeMetrics metrics = new NodeMetrics();
+        metrics.stampSnapshotState(4_096L, 7L);
+        metrics.stampSnapshotState(8_192L, NodeMetrics.UNKNOWN_HASH);
+        String out = new NodeMetricsServer(metrics).render();
+        assertEquals("8192", series(out, "match_snapshot_last_log_position"));
+        assertNull("the earlier hash is not paired with the new position", series(out, "match_snapshot_state_hash"));
+    }
+
+    @Test
+    public void aHashOutsideTheUnsigned32BitRangeIsRefused() {
+        NodeMetrics metrics = new NodeMetrics();
+        assertThrows(IllegalArgumentException.class, () -> metrics.stampSnapshotState(1L, 0x1_0000_0000L));
+        assertThrows(IllegalArgumentException.class, () -> metrics.stampSnapshotState(1L, -2L));
+    }
+
+    @Test
+    public void aScrapeNeverPairsAPositionWithAnotherStampsHash() throws Exception {
+        // The writer stamps (p, p) pairs; every render must show a position and a hash from the same stamp.
+        NodeMetrics metrics = new NodeMetrics();
+        NodeMetricsServer server = new NodeMetricsServer(metrics);
+        java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean();
+        Thread writer = new Thread(() -> {
+            long p = 1;
+            while (!stop.get()) {
+                metrics.stampSnapshotState(p, p & NodeMetrics.MAX_STATE_HASH);
+                p++;
+            }
+        }, "snapshot-stamper");
+        writer.start();
+        int seen = 0;
+        try {
+            for (int i = 0; i < 20_000; i++) {
+                String out = server.render();
+                String position = series(out, "match_snapshot_last_log_position");
+                String hash = series(out, "match_snapshot_state_hash");
+                if ("-1".equals(position)) {
+                    assertNull(hash);
+                    continue;
+                }
+                assertEquals("render " + i + ": position and hash come from one stamp", position, hash);
+                seen++;
+            }
+        } finally {
+            stop.set(true);
+            writer.join();
+        }
+        assertTrue("non-vacuous: renders saw stamps", seen > 0);
+    }
+
     /** Minimal MarketEventHandler that reports fixed reliable-egress drop counts. */
     private static final class StubDroppingHandler implements MarketEventHandler {
         private final int marketId;

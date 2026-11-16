@@ -89,7 +89,43 @@ public final class SnapshotCodec {
     /** Envelope versions. 1 = behaviour 1 (ledger v1); 2 = behaviour >= 2 (ledger v2). */
     static final int ENVELOPE_V1 = 1;
     static final int ENVELOPE_V2 = 2;
+    /** Envelope header: magic (8), version (4), payload length (4), CRC32C (4); the payload follows. */
+    static final int ENVELOPE_HEADER_LENGTH = 20;
+    /** Offset of the payload length inside the envelope header. */
+    static final int ENVELOPE_LENGTH_OFFSET = 12;
+    /** Offset of the payload CRC32C inside the envelope header. */
+    static final int ENVELOPE_CRC_OFFSET = 16;
     private SnapshotCodec() {
+    }
+
+    /**
+     * The state hash of a sealed image: the CRC32C of its payload that the envelope already carries, as an
+     * unsigned value in {@code 0..4294967295}. {@link #serialize} computed it over the payload (the envelope
+     * header excluded) and {@link #deserialize} verifies it, so reading it back costs no second pass and no
+     * allocation.
+     *
+     * <p>The payload is a function of replicated state only (books, generators, the sorted omsMap, the
+     * normalized config, identity and ledger; no log position, no wall clock, no member id), so two healthy
+     * members that snapshot at one log position produce the same value. It is telemetry: 32 bits, so two
+     * different states collide with probability 2^-32 per comparison.</p>
+     *
+     * @param image  the buffer holding the sealed image
+     * @param offset where the image starts (the envelope magic)
+     * @param length the image length, envelope included, as {@link #serialize} returned it
+     * @throws IllegalArgumentException when the bytes are not one whole sealed image of {@code length}
+     */
+    public static long stateHash(final DirectBuffer image, final int offset, final int length) {
+        if (offset < 0 || length < ENVELOPE_HEADER_LENGTH || offset > image.capacity()
+                || length > image.capacity() - offset) {
+            throw new IllegalArgumentException("not a sealed snapshot image: offset=" + offset + " length=" + length
+                    + " capacity=" + image.capacity());
+        }
+        if (image.getLong(offset) != DURABLE_MAGIC
+                || image.getInt(offset + ENVELOPE_LENGTH_OFFSET) != length - ENVELOPE_HEADER_LENGTH) {
+            throw new IllegalArgumentException("not a sealed snapshot image of length " + length
+                    + ": envelope magic or payload length does not match");
+        }
+        return Integer.toUnsignedLong(image.getInt(offset + ENVELOPE_CRC_OFFSET));
     }
 
     /**
@@ -300,7 +336,7 @@ public final class SnapshotCodec {
             byte[] payload = new byte[pos]; dst.getBytes(0,payload);
             var crc = new java.util.zip.CRC32C(); crc.update(payload,0,payload.length);
             dst.putLong(0,DURABLE_MAGIC); dst.putInt(8, identityBlock ? ENVELOPE_V2 : ENVELOPE_V1); dst.putInt(12,pos);
-            dst.putInt(16,(int)crc.getValue()); dst.putBytes(20,payload); pos+=20;
+            dst.putInt(ENVELOPE_CRC_OFFSET,(int)crc.getValue()); dst.putBytes(20,payload); pos+=20;
         }
         return pos;
     }
@@ -345,7 +381,7 @@ public final class SnapshotCodec {
                 throw new IllegalStateException("Unsupported/truncated durable snapshot");
             byte[] payload = new byte[length-20]; src.getBytes(offset+20,payload);
             var crc = new java.util.zip.CRC32C(); crc.update(payload,0,payload.length);
-            if ((int)crc.getValue()!=src.getInt(offset+16)) throw new IllegalStateException("Corrupt durable snapshot");
+            if ((int)crc.getValue()!=src.getInt(offset+ENVELOPE_CRC_OFFSET)) throw new IllegalStateException("Corrupt durable snapshot");
             offset+=20; length-=20;
         }
         int pos = offset;

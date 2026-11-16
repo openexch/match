@@ -196,6 +196,9 @@ public class AppClusteredService implements ClusteredService {
     private final com.openexchange.cluster.NodeReadiness readiness =
             new com.openexchange.cluster.NodeReadiness();
     private com.openexchange.cluster.NodeEndpoint nodeEndpoint;
+    // The build /health and /ready name. null = read it from the manifest of the jar this class was loaded
+    // from, at onStart; a test sets it to check that the endpoint carries it.
+    com.openexchange.cluster.BuildInfo buildInfo;
     private com.openexchange.cluster.ConsensusReadiness consensusReadiness;
     // Aeron can reenter doBackgroundWork via idle() before the callback returns.
     // Its logPosition is already the new event's position at that point.
@@ -1002,7 +1005,9 @@ public class AppClusteredService implements ClusteredService {
                             () -> egressSessionMetrics.maxSessionOfferAgeMs(System.currentTimeMillis()));
             // One port, three answers. The metrics registry stays where it is;
             // the endpoint just renders it alongside the probes.
-            nodeEndpoint = new com.openexchange.cluster.NodeEndpoint(readiness, metricsServer::render);
+            nodeEndpoint = new com.openexchange.cluster.NodeEndpoint(readiness, metricsServer::render)
+                    .withBuild(buildInfo != null ? buildInfo
+                            : com.openexchange.cluster.BuildInfo.of(AppClusteredService.class));
             nodeEndpoint.start(port);
         } catch (Exception e) {
             // Metrics must never take a node down.
@@ -1445,6 +1450,26 @@ public class AppClusteredService implements ClusteredService {
         aeronBroadcaster.broadcastReliable(preConfigRejectBuffer, 0, length);
     }
 
+    /**
+     * The state hash of a sealed image, for the metrics only: {@link SnapshotCodec#stateHash}, or
+     * {@link com.match.infrastructure.metrics.NodeMetrics#UNKNOWN_HASH} when the bytes are not one sealed image.
+     * Never throws: it runs inside the snapshot take and restore callbacks, where an exception fences the node,
+     * and a metric must never take a node down. Package-private for tests.
+     */
+    static long telemetryStateHash(final org.agrona.DirectBuffer image, final int offset, final int length) {
+        try {
+            return SnapshotCodec.stateHash(image, offset, length);
+        } catch (final IllegalArgumentException notAnImage) {
+            System.err.println("WARN: snapshot state hash unknown, the series is omitted: " + notAnImage.getMessage());
+            return com.match.infrastructure.metrics.NodeMetrics.UNKNOWN_HASH;
+        }
+    }
+
+    /** The snapshot position and state hash this node reports; package-private for tests. */
+    com.match.infrastructure.metrics.NodeMetrics.SnapshotState snapshotState() {
+        return nodeMetrics.snapshotState();
+    }
+
     /** The sessions the container restored before onStart; package-private for tests. */
     void registerRestoredSessions(final Cluster cluster) {
         final int[] restored = {0};
@@ -1475,7 +1500,7 @@ public class AppClusteredService implements ClusteredService {
      * end of stream, zero bytes, codec reject, the restore cross-check) fences the service, logs CRITICAL,
      * runs failFast and rethrows, as the core does. Package-private with a source seam for the loader tests.
      */
-    void loadSnapshot(final com.openexchange.cluster.SnapshotImageReader.Source snapshotImage,
+    long loadSnapshot(final com.openexchange.cluster.SnapshotImageReader.Source snapshotImage,
                       final org.agrona.concurrent.IdleStrategy idleStrategy) {
         System.out.println("[SNAPSHOT] loadSnapshot called, image position: " + snapshotImage.position());
 
@@ -1505,6 +1530,8 @@ public class AppClusteredService implements ClusteredService {
                 crossCheckFailedFast = true; // the state machine already ran failFast once
                 throw new IllegalStateException("restore cross-check failed (see the CRITICAL lines above)");
             }
+            // The image verified (the codec checked this CRC): its state hash is the one its writer stamped.
+            return telemetryStateHash(accum, 0, accumLen[0]);
         } catch (final RuntimeException refused) {
             failApplicationCallback();
             System.err.println("CRITICAL: snapshot refused: " + refused.getMessage() + " (" + accumLen[0]
@@ -1523,10 +1550,15 @@ public class AppClusteredService implements ClusteredService {
      * an empty top for every market without a command since the restore, so its resnapshots send nothing
      * for a quiet market. Egress only: no replicated state, no snapshot bytes, no log entry. Not reached at
      * genesis (no snapshot: every version derives from commands). Package-private for the restore tests.
+     *
+     * <p>A verified load stamps {@code snapshotPosition} and the image's state hash: the bytes some member wrote
+     * at that position, so a restarted member keeps reporting the pair its peers report. The snapshot age is
+     * not stamped; this member took no snapshot.</p>
      */
     void restoreSnapshot(final com.openexchange.cluster.SnapshotImageReader.Source snapshotImage,
                          final org.agrona.concurrent.IdleStrategy idleStrategy, final long snapshotPosition) {
-        loadSnapshot(snapshotImage, idleStrategy);
+        final long stateHash = loadSnapshot(snapshotImage, idleStrategy);
+        nodeMetrics.stampSnapshotState(snapshotPosition, stateHash);
         if (restoreRepublish) {
             final int markets = engine.republishRestoredBooks(snapshotPosition);
             System.out.println("[SNAPSHOT] republished the restored top of book of " + markets
@@ -1955,6 +1987,9 @@ public class AppClusteredService implements ClusteredService {
         // recording is pruned on restart and recovery fails with `unknown recording id`.
         awaitSnapshotRecorded(snapshotPublication);
         nodeMetrics.stampSnapshot(System.currentTimeMillis()); // match#33: wall-clock stamp, metrics only
+        // Position and hash of what was just recorded, as one value: a pure function of the replicated state at
+        // this log position (the payload CRC32C serialize already computed), equal on every healthy member.
+        nodeMetrics.stampSnapshotState(cluster.logPosition(), telemetryStateHash(buffer, 0, pos));
         // The baseline for the next snapshot, on EVERY member and whoever asked
         // for this one — a snapshot taken by ClusterTool has to reset the rhythm
         // exactly like one this node requested.

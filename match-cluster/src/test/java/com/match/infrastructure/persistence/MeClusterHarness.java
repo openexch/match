@@ -253,6 +253,23 @@ final class MeClusterHarness implements AutoCloseable {
             }
         }
 
+        /** This member's {@code /metrics} text, rendered by its own registry (the HTTP port is not needed). */
+        String metrics() {
+            final Object server = field("metricsServer");
+            if (server == null) {
+                throw new IllegalStateException("member " + id + " has no metrics registry yet");
+            }
+            return ((com.match.infrastructure.metrics.NodeMetricsServer) server).render();
+        }
+
+        /**
+         * {match_snapshot_last_log_position, match_snapshot_state_hash} as this member renders them; the hash
+         * reads -1 when the series is omitted.
+         */
+        long[] snapshotSeries() {
+            return parseSnapshotSeries(metrics());
+        }
+
         /** The member's ledger v2 block bytes, via the codec's writer (quiescent members only). */
         byte[] ledgerBlock() {
             return DurableLedgerProbe.ledgerBlock(engine());
@@ -575,6 +592,51 @@ final class MeClusterHarness implements AutoCloseable {
         if (!await(client, () -> ClusterControl.ToggleState.get(toggle) == ClusterControl.ToggleState.NEUTRAL, 30_000)) {
             throw new AssertionError("snapshot did not complete within 30 s");
         }
+    }
+
+    /** {position, hash} from a {@code /metrics} body; the hash is -1 when the series is omitted. */
+    static long[] parseSnapshotSeries(final String body) {
+        long position = Long.MIN_VALUE;
+        long hash = -1;
+        for (String line : body.split("\n")) {
+            if (line.startsWith("match_snapshot_last_log_position ")) {
+                position = Long.parseLong(line.substring("match_snapshot_last_log_position ".length()));
+            } else if (line.startsWith("match_snapshot_state_hash ")) {
+                hash = Long.parseLong(line.substring("match_snapshot_state_hash ".length()));
+            }
+        }
+        if (position == Long.MIN_VALUE) {
+            throw new AssertionError("no match_snapshot_last_log_position series in:\n" + body);
+        }
+        return new long[]{position, hash};
+    }
+
+    /**
+     * Wait until every live member renders a snapshot position above {@code after} and they all agree on it;
+     * returns the rendered {position, hash} by member id (null for a closed member). On timeout returns what the
+     * members last rendered, so the caller's assertion names the disagreement.
+     */
+    long[][] awaitSnapshotSeries(final AeronCluster client, final long after, final long timeoutMs) {
+        final long[][] seen = new long[MEMBERS][];
+        await(client, () -> {
+            long position = Long.MIN_VALUE;
+            boolean done = true;
+            for (Member m : members) {
+                seen[m.id] = m.live ? m.snapshotSeries() : null;
+                if (seen[m.id] == null) {
+                    continue;
+                }
+                if (seen[m.id][0] <= after) {
+                    done = false;
+                } else if (position == Long.MIN_VALUE) {
+                    position = seen[m.id][0];
+                } else if (seen[m.id][0] != position) {
+                    done = false;
+                }
+            }
+            return done;
+        }, timeoutMs);
+        return seen;
     }
 
     /** Wait until every live member journaled up to the same journalSeq and it stayed for 500 ms. */
