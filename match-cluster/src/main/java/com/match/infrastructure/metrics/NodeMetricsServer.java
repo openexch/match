@@ -106,6 +106,19 @@ public final class NodeMetricsServer {
           .append(snapMs == 0 ? -1 : (System.currentTimeMillis() - snapMs) / 1000)
           .append('\n');
 
+        // One read of the holder: the position and the hash below always come from the same stamp.
+        final NodeMetrics.SnapshotState snapshot = metrics.snapshotState();
+        sb.append("# HELP match_snapshot_last_log_position Log position of the last snapshot this node took or loaded (-1 = never)\n");
+        sb.append("# TYPE match_snapshot_last_log_position gauge\n");
+        sb.append("match_snapshot_last_log_position ").append(snapshot.logPosition()).append('\n');
+        if (snapshot.hashKnown()) {
+            // Omitted, not -1, when unknown: equal placeholders on every node would read as agreement.
+            sb.append("# HELP match_snapshot_state_hash CRC32C of the snapshot payload at match_snapshot_last_log_position, "
+                    + "unsigned; equal on every healthy member at one position\n");
+            sb.append("# TYPE match_snapshot_state_hash gauge\n");
+            sb.append("match_snapshot_state_hash ").append(snapshot.stateHash()).append('\n');
+        }
+
         // Order-processing latency histogram (sampled 1-in-16 on the agent thread).
         sb.append("# HELP match_order_latency_seconds Order processing latency on the cluster service thread (sampled)\n");
         sb.append("# TYPE match_order_latency_seconds histogram\n");
