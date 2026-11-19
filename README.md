@@ -111,6 +111,7 @@ The pruner and the cluster watchdogs come from cluster-kit; the engine arms them
 | `ENGINE_CATCHUP_REFUSALS` | `3` | failed catch-up attempts in a row after which a member reads the leader's log start; a member below it exits 1 (1..1000) |
 | `ENGINE_CATCHUP_REFUSAL_WAIT_MS` | `30000` | the time bound next to the count: catch-up failing this long triggers the same check (1000..3600000) |
 | `ENGINE_REJOIN_PEER_WINDOW_MS` | `10000` | how long a gap in the evidence of a reachable quorum is bridged before the rejoin watchdog's clock is cleared (1000..600000); keep it at or above the driver's publication connection timeout. `ENGINE_REJOIN_WAIT_MS` must exceed it or the boot refuses |
+| `ENGINE_LEADER_ELECT_WAIT_MS` | `300000` | how long a leader elect may stay in LEADER_LOG_REPLICATION or LEADER_READY (Aeron gives these no timeout) while a quorum of members is reachable before it exits 1 for a supervised restart (10000..3600000); must exceed `ENGINE_REJOIN_PEER_WINDOW_MS` |
 
 ## Load testing
 
