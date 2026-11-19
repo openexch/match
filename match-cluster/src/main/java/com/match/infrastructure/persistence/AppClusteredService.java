@@ -697,9 +697,9 @@ public class AppClusteredService implements ClusteredService {
                         cluster.aeron().countersReader(),
                         clusterId,
                         readiness::ready)
-                        // Computed on the leader after every snapshot and LOGGED, not
-                        // yet applied: it changes what gets deleted from a live ledger,
-                        // so the numbers get watched under real traffic first.
+                        // The retention floor: the purge never passes a position another
+                        // member may still need (RETENTION_FLOOR, default apply; report
+                        // only logs it).
                         .reportWatermark(
                                 com.openexchange.cluster.ClusterMemberPositions.from(
                                         cluster.aeron(), cluster.context()),
