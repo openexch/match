@@ -84,6 +84,8 @@ public class AeronCluster {
         // operators see them in node{N}.log instead of just the cluster mark file. Without
         // this, a misconfigured channel or back-pressure storm is silent.
         final DriverMode driverMode = TransportConfig.driverMode();
+        // Parsed before anything launches: a bad value stops the node at boot (embedded mode applies it)
+        final TransportConfig.DriverTimeouts driverTimeouts = TransportConfig.DriverTimeouts.fromEnv();
 
         final ErrorHandler errorHandler = (Throwable t) -> {
             AERON_ERROR_COUNT.incrementAndGet();
@@ -152,7 +154,7 @@ public class AeronCluster {
         if (driverMode == DriverMode.EXTERNAL) {
             launchWithExternalDriver(clusterConfig, nodeId, lifecycle, journalRuntime);
         } else {
-            launchWithEmbeddedDriver(clusterConfig, lifecycle, journalRuntime);
+            launchWithEmbeddedDriver(clusterConfig, lifecycle, journalRuntime, driverTimeouts);
         }
     }
 
@@ -202,18 +204,19 @@ public class AeronCluster {
      */
     private static void launchWithEmbeddedDriver(
             final ClusterConfig clusterConfig, final EngineLifecycle lifecycle,
-            final com.match.infrastructure.journal.SettlementJournalRuntime journalRuntime) {
+            final com.match.infrastructure.journal.SettlementJournalRuntime journalRuntime,
+            final TransportConfig.DriverTimeouts driverTimeouts) {
+        log.info("Embedded driver client liveness %d ms, publication unblock %d ms",
+                driverTimeouts.clientLivenessMs(), driverTimeouts.publicationUnblockMs());
         try (
                 ClusteredMediaDriver ignored = watchQuorum(lifecycle, ClusteredMediaDriver.launch(
-                        clusterConfig.mediaDriverContext()
+                        embeddedDriverTimeouts(clusterConfig.mediaDriverContext(), driverTimeouts)
                             // Directory management
                             .dirDeleteOnStart(true)
                             .dirDeleteOnShutdown(true)
                             // Timeouts
                             .driverTimeoutMs(500)
                             .timerIntervalNs(TimeUnit.MICROSECONDS.toNanos(500))  // 500us for faster polling
-                            .clientLivenessTimeoutNs(TimeUnit.SECONDS.toNanos(5))
-                            .publicationUnblockTimeoutNs(TimeUnit.SECONDS.toNanos(10))
                             .untetheredWindowLimitTimeoutNs(TimeUnit.MILLISECONDS.toNanos(100))
                             .untetheredRestingTimeoutNs(TimeUnit.MILLISECONDS.toNanos(100))
                             // Socket buffers - 4MB for high throughput (requires tuned OS)
@@ -239,6 +242,17 @@ public class AeronCluster {
         {
             lifecycle.awaitStop();
         }
+    }
+
+    /**
+     * The embedded driver's client liveness and publication unblock timeouts from their settings
+     * ({@code TRANSPORT_DRIVER_CLIENT_LIVENESS_MS}, {@code TRANSPORT_DRIVER_PUBLICATION_UNBLOCK_MS}).
+     */
+    static io.aeron.driver.MediaDriver.Context embeddedDriverTimeouts(final io.aeron.driver.MediaDriver.Context context,
+                                                                      final TransportConfig.DriverTimeouts timeouts) {
+        return context
+                .clientLivenessTimeoutNs(TimeUnit.MILLISECONDS.toNanos(timeouts.clientLivenessMs()))
+                .publicationUnblockTimeoutNs(TimeUnit.MILLISECONDS.toNanos(timeouts.publicationUnblockMs()));
     }
 
     /**

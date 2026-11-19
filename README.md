@@ -93,8 +93,25 @@ All knobs are environment variables (most also accept a system property). The fu
 | `SNAPSHOT_LOG_BYTES`, `SNAPSHOT_INTERVAL_MINUTES`, `SNAPSHOT_PRUNE_ENABLED` | see cluster-kit | Snapshot cadence and log pruning (shared with the core) |
 | `TRANSPORT_DRIVER_MODE` | `embedded` | `external` connects to a standalone media driver (`deploy/media-driver/launch-driver.sh`) |
 | `TRANSPORT_IDLE_MODE`, `TRANSPORT_MTU`, `TRANSPORT_TERM_LENGTH`, `TRANSPORT_INTERFACE` | see `TransportConfig` | Aeron transport tuning |
+| `TRANSPORT_DRIVER_CLIENT_LIVENESS_MS` | `5000` | Embedded mode: the driver's client liveness timeout (1000..600000), also the longest whole-process pause a node survives (after a longer stall the node exits 1 for a supervised restart). External mode: `aeron.client.liveness.timeout` in `deploy/media-driver/driver.properties` |
+| `TRANSPORT_DRIVER_PUBLICATION_UNBLOCK_MS` | `10000` | Embedded mode: the driver's publication unblock timeout (2000..1200000); must exceed `TRANSPORT_DRIVER_CLIENT_LIVENESS_MS` or the node refuses to boot. External mode: `aeron.publication.unblock.timeout` |
 
 Invalid values are refused at startup rather than silently defaulted.
+
+### Log retention and catch-up
+
+The pruner and the cluster watchdogs come from cluster-kit; the engine arms them on every node in both driver modes, with no setting of its own. A value outside its range refuses the boot. The retention floor applies when `SNAPSHOT_PRUNE_ENABLED` is on (the default). Details in cluster-kit's README ("Log retention and a member that was away", "Rejoin and peer reachability").
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RETENTION_FLOOR` | `apply` | `apply`: a member never purges log that another member may still need (the leader holds its purge at the lowest member position, a follower at the leader's log start). `report` only logs the floor |
+| `RETENTION_MEMBER_WAIT_MS` | `1800000` | how long the floor waits for a member that does not move before the purge goes on without it (1000..604800000) |
+| `RETENTION_MEMBER_WAIT_BYTES` | `2147483648` | how far behind the newest snapshot a member may fall before the floor stops waiting for it (1048576..1099511627776) |
+| `RETENTION_PROBE_TIMEOUT_MS` | `5000` | bound on one read of the leader's log start from the leader's archive (100..60000) |
+| `ENGINE_CATCHUP_REFUSALS` | `3` | failed catch-up attempts in a row after which a member reads the leader's log start; a member below it exits 1 (1..1000) |
+| `ENGINE_CATCHUP_REFUSAL_WAIT_MS` | `30000` | the time bound next to the count: catch-up failing this long triggers the same check (1000..3600000) |
+| `ENGINE_REJOIN_PEER_WINDOW_MS` | `10000` | how long a gap in the evidence of a reachable quorum is bridged before the rejoin watchdog's clock is cleared (1000..600000); keep it at or above the driver's publication connection timeout. `ENGINE_REJOIN_WAIT_MS` must exceed it or the boot refuses |
+| `ENGINE_LEADER_ELECT_WAIT_MS` | `300000` | how long a leader elect may stay in LEADER_LOG_REPLICATION or LEADER_READY (Aeron gives these no timeout) while a quorum of members is reachable before it exits 1 for a supervised restart (10000..3600000); must exceed `ENGINE_REJOIN_PEER_WINDOW_MS` |
 
 ## Load testing
 

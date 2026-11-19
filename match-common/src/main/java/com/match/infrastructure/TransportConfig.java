@@ -252,6 +252,66 @@ public final class TransportConfig {
         return sb.toString();
     }
 
+    /** {@code TRANSPORT_DRIVER_CLIENT_LIVENESS_MS}: the embedded driver's client liveness timeout. */
+    public static final String DRIVER_CLIENT_LIVENESS_MS = "TRANSPORT_DRIVER_CLIENT_LIVENESS_MS";
+    /** {@code TRANSPORT_DRIVER_PUBLICATION_UNBLOCK_MS}: the embedded driver's publication unblock timeout. */
+    public static final String DRIVER_PUBLICATION_UNBLOCK_MS = "TRANSPORT_DRIVER_PUBLICATION_UNBLOCK_MS";
+
+    /**
+     * The embedded driver's two client timeouts (external mode: the aeronmd's {@code aeron.client.liveness.timeout} and
+     * {@code aeron.publication.unblock.timeout}). {@code clientLivenessMs} is also the longest whole-process pause a
+     * node survives: after a longer stall its own Aeron clients close themselves and the node exits 1.
+     */
+    public record DriverTimeouts(long clientLivenessMs, long publicationUnblockMs) {
+        public static final long DEFAULT_CLIENT_LIVENESS_MS = 5_000;
+        public static final long DEFAULT_PUBLICATION_UNBLOCK_MS = 10_000;
+
+        /** The defaults: 5000 and 10000 ms. */
+        public static DriverTimeouts defaults() {
+            return new DriverTimeouts(DEFAULT_CLIENT_LIVENESS_MS, DEFAULT_PUBLICATION_UNBLOCK_MS);
+        }
+
+        /** From the environment, then the {@code transport.driver.*} system properties. */
+        public static DriverTimeouts fromEnv() {
+            return parse(name -> envOrProp(name, name.toLowerCase(java.util.Locale.ROOT).replace('_', '.'), null));
+        }
+
+        /**
+         * {@code TRANSPORT_DRIVER_CLIENT_LIVENESS_MS} (default 5000, 1000..600000) and
+         * {@code TRANSPORT_DRIVER_PUBLICATION_UNBLOCK_MS} (default 10000, 2000..1200000, above the liveness).
+         *
+         * @throws IllegalArgumentException naming the setting, its range or the liveness it must exceed
+         */
+        public static DriverTimeouts parse(final java.util.function.Function<String, String> env) {
+            final long liveness = millis(env, DRIVER_CLIENT_LIVENESS_MS, DEFAULT_CLIENT_LIVENESS_MS, 1_000, 600_000);
+            final long unblock = millis(env, DRIVER_PUBLICATION_UNBLOCK_MS, DEFAULT_PUBLICATION_UNBLOCK_MS, 2_000,
+                    1_200_000);
+            if (unblock <= liveness) {
+                throw new IllegalArgumentException(DRIVER_PUBLICATION_UNBLOCK_MS + " " + unblock + " must exceed "
+                        + DRIVER_CLIENT_LIVENESS_MS + " " + liveness + " (Aeron refuses the driver otherwise)");
+            }
+            return new DriverTimeouts(liveness, unblock);
+        }
+
+        private static long millis(final java.util.function.Function<String, String> env, final String name,
+                                   final long defaultMs, final long min, final long max) {
+            final String v = env.apply(name);
+            if (v == null || v.isBlank()) {
+                return defaultMs;
+            }
+            final long ms;
+            try {
+                ms = Long.parseLong(v.trim());
+            } catch (final NumberFormatException e) {
+                throw new IllegalArgumentException(name + " is not an integer: " + v.trim());
+            }
+            if (ms < min || ms > max) {
+                throw new IllegalArgumentException(name + " must be " + min + ".." + max + " ms: " + ms);
+            }
+            return ms;
+        }
+    }
+
     private static String envOrProp(final String envName, final String propName, final String defaultValue) {
         final String env = System.getenv(envName);
         if (env != null && !env.isEmpty()) {
