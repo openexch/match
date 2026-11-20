@@ -114,6 +114,7 @@ The pruner and the cluster watchdogs come from cluster-kit; the engine arms them
 | `ENGINE_REJOIN_PEER_WINDOW_MS` | `10000` | how long a gap in the evidence of a reachable quorum is bridged before the rejoin watchdog's clock is cleared (1000..600000); keep it at or above the driver's publication connection timeout. `ENGINE_REJOIN_WAIT_MS` must exceed it or the boot refuses |
 | `ENGINE_LEADER_ELECT_WAIT_MS` | `300000` | how long a leader elect may stay in LEADER_LOG_REPLICATION or LEADER_READY (Aeron gives these no timeout) while a quorum of members is reachable before it exits 1 for a supervised restart (10000..3600000); must exceed `ENGINE_REJOIN_PEER_WINDOW_MS` |
 | `ENGINE_REJOIN_PROBE_TERM_LENGTH` | `65536` | term length in bytes of the rejoin watchdog's idle peer probe publications, opened sparse on their own term instead of the consensus channel's (a power of two, 65536..1073741824) |
+| `ENGINE_REJOIN_PROBE_STREAM_ID` | `4306` | stream id of the rejoin watchdog's participation subscription on each member's own consensus endpoint, opened once the consensus module runs; the peer probes publish to it, so a member still loading its snapshot reads unreachable to its peers (1..2147483647, must differ from the consensus stream id; use the same value on every member) |
 
 ## Load testing
 
