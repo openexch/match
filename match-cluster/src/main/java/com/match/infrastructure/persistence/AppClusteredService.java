@@ -189,6 +189,11 @@ public class AppClusteredService implements ClusteredService {
     private final com.match.infrastructure.metrics.NodeMetrics nodeMetrics =
             new com.match.infrastructure.metrics.NodeMetrics();
     private com.match.infrastructure.metrics.NodeMetricsServer metricsServer;
+    /**
+     * Test seam only: false skips the live log-position update, so a test can prove its assertion
+     * notices a gauge that no longer follows the log. Always true in production.
+     */
+    boolean recordLogPosition = true;
     // What this node answers about ITSELF. An orchestrator replaces the old
     // external supervisor, and it asks two questions: should I kill this pod
     // (/health) and may I move on to restarting the next one (/ready). Getting
@@ -1775,6 +1780,9 @@ public class AppClusteredService implements ClusteredService {
         if (sampled) {
             nodeMetrics.recordOrderLatency(System.nanoTime() - t0);
         }
+        if (recordLogPosition) {
+            nodeMetrics.recordLogPosition(header.position());
+        }
 
         // Schedule the idle/keep-warm flush timer lazily (can't schedule from onStart —
         // cluster not ready).
@@ -1923,6 +1931,10 @@ public class AppClusteredService implements ClusteredService {
 
     private void applyOnTimerEvent(final long correlationId, final long timestamp) {
         context.setClusterTime(timestamp);
+        // Timer entries grow the log too: keep the live position gauge on the log, not only on commands.
+        if (recordLogPosition && cluster != null) {
+            nodeMetrics.recordLogPosition(cluster.logPosition());
+        }
         // match#25 fix: the egress flush timer is recognized by its FIXED reserved id, NOT via the
         // TimerManager runnable map (which isn't restored on recovery — the desync source). This makes
         // onFlushTimer fire deterministically on EVERY node after any recover/replay, so the chain

@@ -99,6 +99,10 @@ public final class NodeMetricsServer {
         sb.append("# TYPE match_member_id gauge\n");
         sb.append("match_member_id ").append(metrics.memberId()).append('\n');
 
+        sb.append("# HELP match_log_position Cluster log position of the last entry this node applied (-1 = none since start)\n");
+        sb.append("# TYPE match_log_position gauge\n");
+        sb.append("match_log_position ").append(metrics.logPosition()).append('\n');
+
         long snapMs = metrics.lastSnapshotMs();
         sb.append("# HELP match_snapshot_age_seconds Seconds since the last cluster snapshot this node took (-1 = never)\n");
         sb.append("# TYPE match_snapshot_age_seconds gauge\n");
