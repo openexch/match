@@ -38,6 +38,21 @@ public final class NodeMetrics {
 
     private volatile long published;
 
+    // The cluster log position of the last entry this node applied. One writer (the service thread), stored with
+    // release semantics: no fence on the per-message path beyond an ordered store, no lock, no allocation, and a
+    // scraper sees a fresh value without waiting for the next publish().
+    private static final java.lang.invoke.VarHandle LOG_POSITION;
+    static {
+        try {
+            LOG_POSITION = java.lang.invoke.MethodHandles.lookup()
+                    .findVarHandle(NodeMetrics.class, "logPosition", long.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+    @SuppressWarnings("unused") // written through LOG_POSITION
+    private volatile long logPosition = NEVER;
+
     /** Whether the next order should be latency-sampled (call before nanoTime). */
     public boolean shouldSample() {
         return (sampleTick++ & SAMPLE_MASK) == 0;
@@ -119,6 +134,19 @@ public final class NodeMetrics {
             }
             Thread.onSpinWait();
         }
+    }
+
+    /**
+     * Service thread only: the cluster log position of the entry just applied. Allocates nothing; an ordered
+     * store, so the hot path pays no full fence.
+     */
+    public void recordLogPosition(long position) {
+        LOG_POSITION.setRelease(this, position);
+    }
+
+    /** The cluster log position of the last entry this node applied, {@link #NEVER} before any since start. */
+    public long logPosition() {
+        return (long) LOG_POSITION.getAcquire(this);
     }
 
     public void setRole(int roleOrdinal) {
