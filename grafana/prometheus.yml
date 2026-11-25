@@ -8,9 +8,9 @@ rule_files:
   - alerts.yml
 
 scrape_configs:
-  - job_name: match-nodes            # cluster nodes (JDK HTTP server, METRICS_PORT, default 9500+nodeId)
+  - job_name: match-nodes            # cluster nodes: CLUSTER_PORT_BASE + nodeId x CLUSTER_PORT_STRIDE + 6 (single host: base 9000, stride 100)
     static_configs:
-      - targets: ['localhost:9500', 'localhost:9501', 'localhost:9502']
+      - targets: ['localhost:9006', 'localhost:9106', 'localhost:9206']
   - job_name: market-gateway         # Netty WS/HTTP server
     static_configs:
       - targets: ['localhost:8081']

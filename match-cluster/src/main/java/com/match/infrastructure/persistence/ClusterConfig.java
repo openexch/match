@@ -245,6 +245,9 @@ public final class ClusterConfig
                 .replicationChannel("aeron:udp?endpoint=" + hostname + ":0|term-length="
                         + TransportConfig.logTermLength())
                 .snapshotChannel(snapshotChannel)
+                // TRANSPORT_CONSENSUS_TERM_LENGTH (default 1m): Aeron's default consensus channel names no term, so it
+                // took the driver's 16m (two publications and two images of 48 MB per member of three)
+                .consensusChannel(com.openexchange.cluster.ConsensusChannel.fromEnvironment().uri())
                 // Idle strategy for consensus
                 .idleStrategySupplier(org.agrona.concurrent.BusySpinIdleStrategy::new)
                 // NOTE: leaderHeartbeatIntervalNs / leaderHeartbeatTimeoutNs / electionTimeoutNs /
@@ -275,6 +278,9 @@ public final class ClusterConfig
                 .authorisationServiceSupplier(() -> authorisation);
 
         if (clusteredService instanceof AppClusteredService engineService) {
+            // The probe and metrics port follows the member ports' rule; a METRICS_PORT that disagrees refuses the
+            // boot here, before any Aeron component exists.
+            engineService.nodeEndpointPort(nodeEndpointPort(memberId, portBase));
             engineService.readinessConsensus(consensusModuleContext);
             engineService.sessionAuthority(authenticator, authorisation);
         }
@@ -685,5 +691,25 @@ public final class ClusterConfig
             default:
                 return ArchiveThreadingMode.DEDICATED;
         }
+    }
+
+    /** {@code METRICS_PORT} (env, then {@code metrics.port}): accepted only when it names the computed port. */
+    public static final String NODE_PORT_SETTING = "METRICS_PORT";
+
+    /**
+     * The member's probe and metrics port: {@code portBase + nodeId x CLUSTER_PORT_STRIDE + 6} (kit
+     * {@code ClusterPorts.NODE_ENDPOINT_OFFSET}), the same on every host at the default stride. {@code METRICS_PORT}
+     * may repeat it and nothing else.
+     *
+     * @throws IllegalArgumentException when {@code METRICS_PORT} is not a number or names another port
+     */
+    public static int nodeEndpointPort(final int nodeId, final int portBase)
+    {
+        String override = System.getenv(NODE_PORT_SETTING);
+        if (override == null || override.isBlank())
+        {
+            override = System.getProperty("metrics.port");
+        }
+        return com.openexchange.cluster.ClusterPorts.nodeEndpointPort(nodeId, portBase, NODE_PORT_SETTING, override);
     }
 }

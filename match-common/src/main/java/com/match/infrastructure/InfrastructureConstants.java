@@ -48,7 +48,7 @@ public final class InfrastructureConstants {
     // ==================== SETTLEMENT JOURNAL ====================
     // The settlement journal is a per-node, disk-backed second Aeron archive: a recorded
     // publication carrying every trade + every terminal order status, written from the
-    // deterministic service thread (settlement-journal-schema.xml, schema id=3). It is a
+    // deterministic service thread (me-journal-schema.xml, schema id=4). It is a
     // money-loss surface (consumers release residual holds off it) so it is designed to be
     // lossless by construction: separate stream/archive from the consensus log, so journal
     // durability is never entangled with cluster replication/snapshotting.

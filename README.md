@@ -33,7 +33,8 @@ Wire schemas live in `match-common/src/main/resources/sbe/`:
 
 - `order-schema.xml`: schema id 1, version 12 (ingress commands and egress)
 - `me-journal-schema.xml`: schema id 4, version 1 (the ME journal stream)
-- `settlement-journal-schema.xml`: schema id 3, version 1 (legacy, kept for older readers)
+
+Schema ids are unique across the repos: `sbe-schema-ids.txt` lists every id in use (the same file in core, match, cluster-tools, gateway and tools), and `SbeSchemaIdRegistryTest` (match-common) fails when an id is listed twice or a schema file here is missing from the list or disagrees with its line. Id 3 is the core money journal; the earlier match settlement journal that also used it is gone (nothing wrote it since the ME journal, schema 4). A new schema takes a free id in that file, in every repo, first.
 
 ## Build and test
 
@@ -84,7 +85,8 @@ All knobs are environment variables (most also accept a system property). The fu
 | `CLUSTER_ADDRESSES` | `localhost` | Comma-separated member hosts |
 | `CLUSTER_PORT_BASE` | `9000` | Base port; per-member offsets come from cluster-kit `ClusterPorts` |
 | `BASE_DIR` | `<cwd>/node<N>` | Cluster data directory |
-| `METRICS_PORT` | `9500 + nodeId` | Prometheus `/metrics` |
+| `METRICS_PORT` | computed: `CLUSTER_PORT_BASE + nodeId x CLUSTER_PORT_STRIDE + 6` | `/health`, `/ready`, Prometheus `/metrics`: the same on every host at stride 0. Optional; a value that disagrees with the computed port refuses the boot |
+| `TRANSPORT_CONSENSUS_TERM_LENGTH` | `1m` | The consensus channel's term. Without it the channel took the driver's term (16m): two publications and two images of 48 MB per member of three. A power of two in [64k, 1g]; anything else refuses the boot |
 | `ME_AUTH_KEYS` | unset (every session rejected) | Node key table: `keyId:CLASS:secretHex::users=*` entries joined by `;`. Classes: `GATEWAY`, `FORWARDER`, `ADMIN`, `REPLICA`. A malformed table stops the node at boot |
 | `ME_AUTH_CREDENTIAL` | unset (client refuses to start) | Client credential `keyId:CLASS:secretHex`, required by the backup agent (`REPLICA`), market gateway (`GATEWAY`) and load generator |
 | `MATCH_ENGINE_FROM_CONFIG` | `false` | `true` creates engines from the replicated `EngineConfig` message instead of the built-in market set |

@@ -205,7 +205,9 @@ public class EngineDriverLifecycleProcessTest {
         env.put("TRANSPORT_JOURNAL_TERM_LENGTH", "4m");
         env.put("CLUSTER_NODE", "0");
         env.put("CLUSTER_ADDRESSES", "localhost");
-        env.put("CLUSTER_PORT_BASE", String.valueOf(freePort()));
+        // the probe port is computed (base + node 0 x stride 0 + the kit's endpoint offset): derive the base from the
+        // free port so the computed port is that port, and pass it as an agreeing override
+        env.put("CLUSTER_PORT_BASE", String.valueOf(probePort - com.openexchange.cluster.ClusterPorts.NODE_ENDPOINT_OFFSET));
         env.put(PROBE_PORT_ENV, String.valueOf(probePort));
         env.putAll(extraEnv);
         final Process p = pb.redirectErrorStream(true).redirectOutput(log.toFile()).start();

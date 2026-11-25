@@ -201,6 +201,8 @@ public class AppClusteredService implements ClusteredService {
     private final com.openexchange.cluster.NodeReadiness readiness =
             new com.openexchange.cluster.NodeReadiness();
     private com.openexchange.cluster.NodeEndpoint nodeEndpoint;
+    /** The node endpoint's port, computed and checked by {@code ClusterConfig.create}; 0 until then. */
+    private volatile int nodeEndpointPort;
     // The build /health and /ready name. null = read it from the manifest of the jar this class was loaded
     // from, at onStart; a test sets it to check that the endpoint carries it.
     com.openexchange.cluster.BuildInfo buildInfo;
@@ -724,7 +726,20 @@ public class AppClusteredService implements ClusteredService {
         }
     }
 
-    /** match#33: node /metrics on METRICS_PORT (default 9500 + nodeId). */
+    /** Set by {@code ClusterConfig.create} before launch: the port the node endpoint binds. */
+    void nodeEndpointPort(final int port) {
+        this.nodeEndpointPort = port;
+    }
+
+    /** The port the node endpoint binds (0 when no cluster config set one). */
+    int nodeEndpointPort() {
+        return nodeEndpointPort;
+    }
+
+    /**
+     * match#33: node /health, /ready and /metrics on the port {@code ClusterConfig.create} computed from the port
+     * base, the member id and the stride (the same port on every host at the default stride).
+     */
     private void startMetricsServer() {
         // cluster.memberId() is -1 during onStart (not yet joined) — use the
         // CLUSTER_NODE env / node.id prop, exactly like AeronCluster bootstrap.
@@ -739,8 +754,11 @@ public class AppClusteredService implements ClusteredService {
         nodeMetrics.setRole(cluster.role().code());
         isLeader = cluster.role() == Cluster.Role.LEADER;
         try {
-            String env = System.getenv("METRICS_PORT");
-            int port = env != null ? Integer.parseInt(env) : 9500 + nodeId;
+            final int port = nodeEndpointPort;
+            if (port <= 0) {
+                throw new IllegalStateException("no node endpoint port was set (ClusterConfig.create sets it); the"
+                        + " endpoint is not started and this node reads as dead");
+            }
             metricsServer = new com.match.infrastructure.metrics.NodeMetricsServer(nodeMetrics)
                     .counter("match_orders_submitted_total", "Orders admitted by the engine", sbeDemuxer::createOrderCount)
                     .counter("match_ingress_schema_rejects_total",
