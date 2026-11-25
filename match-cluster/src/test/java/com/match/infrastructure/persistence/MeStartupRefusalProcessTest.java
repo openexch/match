@@ -290,8 +290,9 @@ public class MeStartupRefusalProcessTest {
 
     // ------------------------------------------------------------------------------------------------- helpers
 
+    /** The child's computed node endpoint port: base + node x stride + the kit's endpoint offset. */
     private int metricsPort(final int node) {
-        return portBase + 900 + node;
+        return portBase + node * STRIDE + com.openexchange.cluster.ClusterPorts.NODE_ENDPOINT_OFFSET;
     }
 
     private Process engine(final Path root, final Path shm, final int node, final String addresses, final Path log,

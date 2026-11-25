@@ -1,0 +1,21 @@
+# Every SBE schema id in use across the open exchange repos. An id names exactly one wire schema
+# everywhere: a decoder that sees a schema id must be able to know which schema it is.
+#
+# One line per schema: <id> <package> <owner>:<path>
+#   id       the messageSchema id attribute, 1..65535, listed once
+#   package  the messageSchema package attribute, listed once
+#   owner    the repo that publishes the schema file (core, match), or aeron for ids Aeron owns
+#
+# Every repo carries this file with the same content, and a test in each repo checks its own
+# schema files, copies and id constants against it. A new schema takes a free id here, in every
+# repo, before it is published.
+1 com.match.infrastructure.generated match:match-common/src/main/resources/sbe/order-schema.xml
+2 com.openexchange.core.infrastructure.generated core:core-common/src/main/resources/sbe/money-schema.xml
+3 com.openexchange.core.infrastructure.journal.generated core:core-common/src/main/resources/sbe/money-journal-schema.xml
+4 com.match.infrastructure.mejournal.generated match:match-common/src/main/resources/sbe/me-journal-schema.xml
+5 com.openexchange.core.infrastructure.orderjournal.generated core:core-common/src/main/resources/sbe/order-journal-schema.xml
+100 io.aeron.archive.codecs.mark aeron:aeron-archive/src/main/resources/archive/aeron-archive-mark-codecs.xml
+101 io.aeron.archive.codecs aeron:aeron-archive/src/main/resources/archive/aeron-archive-codecs.xml
+110 io.aeron.cluster.codecs.mark aeron:aeron-cluster/src/main/resources/cluster/aeron-cluster-mark-codecs.xml
+111 io.aeron.cluster.codecs aeron:aeron-cluster/src/main/resources/cluster/aeron-cluster-codecs.xml
+112 io.aeron.cluster.codecs.node aeron:aeron-cluster/src/main/resources/cluster/aeron-cluster-node-state-codecs.xml

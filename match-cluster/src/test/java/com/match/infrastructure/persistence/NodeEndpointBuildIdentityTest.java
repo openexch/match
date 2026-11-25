@@ -40,10 +40,10 @@ public class NodeEndpointBuildIdentityTest {
         try (ServerSocket probe = new ServerSocket(0)) {
             port = probe.getLocalPort();
         }
-        // The metrics port is 9500 + node id when METRICS_PORT is unset; pick a node id that lands on a free port.
-        System.setProperty("node.id", Integer.toString(port - 9_500));
         final MeStubCluster c = new MeStubCluster();
         final AppClusteredService s = new AppClusteredService();
+        // ClusterConfig.create hands the service its computed port; this test drives onStart directly
+        s.nodeEndpointPort(port);
         s.failFast = () -> { throw new AssertionError("failFast"); };
         s.buildInfo = new BuildInfo("1.2.3-test", "abc1234");
         try {

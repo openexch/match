@@ -319,8 +319,9 @@ public class MeJournalHoleAfterSnapshotDrillTest {
         return portBase + node * STRIDE + offset;
     }
 
+    /** The child's computed node endpoint port: base + node x stride + the kit's endpoint offset. */
     private int metricsPort(final int node) {
-        return portBase + 900 + node;
+        return portBase + node * STRIDE + com.openexchange.cluster.ClusterPorts.NODE_ENDPOINT_OFFSET;
     }
 
     private File holdFile(final int node) {

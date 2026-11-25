@@ -3,6 +3,7 @@ package com.match.infrastructure.persistence;
 
 import com.match.application.engine.Engine;
 import com.match.application.orderbook.MatchingEngine;
+import com.openexchange.cluster.SnapshotLayouts;
 import org.agrona.DirectBuffer;
 import org.agrona.MutableDirectBuffer;
 import org.agrona.collections.Int2ObjectHashMap;
@@ -71,6 +72,12 @@ import java.util.Arrays;
  *   Durable envelope (always; a payload without it is refused):
  *   [DURABLE_MAGIC : long][envelope version : int = 1 | 2][payload length : int][CRC32C : int][payload]</pre>
  *
+ * <p><b>Layouts.</b> The envelope version names the image's layout. {@link #LAYOUTS} is the set this build
+ * carries: it reads the current layout and the one before it and refuses every other version by name. The
+ * layout it WRITES is the one the recorded behaviour version maps to (no recorded config counts as behaviour
+ * 1), never a property of the jar, so members running different builds at one log position write identical
+ * bytes. An image whose envelope version is not the one its own recorded behaviour writes is refused.</p>
+ *
  * <p>All scalars use the buffer's native byte order (Agrona default), identical to the
  * historical inline encode/decode.</p>
  */
@@ -95,7 +102,50 @@ public final class SnapshotCodec {
     static final int ENVELOPE_LENGTH_OFFSET = 12;
     /** Offset of the payload CRC32C inside the envelope header. */
     static final int ENVELOPE_CRC_OFFSET = 16;
+    /** Offset of the envelope version, the image's layout tag, inside the envelope header. */
+    static final int ENVELOPE_VERSION_OFFSET = 8;
+
+    /** One image layout: its writer and its reader. The envelope version is its tag. */
+    public interface Layout {
+        /** Write the sealed image of {@code engine} at offset 0 of {@code dst}; returns its length. */
+        int write(Engine engine, long timerCorrelationId, MutableDirectBuffer dst);
+
+        /** Decode a sealed image of this layout into {@code engine}. */
+        Decoded read(DirectBuffer src, int offset, int length, Engine engine);
+    }
+
+    private static Layout envelope(final int version) {
+        return new Layout() {
+            @Override
+            public int write(final Engine engine, final long timerCorrelationId, final MutableDirectBuffer dst) {
+                return serializeEnvelope(engine, timerCorrelationId, dst, version);
+            }
+
+            @Override
+            public Decoded read(final DirectBuffer src, final int offset, final int length, final Engine engine) {
+                return deserializeEnvelope(src, offset, length, engine, version);
+            }
+        };
+    }
+
+    /**
+     * The layouts this build carries: envelope 2 is written from behaviour 2 on, envelope 1 at behaviour 1. A next
+     * layout joins as the current one with the behaviour version that adopts it; envelope 2 then becomes the
+     * previous one and envelope 1 is retired.
+     */
+    public static final SnapshotLayouts<Layout> LAYOUTS = SnapshotLayouts.<Layout>of("matching snapshot")
+            .current(ENVELOPE_V2, ENVELOPE_V2, 2L, envelope(ENVELOPE_V2))
+            .previous(ENVELOPE_V1, ENVELOPE_V1, 1L, envelope(ENVELOPE_V1))
+            .build();
+
     private SnapshotCodec() {
+    }
+
+    /** The behaviour version that decides the layout: the recorded one, or 1 while no config is recorded. */
+    static long recordedBehavior(final Engine engine) {
+        final com.match.application.engine.EngineConfigState config = engine.getEngineConfig();
+        return config == null ? com.match.application.engine.EngineConfigState.DEFAULT_BEHAVIOR_VERSION
+                : config.behaviorVersion;
     }
 
     /**
@@ -180,6 +230,20 @@ public final class SnapshotCodec {
      * @return number of bytes written — offer {@code dst, 0, length}
      */
     public static int serialize(Engine engine, long timerCorrelationId, MutableDirectBuffer dst) {
+        return serialize(LAYOUTS, engine, timerCorrelationId, dst);
+    }
+
+    /**
+     * {@link #serialize(Engine, long, MutableDirectBuffer)} against a given set of layouts: the layout written is
+     * the one the engine's recorded behaviour version maps to.
+     */
+    public static int serialize(SnapshotLayouts<Layout> layouts, Engine engine, long timerCorrelationId,
+                                MutableDirectBuffer dst) {
+        return layouts.writtenBy(recordedBehavior(engine)).codec().write(engine, timerCorrelationId, dst);
+    }
+
+    private static int serializeEnvelope(Engine engine, long timerCorrelationId, MutableDirectBuffer dst,
+                                         int envelopeVersion) {
         final long tradeIdGenerator = engine.getTradeIdGenerator();
         int pos = 0;
 
@@ -295,6 +359,10 @@ public final class SnapshotCodec {
         // byte-identical to the original serializer). It forces the envelope, so an older jar meets byte 3
         // where it expects the ledger marker and fails closed ("Durable snapshot ledger missing").
         final boolean identityBlock = config != null && config.behaviorVersion >= 2;
+        if (envelopeVersion != (identityBlock ? ENVELOPE_V2 : ENVELOPE_V1)) {
+            throw new IllegalStateException("[SNAPSHOT] the envelope-" + envelopeVersion + " writer was handed a behaviour-"
+                    + recordedBehavior(engine) + " engine: refusing to write a snapshot");
+        }
         if (identityBlock) {
             final com.match.application.engine.MeIdentity identity = engine.meIdentity();
             dst.putByte(pos, IDENTITY_MARKER);
@@ -335,7 +403,7 @@ public final class SnapshotCodec {
         {
             byte[] payload = new byte[pos]; dst.getBytes(0,payload);
             var crc = new java.util.zip.CRC32C(); crc.update(payload,0,payload.length);
-            dst.putLong(0,DURABLE_MAGIC); dst.putInt(8, identityBlock ? ENVELOPE_V2 : ENVELOPE_V1); dst.putInt(12,pos);
+            dst.putLong(0,DURABLE_MAGIC); dst.putInt(ENVELOPE_VERSION_OFFSET, envelopeVersion); dst.putInt(12,pos);
             dst.putInt(ENVELOPE_CRC_OFFSET,(int)crc.getValue()); dst.putBytes(20,payload); pos+=20;
         }
         return pos;
@@ -363,6 +431,29 @@ public final class SnapshotCodec {
      * @param engine engine to restore into (its books are cleared and repopulated)
      */
     public static Decoded deserialize(DirectBuffer src, int offset, int length, Engine engine) {
+        return deserialize(LAYOUTS, src, offset, length, engine);
+    }
+
+    /** {@link #deserialize(DirectBuffer, int, int, Engine)} against a given set of layouts. */
+    public static Decoded deserialize(SnapshotLayouts<Layout> layouts, DirectBuffer src, int offset, int length,
+                                      Engine engine) {
+        if (offset<0 || length<20 || offset>src.capacity() || length>src.capacity()-offset)
+            throw new IllegalStateException("Invalid snapshot frame");
+        // The envelope is mandatory, and its version is the layout tag: nothing is decoded for a version this
+        // build does not read.
+        if (src.getLong(offset) != DURABLE_MAGIC) {
+            throw new IllegalStateException("snapshot envelope magic missing (length=" + length
+                    + "): refusing a bare or foreign snapshot image");
+        }
+        final int envelopeVersion = src.getInt(offset + ENVELOPE_VERSION_OFFSET);
+        final Decoded decoded = layouts.readerFor(envelopeVersion).codec().read(src, offset, length, engine);
+        // the behaviour version the image itself recorded decides which layout it had to be written in
+        layouts.requireWrittenBy(envelopeVersion, recordedBehavior(engine));
+        return decoded;
+    }
+
+    private static Decoded deserializeEnvelope(DirectBuffer src, int offset, int length, Engine engine,
+                                               int expectedEnvelopeVersion) {
         if (offset<0 || length<20 || offset>src.capacity() || length>src.capacity()-offset)
             throw new IllegalStateException("Invalid snapshot frame");
         final int originalOffset = offset;
@@ -377,7 +468,7 @@ public final class SnapshotCodec {
         final boolean envelopeV2 = durableEnvelope && src.getInt(offset + 8) == ENVELOPE_V2;
         if (durableEnvelope) {
             final int envelopeVersion = src.getInt(offset + 8);
-            if ((envelopeVersion != ENVELOPE_V1 && envelopeVersion != ENVELOPE_V2) || src.getInt(offset+12)!=length-20)
+            if (envelopeVersion != expectedEnvelopeVersion || src.getInt(offset+12)!=length-20)
                 throw new IllegalStateException("Unsupported/truncated durable snapshot");
             byte[] payload = new byte[length-20]; src.getBytes(offset+20,payload);
             var crc = new java.util.zip.CRC32C(); crc.update(payload,0,payload.length);

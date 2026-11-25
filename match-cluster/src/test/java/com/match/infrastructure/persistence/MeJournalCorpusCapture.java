@@ -9,6 +9,7 @@ import org.agrona.IoUtil;
 import org.agrona.concurrent.UnsafeBuffer;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -320,19 +321,29 @@ final class MeJournalCorpusCapture {
         r.quiesce();
     }
 
-    /** A schema 3 v1 JournalTrade (the frozen bridge's wire), the only non-ME frame of the corpus. */
+    /**
+     * A schema 3 v1 JournalTrade, the only non-ME frame of the corpus: a frame of a foreign schema that every journal
+     * reader must refuse. Written by hand at its fixed layout (8-byte header, 93-byte root block, little-endian), so
+     * the corpus keeps its bytes without the retired settlement journal codecs.
+     */
     static byte[] schema3Trade() {
-        final UnsafeBuffer b = new UnsafeBuffer(new byte[256]);
-        final com.match.infrastructure.journal.generated.JournalTradeEncoder e =
-                new com.match.infrastructure.journal.generated.JournalTradeEncoder();
-        e.wrapAndApplyHeader(b, 0, new com.match.infrastructure.journal.generated.MessageHeaderEncoder())
-                .egressSeq(1000L).tradeId(42L).marketId(1).takerOrderId(11L).takerUserId(200L).makerOrderId(22L)
-                .makerUserId(100L).price(6_000_000_000_000L).quantity(100_000_000L)
-                .takerIsBuy(com.match.infrastructure.journal.generated.BooleanType.TRUE).timestamp(1_752_100_000_123L)
-                .takerOmsOrderId(2L).makerOmsOrderId(1L);
-        final byte[] out = new byte[8 + e.encodedLength()];
-        b.getBytes(0, out);
-        return out;
+        final ByteBuffer b = ByteBuffer.allocate(8 + 93).order(ByteOrder.LITTLE_ENDIAN);
+        b.putShort(0, (short) 93).putShort(2, (short) 1).putShort(4, (short) 3).putShort(6, (short) 1);
+        final int r = 8;
+        b.putLong(r, 1000L)                     // egressSeq
+                .putLong(r + 8, 42L)            // tradeId
+                .putInt(r + 16, 1)              // marketId
+                .putLong(r + 20, 11L)           // takerOrderId
+                .putLong(r + 28, 200L)          // takerUserId
+                .putLong(r + 36, 22L)           // makerOrderId
+                .putLong(r + 44, 100L)          // makerUserId
+                .putLong(r + 52, 6_000_000_000_000L) // price
+                .putLong(r + 60, 100_000_000L)  // quantity
+                .put(r + 68, (byte) 1)          // takerIsBuy TRUE
+                .putLong(r + 69, 1_752_100_000_123L) // timestamp
+                .putLong(r + 77, 2L)            // takerOmsOrderId
+                .putLong(r + 85, 1L);           // makerOmsOrderId
+        return b.array();
     }
 
     // ------------------------------------------------------------------ output
