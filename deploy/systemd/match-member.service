@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# One matching engine cluster member per host, external media driver (the prod mode): the same file on every host.
+# Host data lives in the env files: cluster.env (the same on every host), member.env (CLUSTER_NODE, the node
+# endpoint port), host.env (heap, CPU set, JVM flags), secrets.env (the ME key table, root:root 0600; systemd reads it
+# before dropping privileges, the engine user cannot). Needs aeronmd@match.service (cluster-tools deploy/systemd).
+
+[Unit]
+Description=Open Exchange matching engine member (external media driver)
+Documentation=https://github.com/openexch/match/tree/main/deploy
+# The member stops when its driver stops or dies (BindsTo), starts after a usable driver (After: the driver
+# unit is active only once its cnc.dat exists), and comes back with a driver that systemd restarted (WantedBy below).
+BindsTo=aeronmd@match.service
+After=aeronmd@match.service
+After=network-online.target
+Wants=network-online.target
+Conflicts=match-member-embedded.service
+# The restart backoff paces a crash loop; a burst counter would park the unit for good.
+StartLimitIntervalSec=0
+
+[Service]
+Environment=AERON_DIR=/dev/shm/aeron-openexchange-match
+Environment=BASE_DIR=/var/lib/openexchange/match/cluster
+Environment=SETTLEMENT_JOURNAL_DIR=/var/lib/openexchange/match/journal
+EnvironmentFile=/etc/openexchange/match/cluster.env
+EnvironmentFile=/etc/openexchange/match/member.env
+EnvironmentFile=-/etc/openexchange/match/host.env
+EnvironmentFile=/etc/openexchange/match/secrets.env
+StateDirectory=openexchange/match
+StateDirectoryMode=0750
+Type=simple
+User=openexchange
+Group=openexchange
+ExecStart=/opt/openexchange/match/bin/match-launch external
+Restart=on-failure
+RestartSec=2s
+RestartSteps=6
+RestartMaxDelaySec=60s
+RestartPreventExitStatus=78
+SuccessExitStatus=143
+TimeoutStopSec=30s
+LimitNOFILE=65536
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target aeronmd@match.service
