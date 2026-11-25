@@ -27,7 +27,7 @@ The engine consumes order commands from its replicated log, matches them with pr
 | `match-gateway` | Market-data WebSocket gateway (`MarketGatewayMain`, port 8081) and edge publisher. Used by the v0.5 demo stack | `match-gateway/target/match-gateway.jar` (no main class in the manifest) |
 | `match-loadtest` | Load generator (`com.match.loadtest.LoadGenerator`) | `match-loadtest/target/match-loadtest.jar` |
 
-Other directories: `deploy/` (media driver launcher, OS tuning, OOM protection units), `edge/market-relay/` (Cloudflare Worker that fans out market data), `grafana/` (Prometheus and Grafana starter config), `tools/` (multi-node durability harnesses).
+Other directories: `deploy/` (systemd units, launcher and image for cluster members, see `deploy/README.md`; media driver launcher, OS tuning, OOM protection units), `edge/market-relay/` (Cloudflare Worker that fans out market data), `grafana/` (Prometheus and Grafana starter config), `tools/` (multi-node durability harnesses).
 
 Wire schemas live in `match-common/src/main/resources/sbe/`:
 
@@ -93,7 +93,7 @@ All knobs are environment variables (most also accept a system property). The fu
 | `MATCH_ENGINE_IMPL` | `array` | Order book implementation: `array` or `direct` |
 | `SETTLEMENT_JOURNAL_ENABLED` / `SETTLEMENT_JOURNAL_DIR` | `false` / none | Enables the ME journal; the directory must be on disk, not tmpfs |
 | `SNAPSHOT_LOG_BYTES`, `SNAPSHOT_INTERVAL_MINUTES`, `SNAPSHOT_PRUNE_ENABLED` | see cluster-kit | Snapshot cadence and log pruning (shared with the core) |
-| `TRANSPORT_DRIVER_MODE` | `embedded` | `external` connects to a standalone media driver (`deploy/media-driver/launch-driver.sh`) |
+| `TRANSPORT_DRIVER_MODE` | `embedded` | `external` connects to a standalone media driver (`deploy/media-driver/launch-driver.sh`, or the cluster-tools `aeronmd@.service` under systemd) |
 | `TRANSPORT_IDLE_MODE`, `TRANSPORT_MTU`, `TRANSPORT_TERM_LENGTH`, `TRANSPORT_INTERFACE` | see `TransportConfig` | Aeron transport tuning |
 | `TRANSPORT_DRIVER_CLIENT_LIVENESS_MS` | `5000` | Embedded mode: the driver's client liveness timeout (1000..600000), also the longest whole-process pause a node survives (after a longer stall the node exits 1 for a supervised restart). External mode: `aeron.client.liveness.timeout` in `deploy/media-driver/driver.properties` |
 | `TRANSPORT_DRIVER_PUBLICATION_UNBLOCK_MS` | `10000` | Embedded mode: the driver's publication unblock timeout (2000..1200000); must exceed `TRANSPORT_DRIVER_CLIENT_LIVENESS_MS` or the node refuses to boot. External mode: `aeron.publication.unblock.timeout` |

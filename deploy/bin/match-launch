@@ -1,0 +1,86 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+#
+# match-launch: start match-cluster.jar as a cluster member. The systemd units and the OCI image both run the
+# engine through this script, so a host and a container start the same command.
+#
+# Usage: match-launch <external|embedded>
+#
+# The media driver mode comes from the caller (the unit, the image command), never from an env file: an env file
+# that sets TRANSPORT_DRIVER_MODE to something else is refused, so an external unit can never run an embedded
+# driver behind its driver dependency. Every engine setting (ports, addresses, keys, terms)
+# is the engine's to read and refuse; this script checks only what it owns.
+#
+# Knobs (env):
+#   JAVA_HEAP     required: -Xms and -Xmx, for example 4g. The heap is sized by the operator, never a JVM default.
+#   JAVA_OPTS     optional: more JVM flags (split on spaces), appended after the defaults so they win.
+#   CPU_SET       optional: a taskset CPU list, for example 2-5. Empty: unpinned.
+#   BASE_DIR      required: the state root (on disk, never tmpfs). Created when missing; must be writable.
+#   AERON_DIR     required with external: the directory of the host aeronmd this process connects to.
+#   CLUSTER_NODE  required: this member's id.
+#   SETTLEMENT_JOURNAL_DIR  when set: the ME journal's directory (on disk). Created when missing; must be writable.
+#   MATCH_JAR     optional: default /opt/openexchange/match/match-cluster.jar.
+#   JAVA          optional: default java on PATH.
+#
+# Exit: 78 a refused setting (the units set RestartPreventExitStatus=78: a restart cannot fix it). Otherwise this
+# script execs the JVM, so the exit status is the engine's own.
+set -eu
+
+refuse() {
+    echo "match-launch: refusing to start: $*" >&2
+    exit 78
+}
+
+[ $# -eq 1 ] || refuse "usage: match-launch <external|embedded>, got $# argument(s)"
+mode=$1
+case "$mode" in external | embedded) ;; *) refuse "unknown driver mode '$mode' (expected external|embedded)" ;; esac
+
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'; }
+
+if [ -n "${TRANSPORT_DRIVER_MODE:-}" ] && [ "$(lower "$TRANSPORT_DRIVER_MODE")" != "$mode" ]; then
+    refuse "TRANSPORT_DRIVER_MODE=$TRANSPORT_DRIVER_MODE in the environment, but this unit runs the $mode driver"
+fi
+TRANSPORT_DRIVER_MODE=$mode
+export TRANSPORT_DRIVER_MODE
+
+is_uint() { case "$1" in '' | *[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+
+is_uint "${CLUSTER_NODE:-}" || refuse "CLUSTER_NODE='${CLUSTER_NODE:-}' must be this member's id (0, 1, 2, ...)"
+if [ "$mode" = external ]; then
+    [ -n "${AERON_DIR:-}" ] || refuse "AERON_DIR is required with the external driver (the host aeronmd's directory)"
+fi
+
+case "${JAVA_HEAP:-}" in
+    '') refuse "JAVA_HEAP is required (for example JAVA_HEAP=4g)" ;;
+    *[!0-9kKmMgG]* | [!0-9]*) refuse "JAVA_HEAP='$JAVA_HEAP' is not a size (for example 512m or 4g)" ;;
+esac
+[ -n "${BASE_DIR:-}" ] || refuse "BASE_DIR is required (the state root, on disk)"
+mkdir -p "$BASE_DIR" 2>/dev/null || refuse "BASE_DIR=$BASE_DIR cannot be created"
+[ -w "$BASE_DIR" ] || refuse "BASE_DIR=$BASE_DIR is not writable by uid $(id -u)"
+if [ -n "${SETTLEMENT_JOURNAL_DIR:-}" ]; then
+    mkdir -p "$SETTLEMENT_JOURNAL_DIR" 2>/dev/null || refuse "SETTLEMENT_JOURNAL_DIR=$SETTLEMENT_JOURNAL_DIR cannot be created"
+    [ -w "$SETTLEMENT_JOURNAL_DIR" ] || refuse "SETTLEMENT_JOURNAL_DIR=$SETTLEMENT_JOURNAL_DIR is not writable by uid $(id -u)"
+fi
+
+jar=${MATCH_JAR:-/opt/openexchange/match/match-cluster.jar}
+[ -r "$jar" ] || refuse "the engine jar $jar is missing (set MATCH_JAR)"
+java=${JAVA:-java}
+command -v "$java" >/dev/null 2>&1 || refuse "no java binary '$java' (set JAVA)"
+
+set -- "$java" \
+    -XX:+UseZGC -XX:+ZGenerational \
+    -XX:+UnlockDiagnosticVMOptions -XX:GuaranteedSafepointInterval=0 \
+    -XX:+UseNUMA -XX:+PerfDisableSharedMem \
+    --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
+    --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
+    "-Xms$JAVA_HEAP" "-Xmx$JAVA_HEAP"
+# JAVA_OPTS is split on spaces on purpose: one flag per word.
+# shellcheck disable=SC2086
+set -- "$@" ${JAVA_OPTS:-} -jar "$jar"
+
+if [ -n "${CPU_SET:-}" ]; then
+    case "$CPU_SET" in *[!0-9,-]*) refuse "CPU_SET='$CPU_SET' is not a CPU list (for example 2-5 or 2,4,6)" ;; esac
+    command -v taskset >/dev/null 2>&1 || refuse "CPU_SET is set but taskset is not installed"
+    exec taskset -c "$CPU_SET" "$@"
+fi
+exec "$@"

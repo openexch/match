@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# One matching engine cluster member per host, embedded media driver (dev and demo only; prod runs match-member.service with
+# the host aeronmd). The same env files as match-member.service; the two units conflict.
+
+[Unit]
+Description=Open Exchange matching engine member (embedded media driver)
+Documentation=https://github.com/openexch/match/tree/main/deploy
+After=network-online.target
+Wants=network-online.target
+Conflicts=match-member.service
+# The restart backoff paces a crash loop; a burst counter would park the unit for good.
+StartLimitIntervalSec=0
+
+[Service]
+Environment=BASE_DIR=/var/lib/openexchange/match/cluster
+Environment=SETTLEMENT_JOURNAL_DIR=/var/lib/openexchange/match/journal
+EnvironmentFile=/etc/openexchange/match/cluster.env
+EnvironmentFile=/etc/openexchange/match/member.env
+EnvironmentFile=-/etc/openexchange/match/host.env
+EnvironmentFile=/etc/openexchange/match/secrets.env
+StateDirectory=openexchange/match
+StateDirectoryMode=0750
+Type=simple
+User=openexchange
+Group=openexchange
+ExecStart=/opt/openexchange/match/bin/match-launch embedded
+Restart=on-failure
+RestartSec=2s
+RestartSteps=6
+RestartMaxDelaySec=60s
+RestartPreventExitStatus=78
+SuccessExitStatus=143
+TimeoutStopSec=30s
+LimitNOFILE=65536
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
