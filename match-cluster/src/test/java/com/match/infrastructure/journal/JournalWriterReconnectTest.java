@@ -77,7 +77,8 @@ public class JournalWriterReconnectTest {
                 this::clientContext,
                 TEST_CHANNEL,
                 TEST_STREAM_ID,
-                new JournalCheckpointFile(tmpDir),
+                new JournalSidecarV2(tmpDir),
+                new JournalHeadFile(tmpDir),
                 SEGMENT_LENGTH);
     }
 

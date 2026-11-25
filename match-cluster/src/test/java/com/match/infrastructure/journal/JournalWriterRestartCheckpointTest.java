@@ -75,7 +75,8 @@ public class JournalWriterRestartCheckpointTest {
                 this::clientContext,
                 TEST_CHANNEL,
                 TEST_STREAM_ID,
-                new JournalCheckpointFile(tmpDir),
+                new JournalSidecarV2(tmpDir),
+                new JournalHeadFile(tmpDir),
                 SEGMENT_LENGTH);
     }
 
@@ -110,11 +111,15 @@ public class JournalWriterRestartCheckpointTest {
         journal.appendTerminal(0L, 500L, 11L, 900_001L, 1, 2, 42L, 7_011L, 0);
         driveUntil(() -> agent.writtenEntries() >= 1,
                 System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(10));
-        List<long[]> checkpoints = JournalCheckpointFile.readAll(tmpDir);
+        List<JournalSidecarV2.Checkpoint> checkpoints = JournalSidecarV2.readAll(tmpDir).checkpoints;
         assertEquals("one checkpoint after the first entry", 1, checkpoints.size());
         assertEquals("checkpoint egressSeq is the frame's egressSeq @24, not journalSeq @8",
-                500L, checkpoints.get(0)[0]);
-        assertTrue("checkpoint position is after the frame", checkpoints.get(0)[1] > 0);
+                500L, checkpoints.get(0).egressSeq());
+        assertEquals("the frame's journalSeq @8", 0L, checkpoints.get(0).journalSeq());
+        assertTrue("checkpoint position is after the frame", checkpoints.get(0).position() > 0);
+        final long firstRecording = checkpoints.get(0).recordingId();
+        assertEquals("the head names the same recording", firstRecording,
+                JournalHeadFile.read(tmpDir).recordingId());
 
         // 2) Restart: close the agent (publication, archive client, checkpoint file), build a new one
         //    on the same ring and journal dir. Its lastCheckpointedSegmentBase starts at -1, so the
@@ -124,10 +129,14 @@ public class JournalWriterRestartCheckpointTest {
         journal.appendTrade(0L, 777L, 1L, 1, 11L, 900_001L, 22L, 900_002L, 1_000L, 2_000L, true, 43L, 7_011L, 7_022L);
         driveUntil(() -> agent.writtenEntries() >= 1,
                 System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(10));
-        checkpoints = JournalCheckpointFile.readAll(tmpDir);
+        checkpoints = JournalSidecarV2.readAll(tmpDir).checkpoints;
         assertEquals("the restarted writer appended a second checkpoint", 2, checkpoints.size());
         assertEquals("post-restart checkpoint egressSeq is the Trade's egressSeq (same head offset on record 1)",
-                777L, checkpoints.get(1)[0]);
-        assertTrue(checkpoints.get(1)[1] > 0);
+                777L, checkpoints.get(1).egressSeq());
+        assertTrue(checkpoints.get(1).position() > 0);
+        assertTrue("the restarted writer records on a new recording, and its checkpoint says so: "
+                + firstRecording + " then " + checkpoints.get(1).recordingId(),
+                checkpoints.get(1).recordingId() != firstRecording);
+        assertEquals(checkpoints.get(1).recordingId(), JournalHeadFile.read(tmpDir).recordingId());
     }
 }

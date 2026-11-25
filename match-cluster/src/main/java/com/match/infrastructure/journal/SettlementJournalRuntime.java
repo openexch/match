@@ -43,7 +43,8 @@ public final class SettlementJournalRuntime implements AutoCloseable {
     private final int controlPort;
     private final Path journalDir;
     private final SettlementJournal journal;
-    private final JournalCheckpointFile checkpoints;
+    private final JournalSidecarV2 checkpoints;
+    private final JournalHeadFile head;
 
     /** Constant true: what production always passes to the writer's drain gate. */
     private static final java.util.function.BooleanSupplier ALWAYS_DRAIN = () -> true;
@@ -70,7 +71,8 @@ public final class SettlementJournalRuntime implements AutoCloseable {
                 nodeId, portBase, InfrastructureConstants.JOURNAL_ARCHIVE_CONTROL_PORT_OFFSET);
         this.journalDir = journalDir;
         this.journal = new SettlementJournal(ringBytes);
-        this.checkpoints = new JournalCheckpointFile(journalDir);
+        this.checkpoints = new JournalSidecarV2(journalDir);
+        this.head = new JournalHeadFile(journalDir);
     }
 
     /** @return the runtime, or null when SETTLEMENT_JOURNAL_ENABLED is not "true" (journal dark). */
@@ -160,6 +162,7 @@ public final class SettlementJournalRuntime implements AutoCloseable {
                 InfrastructureConstants.settlementJournalChannel(),
                 InfrastructureConstants.SETTLEMENT_JOURNAL_STREAM_ID,
                 checkpoints,
+                head,
                 SEGMENT_FILE_LENGTH,
                 drainGate);
 

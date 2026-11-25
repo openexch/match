@@ -111,12 +111,39 @@ The pruner and the cluster watchdogs come from cluster-kit; the engine arms them
 | `RETENTION_MEMBER_WAIT_BYTES` | `2147483648` | how far behind the newest snapshot a member may fall before the floor stops waiting for it (1048576..1099511627776) |
 | `RETENTION_PROBE_TIMEOUT_MS` | `5000` | bound on one read of the leader's log start from the leader's archive (100..60000) |
 | `RETENTION_RECHECK_MAX_MS` | `60000` | longest wait between re-checks of a retention floor that stopped the last purge pass; a floor that rose is purged behind at once, without a new snapshot (1000..3600000) |
+| `RETENTION_OFFBOX` | `off` | `required`: the purge never passes this member's off-box watermark (the position up to which the log is durably stored off the cluster's hosts), and a watermark that is missing, invalid, from another cluster or above the commit position holds the whole log until a correct one is set or an operator releases it. `report`: evaluated, logged and exported, not applied. `off` with a watermark file present refuses the start |
+| `RETENTION_OFFBOX_ALARM_BYTES` | `2147483648` | log bytes held for the off-box copy above which every purge pass prints a CRITICAL line; an alarm, not a limit (1048576..1099511627776) |
+| `RETENTION_OFFBOX_STALE_MS` | `3600000` | age of the watermark file above which every purge pass prints a CRITICAL line; it does not change the floor (1000..604800000) |
 | `ENGINE_CATCHUP_REFUSALS` | `3` | failed catch-up attempts in a row after which a member reads the leader's log start; a member below it exits 1 (1..1000) |
 | `ENGINE_CATCHUP_REFUSAL_WAIT_MS` | `30000` | the time bound next to the count: catch-up failing this long triggers the same check (1000..3600000) |
 | `ENGINE_REJOIN_PEER_WINDOW_MS` | `10000` | how long a gap in the evidence of a reachable quorum is bridged before the rejoin watchdog's clock is cleared (1000..600000); keep it at or above the driver's publication connection timeout. `ENGINE_REJOIN_WAIT_MS` must exceed it or the boot refuses |
 | `ENGINE_LEADER_ELECT_WAIT_MS` | `300000` | how long a leader elect may stay in LEADER_LOG_REPLICATION or LEADER_READY (Aeron gives these no timeout) while a quorum of members is reachable before it exits 1 for a supervised restart (10000..3600000); must exceed `ENGINE_REJOIN_PEER_WINDOW_MS` |
 | `ENGINE_REJOIN_PROBE_TERM_LENGTH` | `65536` | term length in bytes of the rejoin watchdog's idle peer probe publications, opened sparse on their own term instead of the consensus channel's (a power of two, 65536..1073741824) |
 | `ENGINE_REJOIN_PROBE_STREAM_ID` | `4306` | stream id of the rejoin watchdog's participation subscription on each member's own consensus endpoint, opened once the consensus module runs; the peer probes publish to it, so a member still loading its snapshot reads unreachable to its peers (1..2147483647, must differ from the consensus stream id; use the same value on every member) |
+
+#### A copy off the cluster's hosts (`RETENTION_OFFBOX`)
+
+With `RETENTION_OFFBOX=required` a member purges to the lowest of its own floor, the retention floor and its off-box watermark: the position, in bytes of the cluster log, up to which the log is durably stored off every host of the cluster. The watermark is a file on the member (`<clusterDir>/retention/offbox-watermark`) written by a command run on that member's host; this jar carries it:
+
+```
+java -cp match-cluster.jar com.openexchange.cluster.OffBoxWatermarkTool set --cluster-dir <dir> --engine match --cluster-id <n> --genesis-id <g> --log-position-bytes <p> --source <name>
+```
+
+`release`, `show` and `clear` are the other commands; the file format, the states and the exit codes are in the cluster-kit README. A lost, invalid or foreign watermark, or one above the member's commit position, holds the whole log: there is no wait and no give-up, only a correct `set` or an operator's `release`. `/ready` stays 200 while a member holds; the hold is the pruner's error, a CRITICAL line on every purge pass, and the gauges `match_retention_offbox_mode`, `match_retention_offbox_state`, `match_retention_offbox_position_bytes`, `match_retention_offbox_held_bytes`, `match_retention_offbox_age_ms` and `match_retention_offbox_released_bytes`. The file must carry `engine=match`, the member's cluster id and the `genesisId` of its recorded `EngineConfig` (the ME epoch). A behaviour 1 config records no genesis id, so under `required` a behaviour 1 cluster is unbound and holds its log for ever: `required` needs behaviour 2 or more.
+
+Turn it on only when every member runs a build that knows the setting: write the watermark on every member, then restart each with `RETENTION_OFFBOX=required`. To turn it off, `clear` the file on the member and restart with `off`; `off` with a file present refuses the start (exit 1).
+
+#### ME journal retention
+
+The ME journal archive is purged by a command, keyed by what its readers have applied:
+
+```
+java -cp match-cluster.jar com.match.infrastructure.journal.JournalRetention --journal-node-dir <SETTLEMENT_JOURNAL_DIR>/node<N> --aeron-dir <dir> --archive-control-port <port> --me-epoch <int64> --applied-journal-seq <int64> [--dry-run]
+```
+
+The two numbers mean: every reader that needs this journal has durably applied every record of epoch `--me-epoch` with `journalSeq` at or below `--applied-journal-seq` (the core reports both as its bound `meEpoch` and `lastAppliedJournalSeq`; with several readers pass the lowest). The tool purges whole segments of the active recording below the newest checkpoint at or below that cursor and keeps two whole segments below the head. Positional arguments are refused: the earlier form took one bare number in another unit.
+
+Nothing is purged, with exit 65, when `--applied-journal-seq` is below 1 or `--me-epoch` is 0, when the journal's head file (`journal-head.dat`) or checkpoint sidecar (`journal-checkpoints-v2.dat`) is missing or damaged, when the epoch differs from the journal's, or when the applied value is above the journal head (a number in the wrong unit, or a stale head file). Exit 64 is a usage error, exit 1 a runtime failure (archive unreachable), exit 0 a purge or nothing to purge. A journal written at behaviour 1 has no epoch and no `journalSeq` and cannot be purged with this tool. The writer creates both files with its first record after an upgrade; until then the tool refuses. `journal-checkpoints.dat` of earlier builds is no longer written or read.
 
 ## Load testing
 
