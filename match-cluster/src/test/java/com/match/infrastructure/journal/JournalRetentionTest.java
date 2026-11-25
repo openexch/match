@@ -3,106 +3,20 @@ package com.match.infrastructure.journal;
 
 import org.junit.Test;
 
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
-
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 /**
- * Pure-logic guardrails for {@link JournalRetention}'s safety contract. The position/watermark math is
- * factored into static methods so it is provable without a live archive:
- * <ul>
- *   <li>candidate = highest checkpoint position strictly below the watermark;</li>
- *   <li>candidate selection is confined to the ACTIVE incarnation (positions reset across incarnations);</li>
- *   <li>the purge target always keeps at least two whole segments below the recording head;</li>
- *   <li>the non-positive-watermark and no-qualifying-checkpoint cases purge nothing.</li>
- * </ul>
- * A real-archive proof that {@code purgeSegments} actually removes files and replay from the new start
- * still works lives in {@code JournalRetentionIntegrationTest}.
+ * The purge-target math of {@link JournalRetention}: the target is a segment base, at least two whole segments stay
+ * below the recording head, and a candidate that cannot belong to the recording purges nothing. The selection by
+ * {@code (meEpoch, journalSeq)} and the refusals are in {@code JournalRetentionUnitsTest}; the real-archive proof is
+ * {@code JournalRetentionIntegrationTest}.
  */
 public class JournalRetentionTest {
 
     // Readable, power-of-two segment geometry for the math (production uses 64MB/64MB).
     private static final int TERM = 64;
     private static final int SEG = 64;
-
-    private static List<long[]> cp(final long... egressThenPositionPairs) {
-        final List<long[]> out = new ArrayList<>();
-        for (int i = 0; i < egressThenPositionPairs.length; i += 2) {
-            out.add(new long[] {egressThenPositionPairs[i], egressThenPositionPairs[i + 1]});
-        }
-        return out;
-    }
-
-    // ---- candidate selection: highest position strictly below the watermark ----
-
-    @Test
-    public void selectCandidate_picksHighestPositionBelowWatermark() {
-        // egressSeq, position pairs (one incarnation, monotonic in both).
-        final List<long[]> checkpoints = cp(
-                100, 0,
-                200, 64,
-                300, 128,
-                400, 192);
-        // watermark 350 -> qualifying egress {100,200,300}, highest position among them = 128.
-        assertEquals(128, JournalRetention.selectCandidatePosition(checkpoints, 0, 350));
-    }
-
-    @Test
-    public void selectCandidate_watermarkIsStrict_excludesEqualEgress() {
-        final List<long[]> checkpoints = cp(100, 0, 200, 64, 300, 128);
-        // watermark == 200 must NOT include the egress==200 checkpoint (strict <).
-        assertEquals(0, JournalRetention.selectCandidatePosition(checkpoints, 0, 200));
-    }
-
-    @Test
-    public void selectCandidate_noneBelowWatermark_returnsMinusOne() {
-        final List<long[]> checkpoints = cp(500, 0, 600, 64);
-        assertEquals(-1, JournalRetention.selectCandidatePosition(checkpoints, 0, 100));
-    }
-
-    @Test
-    public void selectCandidate_honoursFromIndex_ignoresOlderIncarnation() {
-        // Two incarnations in one file; positions reset at index 2. The active-suffix start is 2, so a
-        // low-egress OLD-incarnation checkpoint at a high position (900,192) must be ignored.
-        final List<long[]> checkpoints = cp(
-                100, 64,
-                900, 192,   // old incarnation, high position but old egress
-                1000, 0,    // new incarnation begins (position reset)
-                1100, 64,
-                1200, 128);
-        // From index 2 with watermark 1150 -> qualifying {1000@0, 1100@64}; highest position = 64.
-        assertEquals(64, JournalRetention.selectCandidatePosition(checkpoints, 2, 1150));
-    }
-
-    // ---- active-incarnation suffix detection (positions reset across incarnations) ----
-
-    @Test
-    public void activeSuffixStartIndex_singleIncarnation_isZero() {
-        final List<long[]> checkpoints = cp(100, 0, 200, 64, 300, 128);
-        assertEquals(0, JournalRetention.activeSuffixStartIndex(checkpoints));
-    }
-
-    @Test
-    public void activeSuffixStartIndex_findsLastResetBoundary() {
-        // Position drops at index 2 (0<128) and again at index 4 (0<64): active run starts at 4.
-        final List<long[]> checkpoints = cp(
-                100, 0,
-                200, 128,
-                300, 0,
-                400, 64,
-                500, 0,
-                600, 64);
-        assertEquals(4, JournalRetention.activeSuffixStartIndex(checkpoints));
-    }
-
-    @Test
-    public void activeSuffixStartIndex_emptyAndSingle() {
-        assertEquals(0, JournalRetention.activeSuffixStartIndex(new ArrayList<>()));
-        assertEquals(0, JournalRetention.activeSuffixStartIndex(cp(42, 0)));
-    }
 
     // ---- purge-target math: keep >= 2 whole segments below the recording head ----
 
@@ -157,14 +71,5 @@ public class JournalRetentionTest {
         // keepTwoWholeSegments = 6*seg - 2*seg = 4*seg; candidate (3*seg) is the tighter bound.
         final long target = JournalRetention.computePurgeTarget(0, recordingPosition, candidate, seg, seg);
         assertEquals(3L * seg, target);
-    }
-
-    // ---- rule 1: a non-positive watermark purges nothing (no archive touched) ----
-
-    @Test
-    public void purgeBelow_nonPositiveWatermark_isNoOpWithoutArchive() {
-        // safeEgressSeq <= 0 returns before touching the archive, so a null archive is safe here.
-        assertEquals(0, JournalRetention.purgeBelow(null, Path.of("/nonexistent-journal-dir"), 0));
-        assertEquals(0, JournalRetention.purgeBelow(null, Path.of("/nonexistent-journal-dir"), -5));
     }
 }

@@ -79,6 +79,10 @@ public class AeronCluster {
         }
 
         clusterConfig.baseDir(getBaseDir(nodeId));
+        // RETENTION_OFFBOX=off with an off-box watermark file in the cluster directory refuses the start (the
+        // lifecycle prints the line and exits 1): a setting that was lost must not turn a bounded purge into an
+        // unbounded one.
+        com.openexchange.cluster.OffBoxWatermark.checkBoot(clusterConfig.consensusModuleContext().clusterDir());
 
         // Route Aeron driver/archive/consensus/service errors to the application logger so
         // operators see them in node{N}.log instead of just the cluster mark file. Without

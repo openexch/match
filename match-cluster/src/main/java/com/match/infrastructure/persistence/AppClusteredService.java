@@ -257,7 +257,15 @@ public class AppClusteredService implements ClusteredService {
     private final com.openexchange.cluster.SnapshotCadence snapshotCadence =
             com.openexchange.cluster.SnapshotCadence.fromEnv();
     // ...and what turns the snapshot into reclaimed disk on THIS node.
-    private com.openexchange.cluster.SnapshotLogPruner logPruner;
+    private volatile com.openexchange.cluster.SnapshotLogPruner logPruner;
+    /**
+     * The recorded EngineConfig genesisId (the ME epoch), published by the service thread for the pruner thread:
+     * the identity the off-box watermark file must carry. 0 while no config with a genesis id is recorded
+     * (behaviour 1), which leaves a required off-box watermark unbound and the log held.
+     */
+    private volatile long publishedGenesisId;
+    /** Test seam: the off-box retention mode of this member instead of the process setting (one JVM, three members). */
+    com.openexchange.cluster.OffBoxWatermark.Mode offBoxModeOverride;
 
     // Lazy-initialized AeronArchive client used to confirm snapshot recordings are durable
     // before onTakeSnapshot returns. See awaitSnapshotRecorded() for the full reasoning.
@@ -710,7 +718,10 @@ public class AppClusteredService implements ClusteredService {
                         .reportWatermark(
                                 com.openexchange.cluster.ClusterMemberPositions.from(
                                         cluster.aeron(), cluster.context()),
-                                () -> isLeader);
+                                () -> isLeader)
+                        // The off-box bound: one more minimum on top of the retention floor (RETENTION_OFFBOX,
+                        // default off: no bound). Under required it needs a recorded genesis id, so behaviour 2+.
+                        .offBoxWatermark(offBoxWatermark(cluster.context().clusterDir(), clusterId));
                 logPruner.start();
             } else {
                 System.out.println("[PRUNE] disabled by SNAPSHOT_PRUNE_ENABLED=false — "
@@ -723,6 +734,27 @@ public class AppClusteredService implements ClusteredService {
             System.err.println("SERVICE CRITICAL: snapshot cadence/log pruner did not start — "
                     + "this cluster will not snapshot or reclaim disk on its own: " + e);
             e.printStackTrace();
+        }
+    }
+
+    /** This member's off-box watermark: engine match, its cluster id, and the genesis id the service thread publishes. */
+    private com.openexchange.cluster.OffBoxWatermark offBoxWatermark(final java.io.File clusterDir, final int clusterId) {
+        final java.util.function.LongSupplier genesis = () -> publishedGenesisId;
+        return offBoxModeOverride == null
+                ? new com.openexchange.cluster.OffBoxWatermark(clusterDir,
+                        com.openexchange.cluster.OffBoxWatermark.ENGINE_MATCH, clusterId, genesis)
+                : new com.openexchange.cluster.OffBoxWatermark(clusterDir,
+                        com.openexchange.cluster.OffBoxWatermark.ENGINE_MATCH, clusterId, genesis, offBoxModeOverride,
+                        com.openexchange.cluster.OffBoxWatermark.DEFAULT_ALARM_BYTES,
+                        com.openexchange.cluster.OffBoxWatermark.DEFAULT_STALE_MS);
+    }
+
+    /** Service thread: publish the recorded genesis id when it changed (a FRESH config, a restore). */
+    private void publishGenesisId() {
+        final com.match.application.engine.EngineConfigState config = engine.getEngineConfig();
+        final long recorded = config == null ? 0L : config.genesisId;
+        if (recorded != publishedGenesisId) {
+            publishedGenesisId = recorded;
         }
     }
 
@@ -1026,6 +1058,13 @@ public class AppClusteredService implements ClusteredService {
                             + "during a single-session blackout while match_last_egress_age_ms stays "
                             + "healthy (-1 = no session has delivered yet; match#140)",
                             () -> egressSessionMetrics.maxSessionOfferAgeMs(System.currentTimeMillis()));
+            for (final com.openexchange.cluster.OffBoxWatermark.Gauge g
+                    : com.openexchange.cluster.OffBoxWatermark.Gauge.values()) {
+                metricsServer.gauge("match_" + g.metricName(), g.help(), () -> {
+                    final com.openexchange.cluster.SnapshotLogPruner p = logPruner;
+                    return g.read(p == null ? null : p.offBoxWatermark());
+                });
+            }
             // One port, three answers. The metrics registry stays where it is;
             // the endpoint just renders it alongside the probes.
             nodeEndpoint = new com.openexchange.cluster.NodeEndpoint(readiness, metricsServer::render)
@@ -2185,6 +2224,7 @@ public class AppClusteredService implements ClusteredService {
 
     @Override
     public int doBackgroundWork(final long nowNs) {
+        publishGenesisId();
         if (applicationCallbackDepth != 0 || applicationCallbackFailed) {
             readiness.tick();
             if (applicationCallbackFailed) { readiness.unavailable("application-callback-failed"); }

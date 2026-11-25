@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.match.infrastructure.journal;
 
-import com.match.infrastructure.mejournal.generated.TradeDecoder;
+import com.match.application.engine.MeIdentityTestAccess;
 import com.match.infrastructure.mejournal.generated.MessageHeaderDecoder;
-import io.aeron.Aeron;
+import com.match.infrastructure.mejournal.generated.TradeDecoder;
 import io.aeron.Subscription;
 import io.aeron.archive.Archive;
 import io.aeron.archive.ArchiveThreadingMode;
@@ -15,39 +15,39 @@ import org.agrona.CloseHelper;
 import org.agrona.IoUtil;
 import org.agrona.concurrent.AgentRunner;
 import org.agrona.concurrent.BusySpinIdleStrategy;
-import org.agrona.concurrent.UnsafeBuffer;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 /**
- * Real-archive proof that {@link JournalRetention#purgeBelow} actually reclaims segment files on a LIVE
- * recording and that replay from the new start position still works and loses nothing at or above the
- * watermark. Mirrors {@link JournalWriterIntegrationTest}'s embedded setup (random tmp media driver +
- * temp archive dir + high test-only control port), scaled up to write &gt; 2 small (64k) segments so
- * there is something to purge.
+ * The retention command against a real journal archive: a live recording written by the real writer agent
+ * (64 KiB segments), purged by {@code (meEpoch, appliedJournalSeq)}, and replayed afterwards. The property: after a
+ * purge every record with {@code journalSeq > applied} is still replayable from the recording's new start.
  *
- * <p>The money-safety property under test: after purging below {@code safeEgressSeq}, EVERY journal
- * entry whose egressSeq is at/above the watermark is still replayable (none were deleted), while
- * low-egressSeq segments below it were physically removed.
+ * <p>The writer is restarted in the middle. The new incarnation records on a new recording whose positions start
+ * again at 0; a run that arrives before that recording has a checkpoint purges nothing, and later runs select only
+ * the new recording's checkpoints.</p>
  */
 public class JournalRetentionIntegrationTest {
 
     private static final int TEST_CONTROL_PORT = 18920;
     private static final int TEST_STREAM_ID = 4001;
     private static final String TEST_CHANNEL = "aeron:ipc?term-length=64k";
-    private static final int SEGMENT_LENGTH = 64 * 1024; // 64k: many small segments from a modest write
-
-    private static final int TRADES = 3200;   // ~6 segments at ~128 bytes/fragment
-    private static final long WATERMARK = 1500; // purge egressSeq < 1500; keep 1500..TRADES
+    private static final int SEGMENT_LENGTH = 64 * 1024;
+    private static final long EPOCH = 7_700_000_001L;
 
     private Path tmpDir;
     private MediaDriver driver;
@@ -55,6 +55,7 @@ public class JournalRetentionIntegrationTest {
     private AgentRunner writerRunner;
     private SettlementJournal journal;
     private JournalWriterAgent agent;
+    private long written;
 
     @Before
     public void setUp() throws Exception {
@@ -76,12 +77,18 @@ public class JournalRetentionIntegrationTest {
                 .segmentFileLength(SEGMENT_LENGTH));
 
         journal = new SettlementJournal(1 << 18);
+        journal.bindIdentity(MeIdentityTestAccess.restored(EPOCH, 2, 2));
+        startWriter();
+    }
+
+    private void startWriter() {
         agent = new JournalWriterAgent(
                 journal.ringBuffer(),
                 this::clientContext,
                 TEST_CHANNEL,
                 TEST_STREAM_ID,
-                new JournalCheckpointFile(tmpDir),
+                new JournalSidecarV2(tmpDir),
+                new JournalHeadFile(tmpDir),
                 SEGMENT_LENGTH);
         writerRunner = new AgentRunner(new BusySpinIdleStrategy(),
                 Throwable::printStackTrace, null, agent);
@@ -102,90 +109,169 @@ public class JournalRetentionIntegrationTest {
         IoUtil.delete(tmpDir.toFile(), true);
     }
 
-    @Test
-    public void purgesLowSegmentsAndKeepsEverythingAtOrAboveWatermark() throws Exception {
-        // Write enough trades (egressSeq == tradeId == i) to span several 64k segments.
-        for (int i = 1; i <= TRADES; i++) {
-            journal.appendTrade(0L, i, i, 1, 11L, 900_001L, 22L, 900_002L, 1_000L, 1L, true, i, 7_011L, 7_022L);
-        }
-        final long drainDeadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(30);
-        while (agent.writtenEntries() < TRADES) {
-            assertTrue("writer did not drain " + TRADES + " entries in time",
-                    System.currentTimeMillis() < drainDeadline);
-            Thread.sleep(5);
-        }
-
-        final File archiveDir = new File(tmpDir.toFile(), "archive");
-        final int segmentsBefore = countSegmentFiles(archiveDir);
-        assertTrue("test must produce > 2 segments to be meaningful (got " + segmentsBefore + ")",
-                segmentsBefore > 2);
-
-        // Purge below the watermark through a fresh client — the same access pattern the admin CLI uses.
-        final long bytesReclaimed;
-        try (AeronArchive purgeArchive = AeronArchive.connect(clientContext())) {
-            bytesReclaimed = JournalRetention.purgeBelow(purgeArchive, tmpDir, WATERMARK);
-        }
-        assertTrue("expected some bytes reclaimed, got " + bytesReclaimed, bytesReclaimed > 0);
-
-        final int segmentsAfter = countSegmentFiles(archiveDir);
-        assertTrue("segment files must decrease (" + segmentsBefore + " -> " + segmentsAfter + ")",
-                segmentsAfter < segmentsBefore);
-
-        // Replay from the recording's NEW start position and prove nothing >= WATERMARK was lost.
-        try (AeronArchive replayArchive = AeronArchive.connect(clientContext())) {
-            final long[] recId = {Aeron.NULL_VALUE};
-            final long[] newStart = {0};
-            replayArchive.listRecordingsForUri(0, 16, "aeron:ipc", TEST_STREAM_ID,
-                    (controlSessionId, correlationId, id, startTimestamp, stopTimestamp, startPosition,
-                     stopPosition, initialTermId, segmentFileLength, termBufferLength, mtuLength,
-                     sessionId, streamId, strippedChannel, originalChannel, sourceIdentity) -> {
-                        recId[0] = id;
-                        newStart[0] = startPosition;
-                    });
-            assertTrue("recording must still exist", recId[0] != Aeron.NULL_VALUE);
-            assertTrue("start position must have advanced past 0 after purge", newStart[0] > 0);
-
-            final int[] countAtOrAboveWatermark = {0};
-            final long[] maxEgress = {-1};
-            final MessageHeaderDecoder header = new MessageHeaderDecoder();
-            final TradeDecoder trade = new TradeDecoder();
-            final FragmentHandler handler = (buffer, offset, length, hdr) -> {
-                final UnsafeBuffer copy = new UnsafeBuffer(new byte[length]);
-                buffer.getBytes(offset, copy, 0, length);
-                header.wrap(copy, 0);
-                if (header.templateId() == TradeDecoder.TEMPLATE_ID) {
-                    trade.wrap(copy, header.encodedLength(), header.blockLength(), header.version());
-                    final long egress = trade.egressSeq();
-                    if (egress >= WATERMARK) {
-                        countAtOrAboveWatermark[0]++;
-                    }
-                    if (egress > maxEgress[0]) {
-                        maxEgress[0] = egress;
-                    }
-                }
-            };
-
-            try (Subscription replay = replayArchive.replay(
-                    recId[0], newStart[0], Long.MAX_VALUE, "aeron:ipc?term-length=64k", 9101)) {
-                final long replayDeadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(20);
-                // Replay is ordered from newStart; the tail entry is egressSeq == TRADES.
-                while (maxEgress[0] < TRADES && System.currentTimeMillis() < replayDeadline) {
-                    if (replay.poll(handler, 64) == 0) {
-                        Thread.sleep(1);
-                    }
+    /**
+     * Appends trades with journalSeq {@code written + 1 .. upTo} (egressSeq far above, as a log position is) and
+     * waits until the current writer has offered them all. On the way the head file is never ahead of what was
+     * appended.
+     */
+    private void writeUpTo(final long upTo) throws InterruptedException {
+        final long before = agent.writtenEntries();
+        final long first = written + 1;
+        for (long s = first; s <= upTo; s++) {
+            journal.appendTrade(s, 50_000_000L + s * 4_096, s, 1, 11L, 900_001L, 22L, 900_002L, 1_000L, 1L, true,
+                    s, 7_011L, 7_022L);
+            written = s;
+            if (s % 97 == 0) {
+                final JournalHeadFile.Head head = JournalHeadFile.read(tmpDir);
+                if (head != null && head.journalSeq() > written) {
+                    throw new AssertionError("the head file is ahead of the journal: head journalSeq "
+                            + head.journalSeq() + ", appended " + written);
                 }
             }
-
-            assertEquals("the tail entry (egressSeq == TRADES) must survive the purge",
-                    TRADES, maxEgress[0]);
-            // Every entry with egressSeq in [WATERMARK, TRADES] must still be replayable — none purged.
-            assertEquals("no entry at/above the watermark may be purged",
-                    (int) (TRADES - WATERMARK + 1), countAtOrAboveWatermark[0]);
+        }
+        final long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(30);
+        while (agent.writtenEntries() < before + (upTo - first + 1)) {
+            assertTrue("writer did not drain up to journalSeq " + upTo, System.currentTimeMillis() < deadline);
+            Thread.sleep(5);
         }
     }
 
-    private static int countSegmentFiles(final File archiveDir) {
-        final File[] files = archiveDir.listFiles((dir, name) -> name.endsWith(".rec"));
-        return files == null ? 0 : files.length;
+    private int run(final ByteArrayOutputStream err, final String... args) {
+        return JournalRetention.run(args, System.out, new PrintStream(err));
+    }
+
+    private int retention(final long epoch, final long applied, final String... more) {
+        final List<String> args = new ArrayList<>(List.of("--journal-node-dir", tmpDir.toString(), "--aeron-dir",
+                driver.aeronDirectoryName(), "--archive-control-port", Integer.toString(TEST_CONTROL_PORT),
+                "--me-epoch", Long.toString(epoch), "--applied-journal-seq", Long.toString(applied)));
+        args.addAll(List.of(more));
+        return run(new ByteArrayOutputStream(), args.toArray(new String[0]));
+    }
+
+    /** {@code {recordingId, startPosition, stopPosition}} of every journal recording, in catalog order. */
+    private List<long[]> recordings() {
+        final List<long[]> out = new ArrayList<>();
+        try (AeronArchive client = AeronArchive.connect(clientContext())) {
+            client.listRecordingsForUri(0, 16, "aeron:ipc", TEST_STREAM_ID,
+                    (controlSessionId, correlationId, id, startTimestamp, stopTimestamp, startPosition,
+                     stopPosition, initialTermId, segmentFileLength, termBufferLength, mtuLength,
+                     sessionId, streamId, strippedChannel, originalChannel, sourceIdentity) ->
+                            out.add(new long[] {id, startPosition, stopPosition}));
+        }
+        return out;
+    }
+
+    /** The journalSeqs replayable from {@code recording}'s start position up to {@code lastSeq}, in order. */
+    private List<Long> replay(final long[] recording, final long lastSeq) throws InterruptedException {
+        final List<Long> seqs = new ArrayList<>();
+        final MessageHeaderDecoder header = new MessageHeaderDecoder();
+        final TradeDecoder trade = new TradeDecoder();
+        final FragmentHandler handler = (buffer, offset, length, hdr) -> {
+            header.wrap(buffer, offset);
+            assertEquals(TradeDecoder.TEMPLATE_ID, header.templateId());
+            trade.wrap(buffer, offset + header.encodedLength(), header.blockLength(), header.version());
+            assertEquals(EPOCH, trade.meEpoch());
+            seqs.add(trade.journalSeq());
+        };
+        try (AeronArchive client = AeronArchive.connect(clientContext());
+             Subscription replay = client.replay(recording[0], recording[1], Long.MAX_VALUE,
+                     "aeron:ipc?term-length=64k", 9101)) {
+            final long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(20);
+            while ((seqs.isEmpty() || seqs.get(seqs.size() - 1) < lastSeq) && System.currentTimeMillis() < deadline) {
+                if (replay.poll(handler, 64) == 0) {
+                    Thread.sleep(1);
+                }
+            }
+        }
+        return seqs;
+    }
+
+    /** Every record above {@code applied} up to {@code lastSeq} is replayable, contiguous, from the new start. */
+    private void assertEverythingAboveIsReplayable(final long[] recording, final long applied, final long lastSeq)
+            throws InterruptedException {
+        final List<Long> seqs = replay(recording, lastSeq);
+        assertTrue("the replay returned records", !seqs.isEmpty());
+        assertEquals("the tail record survives", lastSeq, (long) seqs.get(seqs.size() - 1));
+        for (int i = 1; i < seqs.size(); i++) {
+            assertEquals("contiguous journalSeq in the replay", seqs.get(i - 1) + 1, (long) seqs.get(i));
+        }
+        if (seqs.get(0) > applied + 1) {
+            throw new AssertionError("purged records above the applied journalSeq: the replay starts at journalSeq "
+                    + seqs.get(0) + ", applied " + applied);
+        }
+    }
+
+    @Test
+    public void purgesByAppliedJournalSeqAndKeepsEveryRecordAboveItAcrossAWriterRestart() throws Exception {
+        // 1. the first incarnation: about five segments
+        writeUpTo(2_400);
+        final long[] first = recordings().get(0);
+        assertEquals("one live recording", AeronArchive.NULL_POSITION, first[2]);
+        final JournalHeadFile.Head head = JournalHeadFile.read(tmpDir);
+        assertNotNull(head);
+        assertEquals(EPOCH, head.meEpoch());
+        assertEquals(first[0], head.recordingId());
+        assertTrue("the head is not ahead of the journal: " + head, head.journalSeq() <= 2_400);
+        final List<JournalSidecarV2.Checkpoint> checkpoints = JournalSidecarV2.readAll(tmpDir).checkpoints;
+        assertTrue("one checkpoint per segment: " + checkpoints.size(), checkpoints.size() > 3);
+        for (final JournalSidecarV2.Checkpoint c : checkpoints) {
+            assertEquals(first[0], c.recordingId());
+            assertEquals(EPOCH, c.meEpoch());
+            assertEquals("the checkpoint carries the frame's own numbers", 50_000_000L + c.journalSeq() * 4_096,
+                    c.egressSeq());
+        }
+
+        // the form this tool had before is a usage error and purges nothing
+        final ByteArrayOutputStream oldForm = new ByteArrayOutputStream();
+        assertEquals("the old positional invocation exits 64", 64, run(oldForm, tmpDir.toString(),
+                driver.aeronDirectoryName(), Integer.toString(TEST_CONTROL_PORT), "1500"));
+        assertTrue(oldForm.toString(), oldForm.toString().contains("positional arguments are no longer accepted"));
+        // wrong units and a wrong epoch are refused, a dry run purges nothing
+        assertEquals(65, retention(EPOCH, 50_000_000L + 1_500L * 4_096));
+        assertEquals(65, retention(EPOCH - 1, 1_500));
+        assertEquals(0, retention(EPOCH, 1_500, "--dry-run"));
+        assertEquals("nothing was purged so far", 0, recordings().get(0)[1]);
+
+        // the purge
+        assertEquals(0, retention(EPOCH, 1_500));
+        final long[] purged = recordings().get(0);
+        assertTrue("the start position advanced: " + purged[1], purged[1] > 0);
+        assertEquals(0, purged[1] % SEGMENT_LENGTH);
+        assertEverythingAboveIsReplayable(purged, 1_500, 2_400);
+        // the same run again finds nothing more
+        assertEquals(0, retention(EPOCH, 1_500));
+        assertEquals(purged[1], recordings().get(0)[1]);
+
+        // 2. the writer restarts: a new recording, positions from 0 again
+        CloseHelper.quietClose(writerRunner);
+        startWriter();
+        // a run before the new recording has a checkpoint: nothing qualifies, nothing is purged, exit 0
+        assertEquals(0, retention(EPOCH, 2_300));
+        writeUpTo(6_000);
+        final List<long[]> both = recordings();
+        assertEquals("two recordings: " + both.size(), 2, both.size());
+        final long[] stopped = both.get(0);
+        final long[] active = both.get(1);
+        assertTrue("the first incarnation's recording is stopped", stopped[2] != AeronArchive.NULL_POSITION);
+        assertEquals("the new recording starts at 0", 0, active[1]);
+        assertEquals(active[0], JournalHeadFile.read(tmpDir).recordingId());
+
+        // a cursor inside the stopped recording qualifies no checkpoint of the active one
+        assertEquals(0, retention(EPOCH, 2_390));
+        assertEquals(0, recordings().get(1)[1]);
+
+        // a cursor inside the active recording purges it, by its own checkpoints only
+        assertEquals(0, retention(EPOCH, 4_800));
+        final long[] activePurged = recordings().get(1);
+        assertTrue("the active recording's start advanced: " + activePurged[1], activePurged[1] > 0);
+        assertEverythingAboveIsReplayable(activePurged, 4_800, 6_000);
+        assertEquals("the stopped recording is left as it was", stopped[1], recordings().get(0)[1]);
+
+        // an unreachable archive is a runtime failure, not a refusal
+        final ByteArrayOutputStream unreachable = new ByteArrayOutputStream();
+        assertEquals(1, run(unreachable, "--journal-node-dir", tmpDir.toString(), "--aeron-dir",
+                driver.aeronDirectoryName(), "--archive-control-port", Integer.toString(TEST_CONTROL_PORT + 7),
+                "--me-epoch", Long.toString(EPOCH), "--applied-journal-seq", "4800"));
+        assertTrue(unreachable.toString(), unreachable.toString().contains("FAILED"));
     }
 }

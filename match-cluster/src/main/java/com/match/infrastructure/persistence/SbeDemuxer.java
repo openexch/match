@@ -283,8 +283,14 @@ public class SbeDemuxer {
         // supported version exceeds the recorded ceiling must still journal INVALID, exactly
         // like the members still at the ceiling. Cost on the hot path: one field
         // read and a null check (no config recorded) or a behaviour compare.
+        // The schema id first (another schema never reaches the ceiling rule), then the shared wire gate: above the
+        // recorded ceiling, then this jar's range.
+        final com.openexchange.cluster.WireCeiling.Verdict verdict = schemaId != EXPECTED_SCHEMA_ID
+                ? com.openexchange.cluster.WireCeiling.Verdict.DROP_OUT_OF_RANGE
+                : com.openexchange.cluster.WireCeiling.gate(version, recordedCeiling(), MIN_SUPPORTED_SCHEMA_VERSION,
+                        maxSupportedVersion);
         boolean aboveCeiling = false;
-        if (schemaId == EXPECTED_SCHEMA_ID && aboveRecordedCeiling(version)) {
+        if (verdict == com.openexchange.cluster.WireCeiling.Verdict.DROP_ABOVE_CEILING) {
             if (headerDecoder.templateId()
                     != com.match.infrastructure.generated.DurableOrderCommandDecoder.TEMPLATE_ID) {
                 final long n = ++aboveCeilingDropCount;
@@ -297,9 +303,7 @@ public class SbeDemuxer {
             }
             aboveCeiling = true;
         }
-        if (!aboveCeiling && (schemaId != EXPECTED_SCHEMA_ID
-                || version < MIN_SUPPORTED_SCHEMA_VERSION
-                || version > maxSupportedVersion)) {
+        if (verdict == com.openexchange.cluster.WireCeiling.Verdict.DROP_OUT_OF_RANGE) {
             final long n = ++schemaRejectCount;
             if (shouldLogReject(n)) {
                 System.err.println("INGRESS DROP (schema): dropping frame schemaId=" + schemaId
@@ -684,10 +688,13 @@ public class SbeDemuxer {
         }
     }
 
-    /** A recorded behaviour >= 2 config exists and {@code version} is above its ceiling. */
-    private boolean aboveRecordedCeiling(final int version) {
+    /**
+     * The ceiling the wire gate reads: the recorded {@code maxWireVersion} of a behaviour >= 2 config, 0 (the rule is
+     * off) when no config is recorded or the recorded behaviour is 1.
+     */
+    private long recordedCeiling() {
         final com.match.application.engine.EngineConfigState recorded = engine.getEngineConfig();
-        return recorded != null && recorded.behaviorVersion >= 2 && version > recorded.maxWireVersion;
+        return recorded != null && recorded.behaviorVersion >= 2 ? recorded.maxWireVersion : 0L;
     }
 
     /** Scrapeable (match_ingress_above_ceiling_invalid_total): template-9 frames above the

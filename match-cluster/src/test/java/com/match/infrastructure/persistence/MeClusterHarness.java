@@ -62,6 +62,13 @@ final class MeClusterHarness implements AutoCloseable {
     /** Consensus-module session timeout of every member (set before {@link #startAll}). */
     volatile long sessionTimeoutMs = 30_000;
     final Member[] members = new Member[MEMBERS];
+    /** The members' archive segment length and log term length; a test that needs purges sets both small before start. */
+    int segmentFileLength = 4 * 1024 * 1024;
+    String logTermLength = "1m";
+    /** Runs on each new service before its ClusterConfig is built (test seams of the service). */
+    java.util.function.BiConsumer<Member, AppClusteredService> beforeLaunch = (m, s) -> { };
+    /** Runs on each member's ClusterConfig before the launch (an appointed leader, for example). */
+    java.util.function.Consumer<Member> afterConfig = m -> { };
     private final MediaDriver clientDriver;
     private final Thread drainer;
     private volatile boolean running = true;
@@ -131,6 +138,7 @@ final class MeClusterHarness implements AutoCloseable {
             s.failFast = failFast::incrementAndGet; // never halt the test JVM
             final SettlementJournal j = new SettlementJournal(4 << 20);
             s.setSettlementJournal(j);
+            beforeLaunch.accept(this, s);
             cfg = ClusterConfig.create(id, HOSTS, HOSTS, portBase, s);
             cfg.baseDir(baseDir());
             cfg.aeronDirectoryName(driverDir());
@@ -140,16 +148,17 @@ final class MeClusterHarness implements AutoCloseable {
                     System.err.println("[ME3] member " + id + " Aeron error: " + t);
                 }
             });
-            cfg.archiveContext().segmentFileLength(4 * 1024 * 1024);
+            cfg.archiveContext().segmentFileLength(segmentFileLength);
             cfg.consensusModuleContext()
                     .ingressChannel(INGRESS)
-                    .logChannel("aeron:udp?term-length=1m")
+                    .logChannel("aeron:udp?term-length=" + logTermLength)
                     .leaderHeartbeatIntervalNs(TimeUnit.MILLISECONDS.toNanos(100))
                     .leaderHeartbeatTimeoutNs(TimeUnit.SECONDS.toNanos(1))
                     .electionTimeoutNs(TimeUnit.SECONDS.toNanos(1))
                     .startupCanvassTimeoutNs(TimeUnit.SECONDS.toNanos(2))
                     .terminationTimeoutNs(TimeUnit.SECONDS.toNanos(2))
                     .sessionTimeoutNs(TimeUnit.MILLISECONDS.toNanos(sessionTimeoutMs));
+            afterConfig.accept(this);
             driver = ClusteredMediaDriver.launch(
                     cfg.mediaDriverContext().dirDeleteOnStart(true).dirDeleteOnShutdown(true)
                             .threadingMode(ThreadingMode.SHARED)
@@ -293,6 +302,45 @@ final class MeClusterHarness implements AutoCloseable {
                 throw new AssertionError("no stopPosition for recording " + recordingId + ": " + out);
             }
             return Long.parseLong(m.group(1));
+        }
+
+        /** The start position of this live member's log recording, read from its archive (0 until a purge). */
+        long logStart() {
+            final long recordingId;
+            try (RecordingLog log = new RecordingLog(new File(baseDir(), ClusterConfig.CLUSTER_SUB_DIR), false)) {
+                recordingId = log.findLastTermRecordingId();
+            }
+            try (io.aeron.archive.client.AeronArchive archive = io.aeron.archive.client.AeronArchive.connect(
+                    cfg.aeronArchiveContext().clone().aeronDirectoryName(driverDir()))) {
+                return archive.getStartPosition(recordingId);
+            }
+        }
+
+        /** The log position of this member's newest valid service snapshot, -1 when it has none. */
+        long newestSnapshot() {
+            long newest = -1;
+            try (RecordingLog log = new RecordingLog(new File(baseDir(), ClusterConfig.CLUSTER_SUB_DIR), false)) {
+                for (final RecordingLog.Entry e : log.entries()) {
+                    if (e.type == RecordingLog.ENTRY_TYPE_SNAPSHOT && e.isValid && e.serviceId == 0) {
+                        newest = Math.max(newest, e.logPosition);
+                    }
+                }
+            }
+            return newest;
+        }
+
+        /** The off-box watermark wired into this member's pruner; null while the pruner is not started. */
+        com.openexchange.cluster.OffBoxWatermark offBox() {
+            final com.openexchange.cluster.SnapshotLogPruner p =
+                    (com.openexchange.cluster.SnapshotLogPruner) field("logPruner");
+            return p == null ? null : p.offBoxWatermark();
+        }
+
+        /** The pruner's last error text, or null. */
+        String prunerLastError() {
+            final com.openexchange.cluster.SnapshotLogPruner p =
+                    (com.openexchange.cluster.SnapshotLogPruner) field("logPruner");
+            return p == null ? null : p.lastError();
         }
 
         /** {recorded position of the live log recording, commit position} of a live member. */

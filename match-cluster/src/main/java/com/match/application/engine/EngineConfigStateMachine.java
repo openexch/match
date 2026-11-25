@@ -193,7 +193,7 @@ public final class EngineConfigStateMachine {
             return reject(Decision.REJECTED_CHANGE, "engine-creation values or commandLedgerCapacity"
                     + " differ (runtime reconfig is not in this slice)", recorded, incoming);
         }
-        if (incoming.maxWireVersion < recorded.maxWireVersion) {
+        if (com.openexchange.cluster.WireCeiling.lowers(incoming.maxWireVersion, recorded.maxWireVersion)) {
             return reject(Decision.REJECTED_CEILING_LOWERED, "maxWireVersion " + incoming.maxWireVersion
                     + " below the recorded " + recorded.maxWireVersion + " (the ceiling only rises)",
                     recorded, incoming);
@@ -333,9 +333,10 @@ public final class EngineConfigStateMachine {
                         + " is not supported by this jar (supported bitmask=" + SUPPORTED_BEHAVIOR_VERSIONS_MASK + ")");
             }
             // (b) a jar below the recorded wire ceiling cannot follow the log.
-            if (recorded.behaviorVersion >= 2 && recorded.maxWireVersion > SUPPORTED_MAX_WIRE_VERSION) {
-                failures.add("(b) recorded maxWireVersion=" + recorded.maxWireVersion
-                        + " is above this jar's order-schema version " + SUPPORTED_MAX_WIRE_VERSION);
+            final String jarBelow = recorded.behaviorVersion >= 2 ? com.openexchange.cluster.WireCeiling.jarBelow(
+                    recorded.maxWireVersion, SUPPORTED_MAX_WIRE_VERSION, "order-schema") : null;
+            if (jarBelow != null) {
+                failures.add("(b) " + jarBelow);
             }
             // (c) legacy mode only: today's engine-creation value check.
             if (creationValues && legacyMode) {

@@ -79,7 +79,8 @@ public class JournalWriterIntegrationTest {
                 this::clientContext,
                 TEST_CHANNEL,
                 TEST_STREAM_ID,
-                new JournalCheckpointFile(tmpDir),
+                new JournalSidecarV2(tmpDir),
+                new JournalHeadFile(tmpDir),
                 SEGMENT_LENGTH);
         writerRunner = new AgentRunner(new SleepingMillisIdleStrategy(1),
                 Throwable::printStackTrace, null, agent);

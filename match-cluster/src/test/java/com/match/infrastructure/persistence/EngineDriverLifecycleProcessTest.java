@@ -118,9 +118,10 @@ public class EngineDriverLifecycleProcessTest {
 
     // ---------------------------------------------------------------------------------------------------------------
 
-    private record Exit(int code, long ms) { }
+    record Exit(int code, long ms) { }
 
-    private record Node(Process driver, Process engine, Path logFile, Path base) {
+    /** A member process on its own driver process; also the rig of the other external-driver rows of this package. */
+    record Node(Process driver, Process engine, Path logFile, Path base, Path aeronDir, int probePort) {
         String log() throws IOException {
             return Files.readString(logFile);
         }
@@ -151,6 +152,15 @@ public class EngineDriverLifecycleProcessTest {
                         "SETTLEMENT_JOURNAL_DIR", base.resolve("journal").toString(),
                         "SETTLEMENT_JOURNAL_RING_BYTES", String.valueOf(1 << 20))
                 : Map.of();
+        return startNodeOnDriver(base, extraEnv);
+    }
+
+    /** One member with {@code extraEnv} on a fresh external driver, ready. */
+    Node startNodeOnDriver(final Map<String, String> extraEnv) throws Exception {
+        return startNodeOnDriver(dir("match-driver-"), extraEnv);
+    }
+
+    private Node startNodeOnDriver(final Path base, final Map<String, String> extraEnv) throws Exception {
         final Path aeronDir = shmDir("match-driver-aeron-");
         final Process driver = driver(aeronDir, base.resolve("driver.log"));
         final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
@@ -163,7 +173,7 @@ public class EngineDriverLifecycleProcessTest {
         final Path log = base.resolve("engine.log");
         final Process engine = engine(base, aeronDir, probePort, log, extraEnv);
         awaitReady(engine, probePort, log, 90_000);
-        return new Node(driver, engine, log, base);
+        return new Node(driver, engine, log, base, aeronDir, probePort);
     }
 
     private static String childClasspath() {
@@ -190,7 +200,7 @@ public class EngineDriverLifecycleProcessTest {
         return p;
     }
 
-    private Process engine(final Path base, final Path aeronDir, final int probePort, final Path log,
+    Process engine(final Path base, final Path aeronDir, final int probePort, final Path log,
                            final Map<String, String> extraEnv) throws IOException {
         final List<String> cmd = java();
         cmd.addAll(List.of("-XX:ErrorFile=" + base.resolve("hs_err_pid%p.log"), "-cp", childClasspath(), ENGINE_MAIN));
@@ -236,7 +246,7 @@ public class EngineDriverLifecycleProcessTest {
         throw new AssertionError("no /ready 200 within " + timeoutMs + " ms: " + Files.readString(log));
     }
 
-    private static Exit awaitExit(final Process p, final long boundMs, final long t0) throws Exception {
+    static Exit awaitExit(final Process p, final long boundMs, final long t0) throws Exception {
         final boolean exited = p.waitFor(boundMs, TimeUnit.MILLISECONDS);
         final long ms = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
         if (!exited) {
