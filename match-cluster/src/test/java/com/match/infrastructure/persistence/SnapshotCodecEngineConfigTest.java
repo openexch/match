@@ -102,7 +102,7 @@ public class SnapshotCodecEngineConfigTest {
      */
     @Test
     public void configlessSnapshotIsEnvelopeOneWithAnEmptyLedger() {
-        Engine legacy = new Engine();
+        Engine legacy = com.match.application.engine.TestEngines.withCompiledMarkets();
         assertNull("legacy engine records no config", legacy.getEngineConfig());
 
         ExpandableArrayBuffer b = new ExpandableArrayBuffer();
@@ -117,7 +117,7 @@ public class SnapshotCodecEngineConfigTest {
         assertEquals("v1 ledger version", 1, b.getInt(20 + body + 1));
         assertEquals("v1 ledger count 0", 0, b.getInt(20 + body + 5));
 
-        Engine restored = new Engine();
+        Engine restored = com.match.application.engine.TestEngines.withCompiledMarkets();
         SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(b, 0, len, restored);
         assertFalse("no config block", decoded.engineConfigPresent);
         assertNull(restored.getEngineConfig());
@@ -168,7 +168,7 @@ public class SnapshotCodecEngineConfigTest {
     /** A behaviour-1 image with a non-empty v1 ledger is unchanged (envelope 1). */
     @Test
     public void behaviourOneImageWithANonEmptyLedgerIsUnchanged() {
-        Engine source = new Engine();
+        Engine source = com.match.application.engine.TestEngines.withCompiledMarkets();
         source.commandLedger().record(new com.match.domain.commands.DurableCommandOutcome(
                 new com.match.domain.commands.DurableOrderIntent(17, 1, 100, 9001, 999, 0, 0, 0, 1, 1, 0, 0),
                 0, 1000, 0, -1, 0, false, 4));
@@ -179,7 +179,7 @@ public class SnapshotCodecEngineConfigTest {
                 20 + body + 9 + com.match.application.engine.DurableCommandLedger.RECORD_BYTES, len);
         assertEquals(SnapshotCodec.DURABLE_MAGIC, b.getLong(0));
         assertEquals(SnapshotCodec.ENVELOPE_V1, b.getInt(8));
-        Engine restored = new Engine();
+        Engine restored = com.match.application.engine.TestEngines.withCompiledMarkets();
         SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(b, 0, len, restored);
         assertEquals(1, restored.commandLedger().size());
         assertEquals(len, decoded.bytesConsumed);
@@ -208,10 +208,10 @@ public class SnapshotCodecEngineConfigTest {
         // refused; the same body framed as the current writer frames it (empty v1 ledger, envelope 1) loads.
         final int bareLength = p;
         assertThrows(IllegalStateException.class,
-                () -> SnapshotCodec.deserialize(b, 0, bareLength, new Engine()));
+                () -> SnapshotCodec.deserialize(b, 0, bareLength, com.match.application.engine.TestEngines.withCompiledMarkets()));
         final byte[] image = LaunchModeServices.envelopeV1(Arrays.copyOf(b.byteArray(), p));
 
-        Engine e = new Engine();
+        Engine e = com.match.application.engine.TestEngines.withCompiledMarkets();
         SnapshotCodec.Decoded d = SnapshotCodec.deserialize(new org.agrona.concurrent.UnsafeBuffer(image), 0,
                 image.length, e);
 
@@ -232,7 +232,7 @@ public class SnapshotCodecEngineConfigTest {
     @Test
     public void configBearingSnapshotIntoLegacyEngineRecordsConfigWithoutRecreating() {
         // The recorded config mirrors the compiled table (the dogfood adopt shape).
-        Engine source = new Engine("array");
+        Engine source = com.match.application.engine.TestEngines.withCompiledMarkets("array");
         EngineConfigState.MarketDef[] markets = new EngineConfigState.MarketDef[MarketConfig.ALL_MARKETS.length];
         for (int i = 0; i < MarketConfig.ALL_MARKETS.length; i++) {
             MarketConfig m = MarketConfig.ALL_MARKETS[i];
@@ -246,7 +246,7 @@ public class SnapshotCodecEngineConfigTest {
         ExpandableArrayBuffer b = new ExpandableArrayBuffer();
         source.setTradeIdGenerator(1L); int len = SnapshotCodec.serialize(source, 0L, b);
 
-        Engine restored = new Engine("array");
+        Engine restored = com.match.application.engine.TestEngines.withCompiledMarkets("array");
         com.match.application.orderbook.MatchingEngine before = restored.getEngine(Engine.MARKET_BTC_USD);
         SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(b, 0, len, restored);
 
@@ -259,25 +259,24 @@ public class SnapshotCodecEngineConfigTest {
     }
 
     /**
-     * Cross-mode operator error: a CONFIG-mode node restoring a legacy (config-less) snapshot
-     * that carries resting orders has no engines to restore into and no config to build them
-     * from. The codec still counts the stranded orders (its ERROR line is the diagnosis);
-     * the service refuses the image, fail-fasts once and never serves.
+     * A deferred node restoring a config-less snapshot that carries resting orders: there is no
+     * config to build engines from, so the codec refuses the image (S4 R-C6, was: a loud count of
+     * dropped orders); the service fail-fasts once and never serves. LegacySnapshotRefusedTest has
+     * the text.
      */
     @Test
-    public void configModeRestoreOfLegacyBooksIsLoudStateLoss() {
-        Engine legacy = new Engine();
+    public void restoreOfLegacyBooksWithoutAConfigIsRefused() {
+        Engine legacy = com.match.application.engine.TestEngines.withCompiledMarkets();
         legacy.getEngine(Engine.MARKET_BTC_USD).addOrderNoMatch(1, 100, true, 6_000_000_000_000L, 100_000_000L);
         legacy.getEngine(Engine.MARKET_ETH_USD).addOrderNoMatch(2, 101, false, 300_000_000_000L, 100_000_000L);
         ExpandableArrayBuffer b = new ExpandableArrayBuffer();
         legacy.setTradeIdGenerator(1L); int len = SnapshotCodec.serialize(legacy, 0L, b);
 
-        Engine configMode = Engine.deferredUntilConfig();
-        SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(b, 0, len, configMode);
-        assertFalse(decoded.engineConfigPresent);
-        assertEquals("every stranded order counted as lost, loud, never silent",
-                2, decoded.rejectedOrders);
-        assertFalse("no engines conjured from nothing", configMode.hasEngines());
+        Engine deferred = Engine.deferredUntilConfig();
+        IllegalStateException refused = assertThrows(IllegalStateException.class,
+                () -> SnapshotCodec.deserialize(b, 0, len, deferred));
+        assertTrue(refused.getMessage(), refused.getMessage().startsWith("[SNAPSHOT] refused: the image carries 2 order(s)"));
+        assertFalse("no engines conjured from nothing", deferred.hasEngines());
 
         LaunchModeServices.Service node = new LaunchModeServices.Service(true);
         final byte[] image = Arrays.copyOf(b.byteArray(), len);
@@ -286,10 +285,10 @@ public class SnapshotCodecEngineConfigTest {
         err[0] = LaunchModeServices.stderrOf(() -> served[0] = node.load(image));
         assertFalse("the node refuses the image", served[0]);
         assertEquals("failFast once", 1, node.failFast.get());
-        assertTrue(err[0], err[0].contains("CRITICAL: snapshot refused: [SNAPSHOT] 2 order(s) dropped during restore"));
+        assertTrue(err[0], err[0].contains("CRITICAL: snapshot refused: [SNAPSHOT] refused: the image carries 2 order(s)"));
     }
 
-    /** DirectIndexOrderBook's compiled default is part of the adopt cross-check contract. */
+    /** The compiled caps the test-factory engines use. */
     @Test
     public void compiledCapsAreTheDocumentedDefaults() {
         assertEquals(64, DirectIndexOrderBook.DEFAULT_MAX_ORDERS_PER_LEVEL);

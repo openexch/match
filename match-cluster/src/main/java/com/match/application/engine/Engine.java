@@ -657,29 +657,24 @@ public class Engine {
     // hold this reference.
     private final MeIdentity meIdentity = new MeIdentity();
 
-    // The LAUNCH mode — true only for deferredUntilConfig(). Node-local, never replicated:
-    // read by the node-local check (d) only, never by a decision.
-    private final boolean configMode;
-
-    // Node-EFFECTIVE creation values, kept for the adopt-path cross-check: what THIS node actually
-    // built its engines from. Legacy mode: env-resolved impl + env-resolved capacity (array only).
-    // Config mode: copied from the accepted config (cross-check then holds by construction).
-    // null/0 on a deferred engine until a config is accepted.
+    // The creation values this engine was built from: copied from the accepted config (a test
+    // engine from the compiled table: the impl it was given). null/0 until a config is accepted.
     private String implName;
     private int effectiveBookCapacity;
 
-    public Engine() {
+    /**
+     * TEST ONLY (package-private, reached through the test factory {@code TestEngines}): engines
+     * built at construction from the compiled market table. Production builds engines only from the
+     * replicated EngineConfig ({@link #deferredUntilConfig()}); no class outside this package can
+     * build an engine any other way, and the compiler enforces it.
+     */
+    Engine() {
         this(resolveEngineImpl());
     }
 
-    /**
-     * Construct with an explicit matching implementation ("array" | "direct"), bypassing the flag.
-     * Used by the A/B determinism test to run the same corpus through both implementations in one
-     * process; production uses the no-arg constructor (flag-resolved).
-     */
-    public Engine(String impl) {
+    /** TEST ONLY: as {@link #Engine()} with an explicit implementation ("array" | "direct"). */
+    Engine(String impl) {
         this.engines = new Int2ObjectHashMap<>();
-        this.configMode = false;
 
         logger.info("Engine matching implementation: {}", impl);
 
@@ -691,29 +686,27 @@ public class Engine {
                 config.symbol, config.getPriceLevels());
         }
 
-        // Slice C: remember the node-effective creation values for the adopt-path cross-check.
-        // Reading resolveBookCapacity() again returns exactly what createMatchingEngine used
-        // (pure re-read of the same env/prop); for "direct" the capacity knob is unused -> 0.
+        // Reading resolveBookCapacity() again returns exactly what createMatchingEngine used;
+        // for "direct" the capacity knob is unused -> 0.
         this.implName = impl;
         this.effectiveBookCapacity = "array".equals(impl) ? resolveBookCapacity() : 0;
 
         logger.info("Engine started with {} markets.", MarketConfig.ALL_MARKETS.length);
     }
 
-    // Deferred (config-mode) construction: builds NO engines. Distinct private signature; the
-    // boolean is just a disambiguator from Engine(String).
+    // Deferred construction: builds NO engines. Distinct private signature; the boolean is just a
+    // disambiguator from Engine(String).
     private Engine(boolean deferred) {
         this.engines = new Int2ObjectHashMap<>();
-        this.configMode = true;
-        logger.info("Engine deferred: config mode — no engines until an EngineConfig is logged"
+        logger.info("Engine deferred: no engines until an EngineConfig is logged"
                 + " (orders before that are loudly REJECTED, never silently dropped)");
     }
 
     /**
-     * Slice C: a config-mode engine — created EMPTY, with engine creation deferred until an
+     * The only production engine: created EMPTY, with engine creation deferred until an
      * {@code EngineConfig} command arrives from the cluster log (or a config-bearing snapshot is
-     * restored). Production legacy mode and every existing test keep using {@link #Engine()} —
-     * that path is bit-for-bit unchanged.
+     * restored). The replicated config is the only source of the market set, the implementation
+     * and the capacities.
      */
     public static Engine deferredUntilConfig() {
         return new Engine(true);
@@ -724,12 +717,7 @@ public class Engine {
         return meIdentity;
     }
 
-    /** True when launched in config mode ({@link #deferredUntilConfig()}); node-local. */
-    public boolean isConfigMode() {
-        return configMode;
-    }
-
-    /** True once matching engines exist (legacy: always from boot; config mode: after accept). */
+    /** True once matching engines exist (after the first accepted EngineConfig). */
     public boolean hasEngines() {
         return !engines.isEmpty();
     }

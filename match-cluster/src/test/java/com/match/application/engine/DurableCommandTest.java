@@ -18,7 +18,7 @@ public class DurableCommandTest {
     private static final long PRICE = FixedPoint.fromDouble(59000);
     private static final long QTY = FixedPoint.fromDouble(1);
     @Before public void setup() {
-        engine = new Engine("direct");
+        engine = com.match.application.engine.TestEngines.withCompiledMarkets("direct");
         journal = new SettlementJournal(1 << 16);
         publisher = new MatchEventPublisher();
         publisher.setSettlementJournal(journal);
@@ -61,7 +61,7 @@ public class DurableCommandTest {
     @Test public void snapshotRestartRetainsDedupe() {
         long before=engine.getOrderIdGenerator(); send(1,0,0,PRICE);
         var snapshot=new ExpandableArrayBuffer(); engine.setTradeIdGenerator(0); int n=SnapshotCodec.serialize(engine, 0, snapshot);
-        engine.close(); engine=new Engine("direct"); engine.setEventPublisher(publisher);
+        engine.close(); engine=com.match.application.engine.TestEngines.withCompiledMarkets("direct"); engine.setEventPublisher(publisher);
         SnapshotCodec.deserialize(snapshot,0,n,engine); demux=new SbeDemuxer(engine);
         send(1,0,0,PRICE); assertEquals(before+1, engine.getOrderIdGenerator());
         assertEquals(4, engine.getEngine(1).getBidOrders().length);
@@ -133,7 +133,7 @@ public class DurableCommandTest {
         sendV12(1,0,0,PRICE,1,0); entries();
         sendV12(1,0,0,PRICE,2,0); var live=entries().get(0);
         var snapshot=new ExpandableArrayBuffer(); engine.setTradeIdGenerator(0); int n=SnapshotCodec.serialize(engine, 0, snapshot);
-        engine.close(); engine=new Engine("direct"); engine.setEventPublisher(publisher);
+        engine.close(); engine=com.match.application.engine.TestEngines.withCompiledMarkets("direct"); engine.setEventPublisher(publisher);
         SnapshotCodec.deserialize(snapshot,0,n,engine); demux=new SbeDemuxer(engine);
         sendV12(1,0,0,PRICE,2,0); var restored=entries().get(0);
         // The journaled retry is a function of the log entry, not of the restore.
@@ -194,7 +194,7 @@ public class DurableCommandTest {
         var change=intent(2,2,created.orderId(),PRICE+100000000,0);
         var replaced=engine.acceptDurable(change,2000);
         var b=new ExpandableArrayBuffer(); engine.setTradeIdGenerator(0); int n=SnapshotCodec.serialize(engine, 0, b);
-        engine.close(); engine=new Engine("direct"); engine.setEventPublisher(publisher);
+        engine.close(); engine=com.match.application.engine.TestEngines.withCompiledMarkets("direct"); engine.setEventPublisher(publisher);
         assertEquals(n,SnapshotCodec.deserialize(b,0,n,engine).bytesConsumed);
         assertEquals(replaced,engine.acceptDurable(change,3000));
         assertEquals(3,engine.acceptDurable(intent(3,1,replaced.orderId(),0,0),4000).status());
@@ -231,7 +231,7 @@ public class DurableCommandTest {
     }
 
     @Test public void journalDarkAndJournaledReplicasReachTheSameState() {
-        var dark = new Engine("direct");
+        var dark = com.match.application.engine.TestEngines.withCompiledMarkets("direct");
         var darkPublisher = new MatchEventPublisher();
         darkPublisher.initMarket(1, new MarketEventHandler() {
             public int getMarketId() { return 1; }

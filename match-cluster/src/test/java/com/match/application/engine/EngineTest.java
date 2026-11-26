@@ -28,7 +28,7 @@ public class EngineTest {
 
     @Before
     public void setUp() {
-        engine = new Engine();
+        engine = com.match.application.engine.TestEngines.withCompiledMarkets();
     }
 
     // ==================== Helpers ====================
@@ -538,7 +538,7 @@ public class EngineTest {
         // Forced via the direct engine's hard 64-orders/level cap: the array engine can't fail a
         // same-side amend (cancel frees a slot the re-add reclaims), so this terminal branch is
         // exercised on the direct impl.
-        Engine directEngine = new Engine("direct");
+        Engine directEngine = com.match.application.engine.TestEngines.withCompiledMarkets("direct");
         RecordingEventSink sink = new RecordingEventSink();
         directEngine.setEventPublisher(sink);
 
@@ -660,7 +660,7 @@ public class EngineTest {
         long savedId = engine.getOrderIdGenerator();
 
         // Restore
-        Engine newEngine = new Engine();
+        Engine newEngine = com.match.application.engine.TestEngines.withCompiledMarkets();
         newEngine.setOrderIdGenerator(savedId);
         assertEquals(savedId, newEngine.getOrderIdGenerator());
     }

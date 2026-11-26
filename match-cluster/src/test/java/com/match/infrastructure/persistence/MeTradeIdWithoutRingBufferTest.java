@@ -108,8 +108,8 @@ public class MeTradeIdWithoutRingBufferTest {
     /** Legacy lane only, no acceptDurable. */
     @Test
     public void sinklessEngineDropsFilledMakerLikeASinkEngine() {
-        final Engine c = new Engine("array");
-        try (Replica a = new Replica(new Engine("array"), Shape.JOURNALED)) {
+        final Engine c = com.match.application.engine.TestEngines.withCompiledMarkets("array");
+        try (Replica a = new Replica(com.match.application.engine.TestEngines.withCompiledMarkets("array"), Shape.JOURNALED)) {
             final SbeDemuxer dc = new SbeDemuxer(c);
             final List<Entry> log = positioned(List.of(
                     createOrder(100, 9001, 0, 59_000, 1),     // maker rests with an omsOrderId

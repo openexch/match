@@ -44,43 +44,45 @@ import java.util.concurrent.atomic.AtomicLong;
 public class AppClusteredService implements ClusteredService {
     private static final Logger logger = Logger.getLogger(AppClusteredService.class);
 
-    // Slice C: engine-creation mode. false (default) = LEGACY — engines are built at construction
-    // from MarketConfig.ALL_MARKETS + env exactly as always (bit-for-bit today's behavior; the
-    // red line). true = CONFIG mode — the engine starts EMPTY and is created solely from the
-    // logged EngineConfig command (or a config-bearing snapshot); orders before that are loudly
-    // REJECTED by the fresh-cluster guard. This flag is a LAUNCH parameter of the same class as
-    // CLUSTER_ADDRESSES (it declares which bootstrap era the deployment is in); the
-    // engine-creation VALUES themselves only ever come from the cluster log. Resolved once,
-    // strictly: an explicitly set but unparseable value is refused at startup (never silently
-    // defaulted), matching resolveEgressDrainMax / SnapshotCadence.
-    //
-    // UNIFORMITY CONSTRAINT — it MUST be identical on every member of a cluster, exactly like
-    // CLUSTER_ADDRESSES. A mixed cluster has a fork window on any order that arrives before the
-    // first EngineConfig: a legacy member has engines from boot and MATCHES the order, while a
-    // config-mode member has none and REJECTS it — replicated state diverges on the same logged
-    // command. The flag cannot verify its peers itself (a node's env is invisible to the
-    // cluster), so it is exported as the match_engine_from_config gauge (0/1): the operator
-    // layer / admin gateway verifies uniformity across members BEFORE admitting genesis traffic,
-    // the same layer-1 safeguard input as match_supported_behavior_versions. Deployment rule:
-    // the dogfood path NEVER uses config mode — existing clusters stay legacy and adopt their
-    // config mid-life via the logged EngineConfig; config mode is for FRESH clusters only.
-    private final boolean engineFromConfigMode = resolveEngineFromConfigMode(
-            System.getenv("MATCH_ENGINE_FROM_CONFIG"), System.getProperty("match.engine.from.config"));
+    // Engines are created only from the replicated EngineConfig (S4 R-C1): the engine starts EMPTY
+    // and the logged EngineConfig (or a config-bearing snapshot) creates the engines on every member
+    // at the same log position; orders before that are loudly REJECTED by the fresh-cluster guard.
+    // There is no launch mode: a node-local switch that decided replicated state is gone, and
+    // ClusterConfig.create refuses the old settings (exit 78). Tests reach an engine built from the
+    // compiled market table only through withEngine() (package-private) and the engine package's
+    // test factory, whose constructors production code cannot call.
+    private static final ThreadLocal<Engine> TEST_ENGINE = new ThreadLocal<>();
+    private final Engine engine = takeEngine();
 
-    private final Engine engine = engineFromConfigMode ? Engine.deferredUntilConfig() : new Engine();
+    private static Engine takeEngine() {
+        final Engine e = TEST_ENGINE.get();
+        TEST_ENGINE.remove();
+        return e != null ? e : Engine.deferredUntilConfig();
+    }
+
+    /** TEST ONLY: a service around a given engine (a test-factory engine with compiled markets). */
+    static AppClusteredService withEngine(final Engine engine) {
+        TEST_ENGINE.set(java.util.Objects.requireNonNull(engine, "engine"));
+        try {
+            return new AppClusteredService();
+        } finally {
+            TEST_ENGINE.remove();
+        }
+    }
+
     private final ClientSessions clientSessions = new ClientSessions();
     private final SessionMessageContextImpl context = new SessionMessageContextImpl(clientSessions);
     private final TimerManager timerManager = new TimerManager(context);
     private final SbeDemuxer sbeDemuxer = new SbeDemuxer(engine);
 
-    // Slice C: the EngineConfig decision table (fresh-create / adopt+cross-check / duplicate /
-    // reject). failFast is the fail-fast exit — same principle as the egress-init fail-fast exits: a
+    // The EngineConfig decision table (fresh-create / duplicate / bump / reject) stops this node
+    // through failFastIncompatible (exit 78) when the jar cannot run the record. failFast is the fail-fast exit — same principle as the egress-init fail-fast exits: a
     // node that provably diverges from the cluster's declared truth (or cannot bring up egress)
     // must not serve; the other nodes keep quorum.
     //
     // The default is Runtime.halt(1), NOT System.exit(1). Every caller of this seam runs on the
-    // cluster SERVICE thread (the state machine's adopt-mismatch path and the egress-init catch
-    // blocks below). System.exit runs the JVM's shutdown hooks, and this process's hooks (the
+    // cluster SERVICE thread (the apply-failure fence, the snapshot refusal and the egress-init
+    // catch blocks below). System.exit runs the JVM's shutdown hooks, and this process's hooks (the
     // Aeron/ShutdownSignalBarrier teardown chain) wait for the clustered service agent to stop
     // — i.e. for the very thread that is sitting inside exit(). Observed live 2026-08-23 (first
     // adopt, demo box, match @ cd85640, #223): all three nodes hit the adopt cross-check
@@ -109,12 +111,34 @@ public class AppClusteredService implements ClusteredService {
     static void failFastHalt() {
         Runtime.getRuntime().halt(1);
     }
+
+    /**
+     * The second fail-fast seam (S4 R-A6): this jar cannot run what the cluster recorded, check (a) a
+     * behaviour the jar lacks or (b) a jar below the recorded wire ceiling. A restart cannot fix a
+     * jar, so it halts with {@link com.openexchange.cluster.EngineLifecycle#EXIT_CONFIG} (78), which
+     * the units never restart. Same hookless halt and same service-thread rule as {@link #failFast};
+     * the CRITICAL lines are logged by the state machine before it runs. Package-private for tests.
+     */
+    Runnable failFastIncompatible = AppClusteredService::failFastIncompatibleHalt;
+
+    /** Production default of {@link #failFastIncompatible}; static so the forked-JVM test runs the exact path. */
+    static void failFastIncompatibleHalt() {
+        Runtime.getRuntime().halt(com.openexchange.cluster.EngineLifecycle.EXIT_CONFIG);
+    }
+
+    /**
+     * The member version this node runs (S4): the one {@code ClusterConfig} gave the validator, so
+     * {@code compat=} on /ready is the validator's own value. Set before onStart.
+     */
+    volatile com.openexchange.cluster.MemberCompat memberCompat = MatchMemberCompat.MEMBER_COMPAT;
+    /** The capability tokens of /health and /ready; built at the node endpoint's start. */
+    private volatile com.openexchange.cluster.MemberCompat.Capabilities capabilities;
     // Record 5 goes through a DEFERRING adapter. This field initializer runs before the
     // eventPublisher field below is initialized, so the publisher is dereferenced per call
     // (this.eventPublisher inside the lambda body), never captured here (it would be null).
     private final com.match.application.engine.EngineConfigStateMachine engineConfigStateMachine =
             new com.match.application.engine.EngineConfigStateMachine(
-                    engine, () -> failFast.run(), this::onEnginesCreatedFromConfig,
+                    engine, () -> failFastIncompatible.run(), this::onEnginesCreatedFromConfig,
                     (egressSeq, journalSeq, recorded, decision) ->
                             this.eventPublisher.publishEngineConfig(egressSeq, journalSeq, recorded, decision));
 
@@ -597,30 +621,6 @@ public class AppClusteredService implements ClusteredService {
         return EGRESS_DRAIN_MAX;
     }
 
-    // Slice C config: env MATCH_ENGINE_FROM_CONFIG wins over -Dmatch.engine.from.config; default
-    // false (legacy — bit-for-bit today's engine creation). Package-private and pure so the
-    // parse, the default, and the refusal are unit testable. Only the literal strings
-    // "true"/"false" are accepted: an explicitly set but ambiguous value is refused at startup
-    // rather than silently defaulted (the strict-config house style; same posture as
-    // resolveEgressDrainMax and the SnapshotCadence tunables).
-    static boolean resolveEngineFromConfigMode(final String envValue, final String propValue) {
-        final String raw = envValue != null ? envValue : propValue;
-        if (raw == null) {
-            return false;
-        }
-        final String source = envValue != null ? "MATCH_ENGINE_FROM_CONFIG" : "match.engine.from.config";
-        final String v = raw.trim().toLowerCase();
-        if ("true".equals(v)) {
-            return true;
-        }
-        if ("false".equals(v)) {
-            return false;
-        }
-        throw new IllegalArgumentException(source + "=" + raw
-                + " must be exactly \"true\" or \"false\"; refusing to start with an ambiguous"
-                + " engine-creation mode");
-    }
-
     // package-private: metric source (match_egress_drain_capped_total) and drain-cap test assertion.
     long drainCappedTotal() {
         return drainCapped.get();
@@ -814,6 +814,15 @@ public class AppClusteredService implements ClusteredService {
                     .gauge("match_engine_behavior_version",
                             "Recorded behaviour version of the replicated EngineConfig; 0 when none is recorded",
                             engineConfigStateMachine::recordedBehaviorVersion)
+                    .gauge("match_member_compat_generation",
+                            "Member version generation of this build (S4): members of different generations never share a cluster",
+                            () -> (long) memberCompat.generation())
+                    .gauge("match_member_compat_level",
+                            "Member version level of this build (S4): a cluster runs level N and N-1 of one generation",
+                            () -> (long) memberCompat.level())
+                    .gauge("match_supported_min_wire_version",
+                            "Lowest order-schema version this build decodes (the wire floor)",
+                            () -> (long) MatchMemberCompat.WIRE_FLOOR)
                     .gauge("match_supported_max_wire_version",
                             "Highest order-schema version this build decodes",
                             () -> (long) com.match.application.engine.EngineConfigStateMachine.SUPPORTED_MAX_WIRE_VERSION)
@@ -847,16 +856,9 @@ public class AppClusteredService implements ClusteredService {
                     .counter("match_dark_engine_config_records_total",
                             "EngineConfig FRESH/BUMP decisions applied but not journaled because the settlement journal is off on this node",
                             eventPublisher::getDarkEngineConfigCount)
-                    .gauge("match_engine_from_config",
-                            "Engine-creation mode of THIS node (1 = config mode, 0 = legacy). A launch parameter like CLUSTER_ADDRESSES: it must be uniform across members — a mixed cluster forks replicated state on any pre-config order. The operator layer verifies uniformity here before admitting genesis traffic",
-                            () -> engineFromConfigMode ? 1L : 0L)
-                    // #224: the EFFECTIVE engine-creation values — the recorded replicated config
-                    // when one exists, else the exact node-local derivation the adopt cross-check
-                    // compares against. Input for the operator layer's declared-vs-effective
-                    // precheck: cloud-console refuses to OFFER an adopt whose declared config does
-                    // not match the uniform effective values, so a wrong declared config can never
-                    // again fail-fast all members at once (2026-08-23). -1 = no effective values
-                    // yet (config mode before the first EngineConfig).
+                    // #224: the EFFECTIVE engine-creation values: the recorded replicated config,
+                    // the only source of them since S4. -1 = no effective values yet (before the
+                    // first EngineConfig).
                     .gauge("match_engine_effective_book_capacity",
                             "Effective per-book order capacity of THIS node's engines (0 for impl=direct; -1 pre-config). Declared-vs-effective precheck input (#224)",
                             engineConfigStateMachine::effectiveBookCapacity)
@@ -1067,9 +1069,14 @@ public class AppClusteredService implements ClusteredService {
             }
             // One port, three answers. The metrics registry stays where it is;
             // the endpoint just renders it alongside the probes.
+            capabilities = MatchMemberCompat.capabilities(memberCompat,
+                    com.match.infrastructure.TransportConfig.driverMode()
+                            == com.match.infrastructure.TransportConfig.DriverMode.EXTERNAL ? "external" : "embedded");
+            publishRecorded();
             nodeEndpoint = new com.openexchange.cluster.NodeEndpoint(readiness, metricsServer::render)
                     .withBuild(buildInfo != null ? buildInfo
-                            : com.openexchange.cluster.BuildInfo.of(AppClusteredService.class));
+                            : com.openexchange.cluster.BuildInfo.of(AppClusteredService.class))
+                    .capabilities(capabilities);
             nodeEndpoint.start(port);
         } catch (Exception e) {
             // Metrics must never take a node down.
@@ -1349,17 +1356,18 @@ public class AppClusteredService implements ClusteredService {
         // MarketConfig.ALL_MARKETS. With no config recorded yet (fresh cluster) there is nothing
         // to publish for — publishers come up in onEnginesCreatedFromConfig the moment the logged
         // EngineConfig is accepted. Legacy mode falls through to the exact historical body below.
-        if (engineFromConfigMode) {
-            final com.match.application.engine.EngineConfigState config = engine.getEngineConfig();
-            if (config == null) {
-                System.out.println("SERVICE: config mode — no EngineConfig recorded yet; egress"
-                        + " publishers deferred until the config arrives (orders until then get a"
-                        + " loud REJECTED egress, never a silent drop)");
-                return;
-            }
-            initializeEventPublishingFromConfig(config);
+        final com.match.application.engine.EngineConfigState recordedConfig = engine.getEngineConfig();
+        if (recordedConfig != null) {
+            initializeEventPublishingFromConfig(recordedConfig);
             return;
         }
+        if (!engine.hasEngines()) {
+            System.out.println("SERVICE: no EngineConfig recorded yet; egress publishers deferred until the"
+                    + " config arrives (orders until then get a loud REJECTED egress, never a silent drop)");
+            return;
+        }
+        // Reached only by a test-factory engine (compiled markets, no config): production engines
+        // have no markets before the first EngineConfig.
         try {
             // Create per-market publisher for all configured markets
             for (MarketConfig config : MarketConfig.ALL_MARKETS) {
@@ -1461,6 +1469,23 @@ public class AppClusteredService implements ClusteredService {
      */
     private void onEnginesCreatedFromConfig(final com.match.application.engine.EngineConfigState config) {
         initializeEventPublishingFromConfig(config);
+    }
+
+    /**
+     * Service thread: hand the recorded values to the /ready capability tokens (S4 R-B1). Runs after
+     * every applied message and after a restore; allocates only when a value changed.
+     */
+    private void publishRecorded() {
+        final com.openexchange.cluster.MemberCompat.Capabilities caps = capabilities;
+        if (caps != null) {
+            caps.publish(engineConfigStateMachine.recordedBehaviorVersion(),
+                    engineConfigStateMachine.recordedMaxWireVersion(), engine.meIdentity().meEpoch() != 0L);
+        }
+    }
+
+    /** The capability tokens /health and /ready carry; null before the node endpoint started. */
+    com.openexchange.cluster.MemberCompat.Capabilities capabilities() {
+        return capabilities;
     }
 
     // ---- Slice C: fresh-cluster guard REJECTED egress ----
@@ -1666,16 +1691,10 @@ public class AppClusteredService implements ClusteredService {
                     + decoded.timerCorrelationId);
         }
 
-        // Slice C: a config-bearing snapshot restored the recorded EngineConfig (and, on a
-        // config-mode node, rebuilt the engines from it — identically to the original creation).
-        // On a LEGACY-mode node the engines were env/compiled-built at construction, so run the
-        // same node-local cross-check as the adopt path: a node restarted with env or a build
-        // that diverges from the cluster's declared truth must exit here (fail-fast), never
-        // serve — HEALTHY is not the same as running the right config.
-        //
-        // The node-local check runs after every restore that brought a recorded config,
-        // in BOTH launch modes: (a) supported behaviour, (b) wire ceiling within this jar, (c)
-        // legacy-mode creation values, (d) behaviour >= 2 on a legacy-mode node.
+        // A config-bearing snapshot restored the recorded EngineConfig and rebuilt the engines from it,
+        // identically to the original creation. The node-local check runs after every restore that
+        // brought a recorded config: (a) supported behaviour, (b) wire ceiling within this jar; a
+        // failure stops this node with exit 78 (a restart cannot fix the jar).
         if (decoded.engineConfigPresent) {
             System.out.println("[SNAPSHOT] Restored engineConfig: " + engine.getEngineConfig().describe()
                     + (decoded.identityPresent ? " identity=" + engine.meIdentity() : ""));
@@ -1685,7 +1704,7 @@ public class AppClusteredService implements ClusteredService {
         }
 
         // A restore that dropped an order never serves. Node-local fail-fast of the
-        // checkAfterRestore kind: rejectedOrders depends on this node's launch mode and env-built geometry, so a
+        // checkAfterRestore kind: a
         // member that cannot hold the replicated books exits; it never serves a different state. loadSnapshot turns
         // the throw into the CRITICAL refusal, readiness 503 and failFast.
         if (decoded.rejectedOrders > 0) {
@@ -1695,6 +1714,7 @@ public class AppClusteredService implements ClusteredService {
 
         System.out.println("[SNAPSHOT] Snapshot load complete. Consumed "
                 + decoded.bytesConsumed + " bytes of " + length);
+        publishRecorded();
         return true;
     }
 
@@ -1788,6 +1808,7 @@ public class AppClusteredService implements ClusteredService {
         applicationCallbackDepth++;
         try {
             applyOnSessionMessage(session, timestamp, buffer, offset, length, header);
+            publishRecorded();
         } catch (final PrincipalLessSessionException halted) {
             throw halted; // R0 already logged, fenced and ran failFast
         } catch (RuntimeException | Error failure) {

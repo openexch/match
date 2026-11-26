@@ -53,6 +53,11 @@ public class AeronCluster {
         try {
             run(lifecycle);
         } catch (final Throwable t) {
+            if (t instanceof ClusterConfig.SettingRefusedException refused) {
+                // A removed setting (S4 R-C3): exit 78, which the units never restart. The first recorded
+                // stop wins, so startupFailed below prints the trace and keeps 78.
+                lifecycle.fatal(EngineLifecycle.EXIT_CONFIG, refused.getMessage());
+            }
             lifecycle.startupFailed(t);
             return;
         }
@@ -83,6 +88,15 @@ public class AeronCluster {
         // lifecycle prints the line and exits 1): a setting that was lost must not turn a bounded purge into an
         // unbounded one.
         com.openexchange.cluster.OffBoxWatermark.checkBoot(clusterConfig.consensusModuleContext().clusterDir());
+
+        // S4: the member version. The validator's refusal stops this node with exit 78; before any Aeron
+        // component, a build more than one level from the last one this node saw (or of another generation)
+        // stops here, so it cannot canvass and win an election that would stop every older follower.
+        final com.openexchange.cluster.BuildInfo build = com.openexchange.cluster.BuildInfo.of(AeronCluster.class);
+        clusterConfig.memberCompat(MatchMemberCompat.current(),
+                com.openexchange.cluster.MemberCompat.fatalOnRefusal(lifecycle, build));
+        com.openexchange.cluster.MemberCompat.bootCheck(lifecycle, clusterConfig.consensusModuleContext().clusterDir(),
+                clusterConfig.memberCompat(), build);
 
         // Route Aeron driver/archive/consensus/service errors to the application logger so
         // operators see them in node{N}.log instead of just the cluster mark file. Without

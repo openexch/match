@@ -203,7 +203,7 @@ public class JournalSeqDenseTest {
     /** Frames of the behaviour-1 log on a legacy engine, then on a FRESH_LEGACY config engine. */
     static List<byte[]> behaviourOneFrames() {
         final List<byte[]> out = new ArrayList<>();
-        try (Replica legacy = new Replica(new Engine("array"))) {
+        try (Replica legacy = new Replica(com.match.application.engine.TestEngines.withCompiledMarkets("array"))) {
             final List<Entry> log = positioned(behaviourOneOrders());
             out.addAll(legacy.apply(log, 0, log.size()));
             assertEquals(0, legacy.demuxer.applyErrorCount());

@@ -34,7 +34,7 @@ public class SnapshotCodecTest {
         ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
         orig.setTradeIdGenerator(TRADE_ID_IN); int len = SnapshotCodec.serialize(orig, TIMER_ID_IN, buf);
 
-        Engine restored = new Engine();
+        Engine restored = com.match.application.engine.TestEngines.withCompiledMarkets();
         SnapshotCodec.Decoded d = SnapshotCodec.deserialize(buf, 0, len, restored);
 
         assertEquals("orderId generator", orig.getOrderIdGenerator(), restored.getOrderIdGenerator());
@@ -75,12 +75,12 @@ public class SnapshotCodecTest {
         ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
         orig.setTradeIdGenerator(TRADE_ID_IN); int len = SnapshotCodec.serialize(orig, TIMER_ID_IN, buf);
 
-        Engine e1 = new Engine();
+        Engine e1 = com.match.application.engine.TestEngines.withCompiledMarkets();
         SnapshotCodec.Decoded d1 = SnapshotCodec.deserialize(buf, 0, len, e1);
         ExpandableArrayBuffer r1 = new ExpandableArrayBuffer();
         int lr1 = SnapshotCodec.serialize(e1, d1.timerCorrelationId, r1);
 
-        Engine e2 = new Engine();
+        Engine e2 = com.match.application.engine.TestEngines.withCompiledMarkets();
         SnapshotCodec.Decoded d2 = SnapshotCodec.deserialize(r1, 0, lr1, e2);
         ExpandableArrayBuffer r2 = new ExpandableArrayBuffer();
         int lr2 = SnapshotCodec.serialize(e2, d2.timerCorrelationId, r2);
@@ -104,7 +104,7 @@ public class SnapshotCodecTest {
         raw.putInt(p, 0);   p += 4;   // omsMapCount = 0
         final int length = p;
 
-        Engine e = new Engine();
+        Engine e = com.match.application.engine.TestEngines.withCompiledMarkets();
         final long before = e.getOrderIdGenerator();
         IllegalStateException refused = org.junit.Assert.assertThrows(IllegalStateException.class,
                 () -> SnapshotCodec.deserialize(raw, 0, length, e));
@@ -133,7 +133,7 @@ public class SnapshotCodecTest {
         // Framed as the current writer frames it (empty v1 ledger, envelope 1).
         final byte[] image = LaunchModeServices.envelopeV1(Arrays.copyOf(bad.byteArray(), p));
 
-        Engine e = new Engine();
+        Engine e = com.match.application.engine.TestEngines.withCompiledMarkets();
         SnapshotCodec.Decoded d = SnapshotCodec.deserialize(new org.agrona.concurrent.UnsafeBuffer(image), 0,
                 image.length, e);
 
@@ -155,7 +155,7 @@ public class SnapshotCodecTest {
         b.putInt(p, 0);   p += 4;   // numMarkets = 0 (and NO trailing timer field)
         final int length = p;
 
-        Engine e = new Engine();
+        Engine e = com.match.application.engine.TestEngines.withCompiledMarkets();
         IllegalStateException refused = org.junit.Assert.assertThrows(IllegalStateException.class,
                 () -> SnapshotCodec.deserialize(b, 0, length, e));
         assertTrue(refused.getMessage(), refused.getMessage().startsWith("snapshot envelope magic missing"));
@@ -175,7 +175,7 @@ public class SnapshotCodecTest {
         ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
         orig.setTradeIdGenerator(TRADE_ID_IN); int len = SnapshotCodec.serialize(orig, TIMER_ID_IN, buf);
 
-        Engine restored = new Engine();
+        Engine restored = com.match.application.engine.TestEngines.withCompiledMarkets();
         SnapshotCodec.deserialize(buf, 0, len, restored);
 
         Long2LongHashMap rm = restored.getOrderIdToOmsOrderId();
@@ -199,7 +199,7 @@ public class SnapshotCodecTest {
      */
     @Test
     public void omsOrderIdMapIsSerializedAscendingByOrderId() {
-        Engine e = new Engine();
+        Engine e = com.match.application.engine.TestEngines.withCompiledMarkets();
         long[] insertOrder = {17, 3, 42, 8, 25, 1, 99, 12, 6, 30, 2, 51};
         for (long id : insertOrder) {
             e.getOrderIdToOmsOrderId().put(id, id * 100);
@@ -240,7 +240,7 @@ public class SnapshotCodecTest {
 
     /** An engine with resting orders across several markets and price levels. */
     private static Engine varied() {
-        Engine e = new Engine();
+        Engine e = com.match.application.engine.TestEngines.withCompiledMarkets();
         placeLimit(e, Engine.MARKET_BTC_USD, 100, OrderSide.BID, 60_000.0, 1.0);
         placeLimit(e, Engine.MARKET_BTC_USD, 101, OrderSide.BID, 59_000.0, 2.0);
         placeLimit(e, Engine.MARKET_BTC_USD, 102, OrderSide.ASK, 61_000.0, 1.5);

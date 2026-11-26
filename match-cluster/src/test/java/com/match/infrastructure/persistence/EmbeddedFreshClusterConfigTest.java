@@ -68,6 +68,7 @@ public class EmbeddedFreshClusterConfigTest {
         TestAuth.install(); // The real authenticator over the test key table
 
         ClusterConfig config = ClusterConfig.create(0, 0, hostnames, hostnames, PORT_BASE, baseDir, service);
+        config.memberCompat(config.memberCompat(), com.openexchange.cluster.MemberCompat.testRefusal("rig"));
         config.errorHandler(t -> System.err.println("Cluster error: " + t.getMessage()));
 
         clusteredMediaDriver = ClusteredMediaDriver.launch(
@@ -202,6 +203,7 @@ public class EmbeddedFreshClusterConfigTest {
         TestAuth.install(); // The real authenticator over the test key table
 
         final ClusterConfig config = ClusterConfig.create(0, 0, hosts, hosts, portBase, dir, b2Service);
+        config.memberCompat(config.memberCompat(), com.openexchange.cluster.MemberCompat.testRefusal("rig"));
         config.aeronDirectoryName(new File(dir, "aeron").getAbsolutePath());
         config.errorHandler(t -> System.err.println("Cluster error (b2): " + t.getMessage()));
         ClusteredMediaDriver driver = null;

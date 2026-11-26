@@ -231,7 +231,7 @@ public class SnapshotIdentityBlockTest {
                     envelope(good, concat(prefix, identityBlock(1, 2, 50_000, 12, G, G, 2)), 1));
 
             // No config block before it: a config-less image followed by the block.
-            final Engine legacy = new Engine("direct");
+            final Engine legacy = com.match.application.engine.TestEngines.withCompiledMarkets("direct");
             try {
                 // The config-less image is envelope 1; its body is what the block would follow
                 final byte[] noConfig = body1(image(legacy));
@@ -286,7 +286,7 @@ public class SnapshotIdentityBlockTest {
             assertEquals("the ledger v2 carries the entry", 1, configMode.ledgerV2().size());
             assertEquals(0, configMode.commandLedger().size());
 
-            final Engine legacyMode = new Engine("array");
+            final Engine legacyMode = com.match.application.engine.TestEngines.withCompiledMarkets("array");
             try {
                 SnapshotCodec.deserialize(new UnsafeBuffer(img), 0, img.length, legacyMode);
                 assertEquals(recorded, legacyMode.getEngineConfig().describe());

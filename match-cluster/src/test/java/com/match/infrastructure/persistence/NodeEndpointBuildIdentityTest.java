@@ -50,8 +50,9 @@ public class NodeEndpointBuildIdentityTest {
             s.onStart(c, null);
             final String health = body(port, "/health");
             final String ready = body(port, "/ready");
-            assertTrue("health body: " + health, health.strip().endsWith(" version=1.2.3-test build=abc1234"));
-            assertTrue("ready body: " + ready, ready.strip().endsWith(" version=1.2.3-test build=abc1234"));
+            // the S4 capability tokens follow build=; nothing before them moved
+            assertTrue("health body: " + health, health.contains(" version=1.2.3-test build=abc1234 compat="));
+            assertTrue("ready body: " + ready, ready.contains(" version=1.2.3-test build=abc1234 compat="));
             assertFalse("the build token is build=, never a second commit=", health.contains("commit=abc1234"));
         } finally {
             s.onTerminate(c);

@@ -84,8 +84,8 @@ public class EmbeddedClusterTest {
 
         List<String> hostnames = List.of("localhost");
 
-        // Create cluster config with real AppClusteredService
-        service = new AppClusteredService();
+        // A real AppClusteredService around a test-factory engine with the compiled markets (no EngineConfig is sent)
+        service = AppClusteredService.withEngine(com.match.application.engine.TestEngines.withCompiledMarkets());
         TestAuth.install(); // The real authenticator over the test key table
 
         ClusterConfig config = ClusterConfig.create(
@@ -96,6 +96,7 @@ public class EmbeddedClusterTest {
                 PORT_BASE,
                 baseDir,
                 service);
+        config.memberCompat(config.memberCompat(), com.openexchange.cluster.MemberCompat.testRefusal("rig"));
 
         // Set error handler that logs but doesn't crash
         config.errorHandler(t -> System.err.println("Cluster error: " + t.getMessage()));

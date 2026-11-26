@@ -89,8 +89,8 @@ All knobs are environment variables (most also accept a system property). The fu
 | `TRANSPORT_CONSENSUS_TERM_LENGTH` | `1m` | The consensus channel's term. Without it the channel took the driver's term (16m): two publications and two images of 48 MB per member of three. A power of two in [64k, 1g]; anything else refuses the boot |
 | `ME_AUTH_KEYS` | unset (every session rejected) | Node key table: `keyId:CLASS:secretHex::users=*` entries joined by `;`. Classes: `GATEWAY`, `FORWARDER`, `ADMIN`, `REPLICA`. A malformed table stops the node at boot |
 | `ME_AUTH_CREDENTIAL` | unset (client refuses to start) | Client credential `keyId:CLASS:secretHex`, required by the backup agent (`REPLICA`), market gateway (`GATEWAY`) and load generator |
-| `MATCH_ENGINE_FROM_CONFIG` | `false` | `true` creates engines from the replicated `EngineConfig` message instead of the built-in market set |
-| `MATCH_ENGINE_IMPL` | `array` | Order book implementation: `array` or `direct` |
+| `MATCH_ENGINE_FROM_CONFIG` | unset | Removed: engines are created only from the replicated `EngineConfig` message. `true` is accepted and ignored; any other value refuses the boot (exit 78). Unset it |
+| `MATCH_ENGINE_IMPL`, `MATCH_ENGINE_BOOK_CAPACITY` | unset | Removed: the order book implementation and capacity come from the replicated `EngineConfig`. Set, either refuses the boot (exit 78) |
 | `SETTLEMENT_JOURNAL_ENABLED` / `SETTLEMENT_JOURNAL_DIR` | `false` / none | Enables the ME journal; the directory must be on disk, not tmpfs |
 | `SNAPSHOT_LOG_BYTES`, `SNAPSHOT_INTERVAL_MINUTES`, `SNAPSHOT_PRUNE_ENABLED` | see cluster-kit | Snapshot cadence and log pruning (shared with the core) |
 | `TRANSPORT_DRIVER_MODE` | `embedded` | `external` connects to a standalone media driver (`deploy/media-driver/launch-driver.sh`, or the cluster-tools `aeronmd@.service` under systemd) |

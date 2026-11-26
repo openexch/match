@@ -235,7 +235,8 @@ public class MeFlushTimerSurvivesFailoverTest {
 
     /**
      * Contract 9.2 {@code newLeaderArmsTermIdWithoutIngress}: each round stops member X for at least 10 s,
-     * restarts it, waits for its catch-up, kills the current leader (retrying until X wins, at most 5
+     * restarts it, waits for its catch-up, cuts the third member off the log until X's log is ahead of it (so X is
+     * the only member that can win the election), kills the current leader (retrying until X wins, at most 5
      * attempts), then, with no ingress, checks within 2.5 s that X armed {@code base + T * 1e6} for its term T,
      * that its fires grow and that the client receives ClusterHeartbeat. No snapshot is taken during the rounds.
      * Three rounds (restart, failover and idle failover), then a snapshot and a whole-cluster restore from it.
@@ -266,11 +267,27 @@ public class MeFlushTimerSurvivesFailoverTest {
                             x.start();
                             awaitCatchUp(x, leader, client);
                         }
+                        // Steer the election to X: the third member stops receiving the log, so X's log runs
+                        // ahead of it (the leader's flush timer appends a TimerEvent every 250 ms). Aeron votes by
+                        // log recency, so the third member cannot become a candidate X would vote for, and X is
+                        // the only member that can win. Without this the winner between two members with equal
+                        // logs is the election's random nomination delay: a coin flip per attempt.
+                        final MeClusterHarness.Member third = x == leader ? null : otherThan(h, x, leader);
+                        if (third != null) {
+                            third.logPartitioned = true;
+                            final MeClusterHarness.Member t = third;
+                            assertTrue("round " + round + ": X's log runs ahead of member " + third.id,
+                                    MeClusterHarness.await(client,
+                                            () -> xRecorded(x) > xRecorded(t) && xRecorded(t) >= 0, 5_000));
+                        }
                         System.out.println("[FLUSH] killing leader " + leader.id);
                         final MeClusterHarness.Member killed = leader;
                         killed.close();
                         CloseHelperQuiet.close(client);
                         leader = h.awaitLeader(killed, 30_000);
+                        if (third != null) {
+                            third.logPartitioned = false;
+                        }
                         client = h.connect(TestAuth.credentials(com.openexchange.cluster.auth.ClusterSessionClass.ADMIN),
                                 listener, 60_000);
                         if (leader == x) {
@@ -358,6 +375,22 @@ public class MeFlushTimerSurvivesFailoverTest {
                 assertEquals(what + ": follower " + m.id + " fires nothing", before[m.id], m.service.flushTimerFireCount());
             }
         }
+    }
+
+    /** The live member that is neither {@code a} nor {@code b}. */
+    private static MeClusterHarness.Member otherThan(final MeClusterHarness h, final MeClusterHarness.Member a,
+                                                     final MeClusterHarness.Member b) {
+        for (MeClusterHarness.Member m : h.members) {
+            if (m != a && m != b) {
+                return m;
+            }
+        }
+        throw new AssertionError("no third member");
+    }
+
+    /** The member's log recording position (its append position, what the election compares). */
+    private static long xRecorded(final MeClusterHarness.Member m) {
+        return m.livePositions()[0];
     }
 
     /** The leadership term as the client learned it from the cluster (independent of the service). */
