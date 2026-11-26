@@ -24,7 +24,7 @@ public class SbeDemuxerTest {
 
     @Before
     public void setUp() {
-        engine = new Engine();
+        engine = com.match.application.engine.TestEngines.withCompiledMarkets();
         demuxer = new SbeDemuxer(engine);
         buffer = new UnsafeBuffer(new byte[256]);
         headerEncoder = new MessageHeaderEncoder();
@@ -415,7 +415,7 @@ public class SbeDemuxerTest {
 
     /** A durable-command engine with a schema-4 journal, the way the cluster wires it. */
     private static final class Durable implements AutoCloseable {
-        final Engine engine = new Engine("direct");
+        final Engine engine = com.match.application.engine.TestEngines.withCompiledMarkets("direct");
         final com.match.application.publisher.MatchEventPublisher publisher =
                 new com.match.application.publisher.MatchEventPublisher();
         final com.match.infrastructure.journal.SettlementJournal journal =

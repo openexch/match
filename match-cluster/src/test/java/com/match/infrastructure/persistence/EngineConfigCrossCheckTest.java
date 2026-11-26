@@ -36,19 +36,6 @@ public class EngineConfigCrossCheckTest {
         }
     }
 
-    /** A behaviour-2 config equal to {@code engine}'s legacy-mode effective values (check c passes). */
-    private static EngineConfigState nodeMatching(Engine engine) {
-        final boolean array = EngineConfigState.IMPL_ARRAY.equals(engine.getImplName());
-        final EngineConfigState.MarketDef[] m = new EngineConfigState.MarketDef[MarketConfig.ALL_MARKETS.length];
-        for (int i = 0; i < m.length; i++) {
-            final MarketConfig c = MarketConfig.ALL_MARKETS[i];
-            m[i] = new EngineConfigState.MarketDef(c.marketId, c.symbol, c.basePrice, c.maxPrice, c.tickSize);
-        }
-        return EngineConfigState.of(1, engine.getImplName(), engine.getEffectiveBookCapacity(),
-                array ? ArrayMatchingEngine.MAX_MATCHES_PER_ORDER : DirectMatchingEngine.MAX_MATCHES_PER_ORDER,
-                array ? 0 : DirectIndexOrderBook.DEFAULT_MAX_ORDERS_PER_LEVEL, m, 2, 50_000, G, 12);
-    }
-
     /** Run {@code r} with System.err captured; return what was printed. */
     private static String stderrOf(Runnable r) {
         final PrintStream prior = System.err;
@@ -92,39 +79,36 @@ public class EngineConfigCrossCheckTest {
     }
 
     @Test
-    public void restoreOfUnsupportedBehaviourHaltsInBothModes() {
+    public void restoreOfUnsupportedBehaviourOrCeilingHaltsWithExit78() {
         final byte[] behaviourThree = imageAt(config(1, 3, G, 12, 50_000));
         final byte[] ceilingThirteen = imageAt(config(1, 2, G, 13, 50_000));
-        for (boolean configMode : new boolean[]{true, false}) {
+        // the production engine and a test-factory engine with compiled markets: the same checks (a) and (b)
+        for (boolean deferred : new boolean[]{true, false}) {
             for (byte[] img : new byte[][]{behaviourThree, ceilingThirteen}) {
-                final LaunchModeServices.Service svc = new LaunchModeServices.Service(configMode);
+                final LaunchModeServices.Service svc = new LaunchModeServices.Service(deferred);
                 svc.restore(img);
-                assertEquals("configMode=" + configMode, 1, svc.failFast.get());
+                assertEquals("deferred=" + deferred, 1, svc.failFast.get());
+                assertEquals("the exit-78 seam (a restart cannot fix the jar)", 1, svc.failFastIncompatible.get());
             }
         }
-
-        // A behaviour-2 image with supported values: a config-mode node serves it...
-        final LaunchModeServices.Service legacy = new LaunchModeServices.Service(false);
-        final byte[] supported = imageAt(nodeMatching(legacy.engine()));
-        final LaunchModeServices.Service configNode = new LaunchModeServices.Service(true);
-        configNode.restore(supported);
-        assertEquals("config mode serves a supported behaviour-2 image", 0, configNode.failFast.get());
-        // ...a legacy-mode node halts on check (d) alone.
-        final String err = stderrOf(() -> legacy.restore(supported));
-        assertEquals(1, legacy.failFast.get());
-        assertTrue(err, err.contains("(d)"));
-        assertFalse("creation values match, so (c) passes: " + err, err.contains("(c)"));
+        // A behaviour-2 image with supported values is served.
+        final LaunchModeServices.Service node = new LaunchModeServices.Service(true);
+        node.restore(imageAt(config(1, 2, G, 12, 50_000)));
+        assertEquals("a supported behaviour-2 image is served", 0, node.failFast.get());
     }
 
     @Test
     public void severalFailingChecksHaltOnce() {
-        final byte[] img = imageAt(config(1, 3, G, 13, 50_000)); // (a), (b); BTC-only market table: (c); legacy: (d)
-        final LaunchModeServices.Service legacy = new LaunchModeServices.Service(false);
-        final String err = stderrOf(() -> legacy.restore(img));
-        assertEquals("fail-fast at most once per entry point", 1, legacy.failFast.get());
-        for (String check : new String[]{"(a)", "(b)", "(c)", "(d)"}) {
+        final byte[] img = imageAt(config(1, 3, G, 13, 50_000)); // (a) and (b)
+        final LaunchModeServices.Service node = new LaunchModeServices.Service(true);
+        final String err = stderrOf(() -> node.restore(img));
+        assertEquals("fail-fast at most once per entry point", 1, node.failFast.get());
+        assertEquals(1, node.failFastIncompatible.get());
+        for (String check : new String[]{"(a)", "(b)"}) {
             assertTrue(check + " logged: " + err, err.contains("CRITICAL (snapshot-restore): " + check));
         }
+        assertFalse("checks (c) and (d) are gone with the launch mode: " + err,
+                err.contains("(c)") || err.contains("(d)"));
     }
 
     /**

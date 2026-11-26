@@ -15,41 +15,11 @@ import static com.match.application.engine.EngineConfigStateMachine.Decision.*;
 import static org.junit.Assert.*;
 
 /**
- * Decision-table cases the other EngineConfig tests leave implicit —
- * row 3 normalization of the four, row 5 with differing v12 values, row 4 at an unsupported
- * target, and the first-match precedence of rows 10-14 when several conditions hold at once.
+ * Decision-table cases the other EngineConfig tests leave implicit — row 5 with differing v12
+ * values and the first-match precedence of rows 10-14 when several conditions hold at once. (Rows 3
+ * and 4 were deleted with the legacy launch mode, S4.)
  */
 public class EngineConfigTablePrecedenceReviewTest {
-
-    /** Behaviour {@code t} config equal to {@code engine}'s legacy effective values (check c passes). */
-    private static EngineConfigState nodeMatching(Engine engine, long t, long genesisId, long ceiling,
-                                                  long capacity) {
-        final boolean array = EngineConfigState.IMPL_ARRAY.equals(engine.getImplName());
-        final EngineConfigState.MarketDef[] m = new EngineConfigState.MarketDef[MarketConfig.ALL_MARKETS.length];
-        for (int i = 0; i < m.length; i++) {
-            final MarketConfig c = MarketConfig.ALL_MARKETS[i];
-            m[i] = new EngineConfigState.MarketDef(c.marketId, c.symbol, c.basePrice, c.maxPrice, c.tickSize);
-        }
-        return EngineConfigState.of(1, engine.getImplName(), engine.getEffectiveBookCapacity(),
-                array ? ArrayMatchingEngine.MAX_MATCHES_PER_ORDER : DirectMatchingEngine.MAX_MATCHES_PER_ORDER,
-                array ? 0 : DirectIndexOrderBook.DEFAULT_MAX_ORDERS_PER_LEVEL, m, t, capacity, genesisId, ceiling);
-    }
-
-    // Row 3: ADOPT at t == 1 records the four NORMALIZED (2.1), whatever the v12 frame carried.
-    @Test
-    public void adoptAtOneNormalizesTheFour() {
-        try (BehaviourTwoHarness h = new BehaviourTwoHarness(new Engine("array"))) {
-            assertEquals(ADOPT, h.apply(nodeMatching(h.engine, 1, 99, 12, 5), 64L));
-            final EngineConfigState r = h.engine.getEngineConfig();
-            assertEquals(1L, r.behaviorVersion);
-            assertEquals(0L, r.genesisId);
-            assertEquals(0L, r.maxWireVersion);
-            assertEquals(100_000L, r.commandLedgerCapacity);
-            assertFalse(h.engine.meIdentity().isBound());
-            assertEquals("check (c) passes on a matching node", 0, h.failFast.get());
-            assertTrue("no record 5 at behaviour 1", h.drain().isEmpty());
-        }
-    }
 
     // Row 5: at R = 1 the four stay excluded, so a t = 1 v12 re-send with other v12 values is a DUPLICATE.
     @Test
@@ -60,18 +30,6 @@ public class EngineConfigTablePrecedenceReviewTest {
             assertEquals(DUPLICATE, h.apply(config(1, 1, 99, 13, 5), 128L));
             assertSame(before, h.engine.getEngineConfig());
             assertEquals(1, h.sm.duplicateCount());
-            assertTrue(h.drain().isEmpty());
-        }
-    }
-
-    // Row 4 at an unsupported target: still the deterministic REJECTED_ADOPT_AT_2 plus one halt.
-    @Test
-    public void adoptAtThreeIsRow4AndHaltsOnce() {
-        try (BehaviourTwoHarness h = new BehaviourTwoHarness(new Engine("array"))) {
-            assertEquals(REJECTED_ADOPT_AT_2, h.apply(config(1, 3, G, 13, 50_000), 64L));
-            assertNull(h.engine.getEngineConfig());
-            assertFalse(h.engine.meIdentity().isBound());
-            assertEquals(1, h.failFast.get());
             assertTrue(h.drain().isEmpty());
         }
     }

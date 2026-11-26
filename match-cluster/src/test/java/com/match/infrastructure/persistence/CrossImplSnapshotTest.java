@@ -47,13 +47,13 @@ public class CrossImplSnapshotTest {
     }
 
     private void assertRoundTrip(String fromImpl, String toImpl) {
-        Engine from = new Engine(fromImpl);
+        Engine from = com.match.application.engine.TestEngines.withCompiledMarkets(fromImpl);
         seedRestingBooks(from);
 
         ExpandableArrayBuffer buffer = new ExpandableArrayBuffer();
         from.setTradeIdGenerator(7L); int length = SnapshotCodec.serialize(from, 0L, buffer);
 
-        Engine to = new Engine(toImpl);
+        Engine to = com.match.application.engine.TestEngines.withCompiledMarkets(toImpl);
         SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(buffer, 0, length, to);
 
         assertEquals("no resting order should be dropped across implementations", 0, decoded.rejectedOrders);

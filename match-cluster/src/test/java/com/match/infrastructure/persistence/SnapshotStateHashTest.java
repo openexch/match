@@ -164,7 +164,7 @@ public class SnapshotStateHashTest {
         }
         final EngineConfigState config = EngineConfigState.of(1, EngineConfigState.IMPL_ARRAY, 4_096, 100, 0, declared);
 
-        final Engine legacy = new Engine("array");
+        final Engine legacy = com.match.application.engine.TestEngines.withCompiledMarkets("array");
         legacy.setEngineConfig(config);
         final Engine configMode = Engine.deferredUntilConfig();
         configMode.createEnginesFromConfig(config);

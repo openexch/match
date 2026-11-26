@@ -39,7 +39,7 @@ public class AmendSettlementJournalTest {
     private record Entry(int template, long order, long oms, int status) {}
 
     @Before public void setUp() {
-        engine = new Engine("direct");
+        engine = com.match.application.engine.TestEngines.withCompiledMarkets("direct");
         journal = new SettlementJournal(1 << 16);
         publisher = new MatchEventPublisher();
         publisher.setSettlementJournal(journal);

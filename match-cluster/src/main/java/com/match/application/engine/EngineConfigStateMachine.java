@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.match.application.engine;
 
-import com.match.application.orderbook.ArrayMatchingEngine;
-import com.match.application.orderbook.DirectIndexOrderBook;
-import com.match.application.orderbook.DirectMatchingEngine;
 import com.match.infrastructure.Logger;
 
 /**
@@ -11,18 +8,19 @@ import com.match.infrastructure.Logger;
  * EngineConfig command (extended with behaviour versioning and the genesis
  * identity). Runs on the cluster service (agent) thread only, live and during replay alike, and
  * every DECISION reads ONLY the command's fields plus replicated state, so all replicas decide
- * identically. The jar (supported behaviours, wire ceiling) and the launch mode never decide; they
- * feed the node-local check, which either passes or removes THIS node via fail-fast.
+ * identically. The jar (supported behaviours, wire ceiling) never decides; it feeds the node-local
+ * check, which either passes or removes THIS node via fail-fast (exit 78: a restart cannot fix a jar).
+ * Engines are created only here, from the replicated config: there is no launch mode.
  *
  * <p><b>Decision table</b> (first match wins after row 0):</p>
  * <ol start="0">
  *   <li>structurally invalid (S-a..S-c, {@link EngineConfigState#invalidReason()}), every state:
  *       REJECTED_INVALID.</li>
- *   <li>none recorded, no engines, t == 1: FRESH_LEGACY (engines from config, four normalized).</li>
- *   <li>none recorded, no engines, t &gt;= 2: FRESH (engines from config, four recorded, identity
+ *   <li>none recorded, t == 1: FRESH_LEGACY (engines from config, four normalized).</li>
+ *   <li>none recorded, t &gt;= 2: FRESH (engines from config, four recorded, identity
  *       bound, journalSeq 1 consumed, record 5 FRESH).</li>
- *   <li>none recorded, engines exist, t == 1: ADOPT (record normalized, node-local cross-check).</li>
- *   <li>none recorded, engines exist, t &gt;= 2: REJECTED_ADOPT_AT_2, then this node halts.</li>
+ *   <li>(rows 3 and 4, ADOPT and REJECTED_ADOPT_AT_2, existed only for the removed legacy launch
+ *       mode; the numbering of the rows below is kept.)</li>
  *   <li>R at 1, t == 1 and {@code equalsConfig}: DUPLICATE.</li>
  *   <li>R at 1, t &gt;= 2: REJECTED_SWITCH.</li>
  *   <li>R at 1, any other difference: REJECTED_CHANGE.</li>
@@ -43,9 +41,9 @@ import com.match.infrastructure.Logger;
  *
  * <p>Counters are plain longs written on the service thread and read by the /metrics scraper —
  * the same discipline as {@code SbeDemuxer}'s ingress counters. The fail-fast hook is injected
- * (production: a hookless {@code Runtime.halt(1)} — {@code System.exit} from the service thread
- * deadlocks in shutdown hooks awaiting that very thread, see #223) so the exit path is
- * unit-testable.</p>
+ * (production: the service's {@code failFastIncompatible}, a hookless {@code Runtime.halt(78)} —
+ * {@code System.exit} from the service thread deadlocks in shutdown hooks awaiting that very thread,
+ * see #223) so the exit path is unit-testable.</p>
  */
 public final class EngineConfigStateMachine {
     private static final Logger logger = Logger.getLogger(EngineConfigStateMachine.class);
@@ -66,8 +64,8 @@ public final class EngineConfigStateMachine {
 
     /** The returned decision: closed, NOT replicated. */
     public enum Decision {
-        FRESH_LEGACY, FRESH, ADOPT, DUPLICATE, STALE, BUMP,
-        REJECTED_INVALID, REJECTED_ADOPT_AT_2, REJECTED_SWITCH, REJECTED_CHANGE,
+        FRESH_LEGACY, FRESH, DUPLICATE, STALE, BUMP,
+        REJECTED_INVALID, REJECTED_SWITCH, REJECTED_CHANGE,
         REJECTED_DOWNGRADE, REJECTED_GENESIS, REJECTED_CEILING_LOWERED
     }
 
@@ -117,8 +115,8 @@ public final class EngineConfigStateMachine {
 
     /**
      * Apply one logged EngineConfig command. Deterministic: the decision reads only
-     * {@code incoming} and replicated state; the node-local check that follows FRESH, ADOPT,
-     * REJECTED_ADOPT_AT_2 and BUMP never changes replicated state.
+     * {@code incoming} and replicated state; the node-local check that follows FRESH and BUMP
+     * never changes replicated state.
      */
     public Decision onEngineConfig(EngineConfigState incoming) {
         // Row 0: structural validity first, in every state.
@@ -131,19 +129,8 @@ public final class EngineConfigStateMachine {
         final long t = incoming.behaviorVersion;
 
         if (recorded == null) {
-            if (!engine.hasEngines()) {
-                return t == 1 ? freshLegacy(incoming.normalizedForBehaviourOne()) : fresh(incoming);
-            }
-            if (t == 1) {
-                return adopt(incoming.normalizedForBehaviourOne());
-            }
-            // Row 4: the replicated outcome is "nothing recorded"; this node is in legacy launch
-            // mode (engines from env) and must not serve behaviour >= 2 (check d).
-            final Decision d = reject(Decision.REJECTED_ADOPT_AT_2,
-                    "behaviour >= 2 requires config mode (MATCH_ENGINE_FROM_CONFIG=1); a config-mode"
-                            + " member at this position would have FRESHed", null, incoming);
-            nodeLocalCheck("adopt-at-" + t, null, false, true);
-            return d;
+            // Rows 1 and 2: the first config creates the engines, on every member at this position.
+            return t == 1 ? freshLegacy(incoming.normalizedForBehaviourOne()) : fresh(incoming);
         }
 
         if (recorded.behaviorVersion == 1) {
@@ -235,26 +222,11 @@ public final class EngineConfigStateMachine {
         if (enginesCreatedListener != null) {
             enginesCreatedListener.onEnginesCreatedFromConfig(incoming);
         }
-        if (nodeLocalCheck("fresh", incoming, false, false)) {
+        if (nodeLocalCheck("fresh", incoming)) {
             decisionJournal.journalEngineConfig(engine.getCurrentLogPosition(), journalSeq, incoming,
                     JOURNAL_DECISION_FRESH);
         }
         return Decision.FRESH;
-    }
-
-    // Row 3: ADOPT (dogfood path) at behaviour 1. Record first — the config becomes the declared
-    // truth on EVERY replica — then cross-check THIS node against it.
-    private Decision adopt(EngineConfigState normalized) {
-        engine.setEngineConfig(normalized);
-        acceptedCount++;
-        final String adopted = "[ENGINE-CONFIG] ACCEPTED (adopted mid-life): recorded as declared"
-                + " truth without recreating engines — configVersion=" + normalized.configVersion
-                + " impl=" + normalized.impl + " markets=" + normalized.markets.length
-                + " accepted=" + acceptedCount;
-        logger.info(adopted);
-        System.out.println(adopted);
-        nodeLocalCheck("adopt", normalized, true, false);
-        return Decision.ADOPT;
     }
 
     // Row 15: BUMP. Update the record and consume the next journalSeq, node-local check, then
@@ -271,7 +243,7 @@ public final class EngineConfigStateMachine {
                 + bumped.maxWireVersion + " journalSeq=" + journalSeq + " bumps=" + bumpCount;
         logger.info(msg);
         System.out.println(msg);
-        if (nodeLocalCheck("bump", bumped, false, false)) {
+        if (nodeLocalCheck("bump", bumped)) {
             decisionJournal.journalEngineConfig(engine.getCurrentLogPosition(), journalSeq, bumped,
                     JOURNAL_DECISION_BUMP);
         }
@@ -299,8 +271,8 @@ public final class EngineConfigStateMachine {
     }
 
     /**
-     * Node-local check after a snapshot restore that brought a recorded config, in BOTH launch
-     * modes. Never touches replicated state.
+     * Node-local check after a snapshot restore that brought a recorded config. Never touches
+     * replicated state.
      *
      * @return true when every applicable check passed; false after fail-fast was invoked
      */
@@ -309,54 +281,29 @@ public final class EngineConfigStateMachine {
         if (recorded == null) {
             return true;
         }
-        return nodeLocalCheck("snapshot-restore", recorded, !engine.isConfigMode(), false);
+        return nodeLocalCheck("snapshot-restore", recorded);
     }
 
     /**
-     * The node-local checks (fail-fast: never a reject from node-local truth).
-     * Every applicable check is evaluated, every failing one is logged CRITICAL naming the
-     * recorded value and this node's value, then fail-fast runs AT MOST ONCE.
+     * The node-local checks (fail-fast: never a reject from node-local truth): (a) the recorded
+     * behaviour is one this jar runs, (b) the jar is not below the recorded wire ceiling. Every
+     * failing one is logged CRITICAL naming the recorded value and this node's value, then the
+     * fail-fast (exit 78) runs AT MOST ONCE.
      *
-     * @param recorded          the recorded config after the decision (null for row 4)
-     * @param creationValues    check (c): legacy-mode engine-creation values (ADOPT, legacy restore)
-     * @param adoptAtTwoTaken   row 4 was taken on this node (check d)
      * @return true when every check passed
      */
-    private boolean nodeLocalCheck(String context, EngineConfigState recorded, boolean creationValues,
-                                   boolean adoptAtTwoTaken) {
-        final java.util.List<String> failures = new java.util.ArrayList<>(4);
-        final boolean legacyMode = !engine.isConfigMode();
-        if (recorded != null) {
-            // (a) the recorded behaviour is one this jar runs.
-            if (!supportsBehaviour(recorded.behaviorVersion)) {
-                failures.add("(a) recorded behaviorVersion=" + recorded.behaviorVersion
-                        + " is not supported by this jar (supported bitmask=" + SUPPORTED_BEHAVIOR_VERSIONS_MASK + ")");
-            }
-            // (b) a jar below the recorded wire ceiling cannot follow the log.
-            final String jarBelow = recorded.behaviorVersion >= 2 ? com.openexchange.cluster.WireCeiling.jarBelow(
-                    recorded.maxWireVersion, SUPPORTED_MAX_WIRE_VERSION, "order-schema") : null;
-            if (jarBelow != null) {
-                failures.add("(b) " + jarBelow);
-            }
-            // (c) legacy mode only: today's engine-creation value check.
-            if (creationValues && legacyMode) {
-                final EngineConfigState effective = nodeEffectiveConfig(recorded.configVersion);
-                if (!recorded.equalsIgnoringVersion(effective)) {
-                    failures.add("(c) this node's effective engine-creation values DIFFER from the"
-                            + " cluster's declared config"
-                            + "\n  declared (cluster log):  " + recorded
-                            + "\n  effective (this node):   " + effective);
-                }
-            }
-            // (d) launch mode contradicts the record.
-            if (recorded.behaviorVersion >= 2 && legacyMode) {
-                failures.add("(d) recorded behaviorVersion=" + recorded.behaviorVersion
-                        + " requires config mode; this node runs in legacy launch mode");
-            }
+    private boolean nodeLocalCheck(String context, EngineConfigState recorded) {
+        final java.util.List<String> failures = new java.util.ArrayList<>(2);
+        // (a) the recorded behaviour is one this jar runs.
+        if (!supportsBehaviour(recorded.behaviorVersion)) {
+            failures.add("(a) recorded behaviorVersion=" + recorded.behaviorVersion
+                    + " is not supported by this jar (supported bitmask=" + SUPPORTED_BEHAVIOR_VERSIONS_MASK + ")");
         }
-        if (adoptAtTwoTaken) {
-            failures.add("(d) an EngineConfig at behaviour >= 2 reached this legacy-mode node with"
-                    + " nothing recorded (REJECTED_ADOPT_AT_2); behaviour >= 2 requires config mode");
+        // (b) a jar below the recorded wire ceiling cannot follow the log.
+        final String jarBelow = recorded.behaviorVersion >= 2 ? com.openexchange.cluster.WireCeiling.jarBelow(
+                recorded.maxWireVersion, SUPPORTED_MAX_WIRE_VERSION, "order-schema") : null;
+        if (jarBelow != null) {
+            failures.add("(b) " + jarBelow);
         }
         if (failures.isEmpty()) {
             System.out.println("[ENGINE-CONFIG] node-local check OK (" + context + ")");
@@ -373,54 +320,13 @@ public final class EngineConfigStateMachine {
         return false;
     }
 
-    /**
-     * This node's EFFECTIVE engine-creation values as a config: env-derived impl and capacity
-     * (whatever the engine actually built with), the compiled-in caps for that impl, and the
-     * compiled-in market table — normalized exactly like a wire config so the comparison is
-     * field-by-field in sorted market order. {@code configVersion} is taken from the declared
-     * config: a node has no local config generation, so the version is recorded, not checked.
-     */
-    private EngineConfigState nodeEffectiveConfig(long declaredConfigVersion) {
-        final String impl = engine.getImplName();
-        final boolean array = EngineConfigState.IMPL_ARRAY.equals(impl);
-        final EngineConfigState.MarketDef[] markets =
-                new EngineConfigState.MarketDef[MarketConfig.ALL_MARKETS.length];
-        for (int i = 0; i < MarketConfig.ALL_MARKETS.length; i++) {
-            final MarketConfig m = MarketConfig.ALL_MARKETS[i];
-            markets[i] = new EngineConfigState.MarketDef(
-                    m.marketId, m.symbol, m.basePrice, m.maxPrice, m.tickSize);
-        }
-        return EngineConfigState.of(
-                declaredConfigVersion,
-                impl,
-                engine.getEffectiveBookCapacity(),
-                array ? ArrayMatchingEngine.MAX_MATCHES_PER_ORDER : DirectMatchingEngine.MAX_MATCHES_PER_ORDER,
-                array ? 0 : DirectIndexOrderBook.DEFAULT_MAX_ORDERS_PER_LEVEL,
-                markets);
-    }
-
     // ---- #224: effective engine-creation gauges (match_engine_effective_*) ----
     //
-    // The node's EFFECTIVE engine-creation config as published on /metrics: the recorded
-    // replicated config when one exists (the declared truth this node either was created from or
-    // passed/died by the adopt cross-check), else the SAME node-local derivation the adopt
-    // cross-check compares against (nodeEffectiveConfig: env-derived impl/capacity + compiled
-    // caps + compiled market table) — so the operator's declared-vs-effective precheck sees
-    // exactly what node-local check (c) would compare. Null only in config mode before the first
-    // EngineConfig (no engines, no effective values yet): the numeric gauges publish the -1
-    // sentinel and the hash publishes 0 until then. Read on the /metrics scraper thread with the
-    // same publish/acquire piggyback as the counters; allocates per scrape — fine off the order
-    // path.
+    // The recorded replicated config, the only source of engine-creation values. Null before the
+    // first EngineConfig (no engines): the numeric gauges publish the -1 sentinel and the hash
+    // publishes 0 until then.
     private EngineConfigState effectiveConfig() {
-        final EngineConfigState recorded = engine.getEngineConfig();
-        if (recorded != null) {
-            return recorded;
-        }
-        if (!engine.hasEngines()) {
-            return null;
-        }
-        // configVersion 0: a node has no local config generation and the gauges/hash exclude it.
-        return nodeEffectiveConfig(0L);
+        return engine.getEngineConfig();
     }
 
     /** Scrapeable (match_engine_effective_book_capacity): effective per-book capacity; -1 pre-config. */
@@ -453,7 +359,7 @@ public final class EngineConfigStateMachine {
         return c == null ? 0L : c.canonicalHash();
     }
 
-    /** Configs accepted: FRESH_LEGACY, FRESH, ADOPT, BUMP. */
+    /** Configs accepted: FRESH_LEGACY, FRESH, BUMP. */
     public long acceptedCount() {
         return acceptedCount;
     }

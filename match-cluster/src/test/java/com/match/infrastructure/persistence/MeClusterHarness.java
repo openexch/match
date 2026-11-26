@@ -69,6 +69,16 @@ final class MeClusterHarness implements AutoCloseable {
     java.util.function.BiConsumer<Member, AppClusteredService> beforeLaunch = (m, s) -> { };
     /** Runs on each member's ClusterConfig before the launch (an appointed leader, for example). */
     java.util.function.Consumer<Member> afterConfig = m -> { };
+    /**
+     * Builds each new member's service (default: the production constructor). A test that needs a
+     * service around a test-factory engine (the removed legacy launch mode) supplies its own.
+     */
+    java.util.function.IntFunction<AppClusteredService> serviceFactory = id -> new AppClusteredService();
+    /**
+     * When set before {@link #startAll}, each member runs on its own media driver launched apart from the
+     * archive and the consensus module (the production EXTERNAL driver shape) instead of a ClusteredMediaDriver.
+     */
+    boolean externalDriver;
     private final MediaDriver clientDriver;
     private final Thread drainer;
     private volatile boolean running = true;
@@ -91,6 +101,9 @@ final class MeClusterHarness implements AutoCloseable {
         volatile AppClusteredService service;
         volatile SettlementJournal journal;
         ClusteredMediaDriver driver;
+        MediaDriver extDriver;
+        io.aeron.archive.Archive extArchive;
+        io.aeron.cluster.ConsensusModule extConsensus;
         ClusteredServiceContainer container;
         volatile boolean live;
         final AtomicInteger failFast = new AtomicInteger();
@@ -134,12 +147,14 @@ final class MeClusterHarness implements AutoCloseable {
 
         void start() {
             logPartitioned = false;
-            final AppClusteredService s = new AppClusteredService();
+            final AppClusteredService s = serviceFactory.apply(id);
             s.failFast = failFast::incrementAndGet; // never halt the test JVM
+            s.failFastIncompatible = failFast::incrementAndGet; // the exit-78 seam: never halt the test JVM either
             final SettlementJournal j = new SettlementJournal(4 << 20);
             s.setSettlementJournal(j);
             beforeLaunch.accept(this, s);
             cfg = ClusterConfig.create(id, HOSTS, HOSTS, portBase, s);
+            cfg.memberCompat(cfg.memberCompat(), com.openexchange.cluster.MemberCompat.testRefusal("rig"));
             cfg.baseDir(baseDir());
             cfg.aeronDirectoryName(driverDir());
             cfg.idleStrategySupplier(BackoffIdleStrategy::new);
@@ -159,15 +174,22 @@ final class MeClusterHarness implements AutoCloseable {
                     .terminationTimeoutNs(TimeUnit.SECONDS.toNanos(2))
                     .sessionTimeoutNs(TimeUnit.MILLISECONDS.toNanos(sessionTimeoutMs));
             afterConfig.accept(this);
-            driver = ClusteredMediaDriver.launch(
-                    cfg.mediaDriverContext().dirDeleteOnStart(true).dirDeleteOnShutdown(true)
-                            .threadingMode(ThreadingMode.SHARED)
-                            .sharedIdleStrategy(new BackoffIdleStrategy())
-                            .receiveChannelEndpointSupplier((channel, dispatcher, status, context) ->
-                                    new io.aeron.driver.ext.DebugReceiveChannelEndpoint(channel, dispatcher, status,
-                                            context, logLoss(), noLoss()))
-                            .mtuLength(8192),
-                    cfg.archiveContext(), cfg.consensusModuleContext());
+            final MediaDriver.Context driverCtx = cfg.mediaDriverContext().dirDeleteOnStart(true)
+                    .dirDeleteOnShutdown(true)
+                    .threadingMode(ThreadingMode.SHARED)
+                    .sharedIdleStrategy(new BackoffIdleStrategy())
+                    .receiveChannelEndpointSupplier((channel, dispatcher, status, context) ->
+                            new io.aeron.driver.ext.DebugReceiveChannelEndpoint(channel, dispatcher, status,
+                                    context, logLoss(), noLoss()))
+                    .mtuLength(8192);
+            if (externalDriver) {
+                extDriver = MediaDriver.launch(driverCtx);
+                extArchive = io.aeron.archive.Archive.launch(cfg.archiveContext()
+                        .threadingMode(io.aeron.archive.ArchiveThreadingMode.SHARED));
+                extConsensus = io.aeron.cluster.ConsensusModule.launch(cfg.consensusModuleContext());
+            } else {
+                driver = ClusteredMediaDriver.launch(driverCtx, cfg.archiveContext(), cfg.consensusModuleContext());
+            }
             container = ClusteredServiceContainer.launch(cfg.clusteredServiceContext());
             journal = j;
             service = s;
@@ -179,6 +201,13 @@ final class MeClusterHarness implements AutoCloseable {
             live = false;
             CloseHelper.quietClose(container);
             CloseHelper.quietClose(driver);
+            CloseHelper.quietClose(extConsensus);
+            CloseHelper.quietClose(extArchive);
+            CloseHelper.quietClose(extDriver);
+            driver = null;
+            extConsensus = null;
+            extArchive = null;
+            extDriver = null;
             drainMember(this);
             journal = null;
         }

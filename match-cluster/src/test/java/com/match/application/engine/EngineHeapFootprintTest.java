@@ -19,9 +19,9 @@ public class EngineHeapFootprintTest {
     @Test
     public void reportRetainedHeapFootprint() {
         long base = usedAfterGc();
-        Engine direct = new Engine("direct");
+        Engine direct = com.match.application.engine.TestEngines.withCompiledMarkets("direct");
         long afterDirect = usedAfterGc();
-        Engine array = new Engine("array");
+        Engine array = com.match.application.engine.TestEngines.withCompiledMarkets("array");
         long afterArray = usedAfterGc();
 
         long directBytes = afterDirect - base;

@@ -32,7 +32,7 @@ public class EnginePublisherIntegrationTest {
 
     @Before
     public void setUp() {
-        engine = new Engine();
+        engine = com.match.application.engine.TestEngines.withCompiledMarkets();
         publisher = new MatchEventPublisher();
         handler = new CapturingHandler(MARKET_ID);
         publisher.initMarket(MARKET_ID, handler);
@@ -51,7 +51,7 @@ public class EnginePublisherIntegrationTest {
 
     /** Build an engine with an explicit matching implementation, wired to the shared publisher. */
     private Engine engineWith(String impl) {
-        Engine e = new Engine(impl);
+        Engine e = com.match.application.engine.TestEngines.withCompiledMarkets(impl);
         e.setEventPublisher(publisher);
         return e;
     }
@@ -528,7 +528,7 @@ public class EnginePublisherIntegrationTest {
     @Test
     public void engineWithoutPublisherDoesNotCrash() {
         // Create a fresh engine without publisher
-        Engine bareEngine = new Engine();
+        Engine bareEngine = com.match.application.engine.TestEngines.withCompiledMarkets();
         // Should not throw even without publisher
         bareEngine.acceptOrder(MARKET_ID, Engine.CMD_CREATE, limitCmd(100L, OrderSide.BID, 60000.0, 1.0), System.nanoTime());
     }

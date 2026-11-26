@@ -161,7 +161,7 @@ public class SbeDemuxerEngineConfigTest {
 
     @Test
     public void legacyEngineNeverTakesTheGuardPath() {
-        Engine engine = new Engine(); // legacy: engines exist from boot
+        Engine engine = com.match.application.engine.TestEngines.withCompiledMarkets(); // legacy: engines exist from boot
         SbeDemuxer demuxer = new SbeDemuxer(engine);
         demuxer.setPreConfigOrderRejectHandler((m, u, o, b, t) ->
                 fail("legacy mode must never hit the fresh-cluster guard"));

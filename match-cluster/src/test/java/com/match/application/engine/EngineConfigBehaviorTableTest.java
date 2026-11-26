@@ -144,20 +144,6 @@ public class EngineConfigBehaviorTableTest {
         }
     }
 
-    // ---- row 4 ----
-
-    @Test
-    public void adoptAtTwoRefusedAndHalts() {
-        try (BehaviourTwoHarness h = new BehaviourTwoHarness(new Engine("direct"))) {
-            assertEquals(REJECTED_ADOPT_AT_2, h.apply(fresh2(), 64L));
-            assertNull("nothing recorded", h.engine.getEngineConfig());
-            assertFalse(h.engine.meIdentity().isBound());
-            assertEquals("the legacy-mode node halts (check d)", 1, h.failFast.get());
-            assertEquals(1, h.sm.rejectCount());
-            assertTrue(h.drain().isEmpty());
-        }
-    }
-
     // ---- row 0 against a recorded config ----
 
     @Test

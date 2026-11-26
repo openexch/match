@@ -71,7 +71,7 @@ public final class ScenarioRunner {
         if (genesis) {
             return Engine.deferredUntilConfig();
         }
-        return impl == null ? new Engine() : new Engine(impl);
+        return impl == null ? com.match.application.engine.TestEngines.withCompiledMarkets() : com.match.application.engine.TestEngines.withCompiledMarkets(impl);
     }
 
     /** The impl the runner builds: explicit, else the flag-resolved one (the Engine() default). */

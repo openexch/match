@@ -197,7 +197,7 @@ public class MatchLimitCapTest {
     }
 
     private static Engine engineWithSmallCapEth(String kind, RecordingEventSink sink) {
-        Engine engine = new Engine("array"); // cheap array books for every market...
+        Engine engine = com.match.application.engine.TestEngines.withCompiledMarkets("array"); // cheap array books for every market...
         engine.getEngines().put(ETH, ethSmallCap(kind, 4)); // ...then swap in the cap=4 test engine
         engine.setEventPublisher(sink);
         return engine;

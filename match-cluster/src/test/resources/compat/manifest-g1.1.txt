@@ -1,0 +1,7 @@
+format=member-compat-manifest/1
+wire_floor=9
+wire_top=12
+behaviors=1,2
+layout=1 since_behavior=1
+layout=2 since_behavior=2
+journal=me-journal schema=4 version=1

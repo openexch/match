@@ -31,7 +31,7 @@ public class SettlementJournalRingCarriesOnlySchema4Test {
 
     @Test
     public void everyRingFrameIsSchema4() {
-        final Engine engine = new Engine("direct");
+        final Engine engine = com.match.application.engine.TestEngines.withCompiledMarkets("direct");
         final SettlementJournal journal = new SettlementJournal(1 << 16);
         final MatchEventPublisher publisher = new MatchEventPublisher();
         publisher.setSettlementJournal(journal);

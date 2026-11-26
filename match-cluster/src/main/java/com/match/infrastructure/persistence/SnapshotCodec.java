@@ -757,18 +757,17 @@ public final class SnapshotCodec {
                 ledgerV2Restored = true;
             }
         } else if (enginesWereEmpty && !parkedMarketIds.isEmpty()) {
-            // Config-mode node restoring a snapshot that has market books but NO config block:
-            // nothing to build engines from — this is state loss and must be loud, never silent.
+            // A deferred node restoring an image that has market books but NO config block: this build
+            // creates engines only from a recorded EngineConfig, so there is nothing to restore the books
+            // into. Refused (the node stops); the way out is a clean genesis. An image without books
+            // (nothing to lose) still restores.
             int lost = 0;
             for (final long[][] books : parkedBooks) {
                 lost += books[0].length / 4 + books[1].length / 4;
             }
-            rejected += lost;
-            System.err.println("[SNAPSHOT] ERROR: snapshot carries " + lost + " order(s) across "
-                    + parkedMarketIds.size() + " market(s) but no engineConfig block, and this"
-                    + " config-mode node has no engines to restore into — orders dropped (state"
-                    + " loss). Was this node switched to MATCH_ENGINE_FROM_CONFIG with a legacy"
-                    + " snapshot?");
+            throw new IllegalStateException("[SNAPSHOT] refused: the image carries " + lost + " order(s) in "
+                    + parkedMarketIds.size() + " market(s) and no engineConfig block; this build creates engines"
+                    + " only from a recorded EngineConfig (a clean genesis is required)");
         }
 
         if (ledgerV2Restored) {

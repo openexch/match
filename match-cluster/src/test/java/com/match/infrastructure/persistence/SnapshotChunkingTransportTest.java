@@ -93,7 +93,7 @@ public class SnapshotChunkingTransportTest {
     @Test
     public void largeSnapshotSurvivesChunkedTransportRoundTrip() {
         // ---- 1. Build a book big enough to exceed maxMessageLength several times over ----
-        final Engine orig = new Engine();
+        final Engine orig = com.match.application.engine.TestEngines.withCompiledMarkets();
         final MatchingEngine btc = orig.getEngine(Engine.MARKET_BTC_USD);
         final MatchingEngine eth = orig.getEngine(Engine.MARKET_ETH_USD);
         long oid = 1;
@@ -163,7 +163,7 @@ public class SnapshotChunkingTransportTest {
                     expectedBytes, Arrays.copyOf(accum.byteArray(), accumLen[0]));
 
             // ---- 6. Decode the reassembled payload and assert FULL state equality ----
-            final Engine restored = new Engine();
+            final Engine restored = com.match.application.engine.TestEngines.withCompiledMarkets();
             final SnapshotCodec.Decoded decoded = SnapshotCodec.deserialize(accum, 0, accumLen[0], restored);
 
             assertEquals("orderId generator", ORDER_ID_GEN_IN, restored.getOrderIdGenerator());

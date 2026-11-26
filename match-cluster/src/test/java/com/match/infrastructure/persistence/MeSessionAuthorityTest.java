@@ -296,8 +296,8 @@ public class MeSessionAuthorityTest {
         for (int c : new int[] {GATEWAY, FORWARDER, ADMIN}) {
             // legacy mode (engines from boot, no config) and recorded behaviour 1
             for (boolean configured : new boolean[] {false, true}) {
-                try (Replica byClass = new Replica(configured ? Engine.deferredUntilConfig() : new Engine());
-                     Replica trusted = new Replica(configured ? Engine.deferredUntilConfig() : new Engine())) {
+                try (Replica byClass = new Replica(configured ? Engine.deferredUntilConfig() : com.match.application.engine.TestEngines.withCompiledMarkets());
+                     Replica trusted = new Replica(configured ? Engine.deferredUntilConfig() : com.match.application.engine.TestEngines.withCompiledMarkets())) {
                     final List<Long> servedA = new ArrayList<>();
                     final List<Long> servedB = new ArrayList<>();
                     byClass.demuxer.setOpenOrdersSnapshotRequestHandler(servedA::add);

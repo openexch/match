@@ -48,7 +48,7 @@ public class EngineTradeIdTest {
     private static long tradeIdAtPayloadOffset8(Engine engine) {
         final ExpandableArrayBuffer buf = new ExpandableArrayBuffer();
         final int len = SnapshotCodec.serialize(engine, 0L, buf);
-        final Engine probe = new Engine("array");
+        final Engine probe = com.match.application.engine.TestEngines.withCompiledMarkets("array");
         try {
             return SnapshotCodec.deserialize(buf, 0, len, probe).tradeIdGenerator;
         } finally {
@@ -58,7 +58,7 @@ public class EngineTradeIdTest {
 
     @Test
     public void sinklessEngineCountsItsTrades() {
-        final Engine engine = new Engine("array");
+        final Engine engine = com.match.application.engine.TestEngines.withCompiledMarkets("array");
         try {
             assertNull(engine.getEventPublisher());
             assertEquals("starts at 1", 1L, engine.getTradeIdGenerator());
@@ -72,7 +72,7 @@ public class EngineTradeIdTest {
 
     @Test
     public void tradeIdsAdvanceByOnePerTradeInMatchOrder() {
-        try (BehaviourTwoHarness h = new BehaviourTwoHarness(new Engine("array"))) {
+        try (BehaviourTwoHarness h = new BehaviourTwoHarness(com.match.application.engine.TestEngines.withCompiledMarkets("array"))) {
             threeTrades(h.engine);
             threeTrades(h.engine);
             final List<Long> ids = new ArrayList<>();
@@ -92,8 +92,8 @@ public class EngineTradeIdTest {
 
     @Test
     public void restoreAppliesTheGeneratorInPlace() {
-        final Engine source = new Engine("array");
-        final Engine restored = new Engine("array");
+        final Engine source = com.match.application.engine.TestEngines.withCompiledMarkets("array");
+        final Engine restored = com.match.application.engine.TestEngines.withCompiledMarkets("array");
         try {
             threeTrades(source);
             final ExpandableArrayBuffer buf = new ExpandableArrayBuffer();

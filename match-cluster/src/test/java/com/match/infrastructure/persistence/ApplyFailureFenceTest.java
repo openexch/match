@@ -50,7 +50,7 @@ public class ApplyFailureFenceTest {
     }
 
     private static void assertApplyFailure(Throwable failure) {
-        Engine engine = new Engine("array");
+        Engine engine = com.match.application.engine.TestEngines.withCompiledMarkets("array");
         engine.setEventPublisher(failingSink(failure));
         var demux = new SbeDemuxer(engine);
         var b = create();
@@ -71,7 +71,7 @@ public class ApplyFailureFenceTest {
     @Test public void applyErrorAlsoLatches() { assertApplyFailure(new AssertionError("injected")); }
 
     @Test public void tradePublicationFailureCannotBeAcknowledgedAsApplied() {
-        var engine = new Engine("array"); var demux = new SbeDemuxer(engine); var b = create();
+        var engine = com.match.application.engine.TestEngines.withCompiledMarkets("array"); var demux = new SbeDemuxer(engine); var b = create();
         demux.dispatchTrusted(b, 0, b.capacity(), 10);
         var failure = new IllegalStateException("injected trade publication");
         engine.setEventPublisher(failingSink(failure));
@@ -87,7 +87,7 @@ public class ApplyFailureFenceTest {
     }
 
     @Test public void poisonInputDoesNotFenceHealthyEngine() {
-        Engine engine = new Engine("array");
+        Engine engine = com.match.application.engine.TestEngines.withCompiledMarkets("array");
         var demux = new SbeDemuxer(engine); var b = create();
         b.putByte(8 + CreateOrderEncoder.orderSideEncodingOffset(), (byte) 99);
         demux.dispatchTrusted(b, 0, b.capacity(), 10);
@@ -99,7 +99,7 @@ public class ApplyFailureFenceTest {
     }
 
     @Test public void invalidPhysicalBoundsAreDroppedBeforeHeaderAccess() {
-        var engine = new Engine("array"); var demux = new SbeDemuxer(engine);
+        var engine = com.match.application.engine.TestEngines.withCompiledMarkets("array"); var demux = new SbeDemuxer(engine);
         var shortBuffer = new UnsafeBuffer(new byte[4]);
         demux.dispatchTrusted(shortBuffer, 0, 8, 10);
         demux.dispatchTrusted(shortBuffer, Integer.MAX_VALUE, 8, 10);
@@ -110,7 +110,7 @@ public class ApplyFailureFenceTest {
     }
 
     @Test public void truncatedLogicalFrameCannotReadStaleBackingBytes() {
-        var engine = new Engine("array"); var demux = new SbeDemuxer(engine); var b = create();
+        var engine = com.match.application.engine.TestEngines.withCompiledMarkets("array"); var demux = new SbeDemuxer(engine); var b = create();
         // Backing memory contains a complete prior command, but this frame does not.
         demux.dispatchTrusted(b, 0, 10, 10);
         assertTrue("truncated frame must not place a stale order", engine.getEngine(1).isBidEmpty());
@@ -118,7 +118,7 @@ public class ApplyFailureFenceTest {
     }
 
     @Test public void shortDeclaredBlockCannotHideFullStalePayload() {
-        var engine = new Engine("array"); var demux = new SbeDemuxer(engine); var b = create();
+        var engine = com.match.application.engine.TestEngines.withCompiledMarkets("array"); var demux = new SbeDemuxer(engine); var b = create();
         b.putShort(0, (short) 1, java.nio.ByteOrder.LITTLE_ENDIAN);
         demux.dispatchTrusted(b, 0, b.capacity(), 10);
         assertTrue(engine.getEngine(1).isBidEmpty());
@@ -126,7 +126,7 @@ public class ApplyFailureFenceTest {
     }
 
     @Test public void validFrameAtNonzeroOffsetStillApplies() {
-        var engine = new Engine("array"); var demux = new SbeDemuxer(engine); var command = create();
+        var engine = com.match.application.engine.TestEngines.withCompiledMarkets("array"); var demux = new SbeDemuxer(engine); var command = create();
         var b = new UnsafeBuffer(new byte[256]); b.putBytes(17, command, 0, command.capacity());
         demux.dispatchTrusted(b, 17, command.capacity(), 10);
         assertFalse(engine.getEngine(1).isBidEmpty());
@@ -146,7 +146,7 @@ public class ApplyFailureFenceTest {
     }
 
     @Test public void snapshotRequestHandlerFailureIsApplyFailure() {
-        var demux = new SbeDemuxer(new Engine("array"));
+        var demux = new SbeDemuxer(com.match.application.engine.TestEngines.withCompiledMarkets("array"));
         var failure = new IllegalArgumentException("injected callback");
         demux.setOpenOrdersSnapshotRequestHandler(id -> { throw failure; });
         var b = new UnsafeBuffer(new byte[128]);
@@ -180,7 +180,7 @@ public class ApplyFailureFenceTest {
         Field f = AppClusteredService.class.getDeclaredField(name); f.setAccessible(true); return f.get(service);
     }
     private static AppClusteredService failingService(Throwable failure) throws Exception {
-        var service = new AppClusteredService();
+        var service = AppClusteredService.withEngine(com.match.application.engine.TestEngines.withCompiledMarkets());
         ((Engine) field(service, "engine")).setEventPublisher(failingSink(failure));
         Field timer = AppClusteredService.class.getDeclaredField("flushTimerScheduled");
         timer.setAccessible(true); timer.setBoolean(service, true);

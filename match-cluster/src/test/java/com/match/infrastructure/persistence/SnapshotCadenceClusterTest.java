@@ -80,6 +80,7 @@ public class SnapshotCadenceClusterTest {
 
         final ClusterConfig config = ClusterConfig.create(
                 0, 0, hostnames, hostnames, PORT_BASE, baseDir, new AppClusteredService());
+        config.memberCompat(config.memberCompat(), com.openexchange.cluster.MemberCompat.testRefusal("rig"));
         config.errorHandler(t -> System.err.println("Cluster error: " + t.getMessage()));
 
         clusteredMediaDriver = ClusteredMediaDriver.launch(

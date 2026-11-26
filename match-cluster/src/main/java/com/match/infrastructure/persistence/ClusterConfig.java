@@ -97,6 +97,16 @@ public final class ClusterConfig
     private final AeronArchive.Context aeronArchiveContext;
     private final ConsensusModule.Context consensusModuleContext;
     private final List<ClusteredServiceContainer.Context> clusteredServiceContexts;
+    /** The member version every context carries (S4) and what a refusal by its validator does. */
+    private com.openexchange.cluster.MemberCompat memberCompat = MatchMemberCompat.current();
+    /**
+     * Fail closed until the node installs the lifecycle's exit 78 (or a rig its explicit test refusal):
+     * {@code NOT_INSTALLED} refuses every version.
+     */
+    private com.openexchange.cluster.MemberCompat.Refusal memberCompatRefusal =
+            com.openexchange.cluster.MemberCompat.NOT_INSTALLED;
+    /** The service, when it is the engine's, so its /ready {@code compat=} is the validator's own value. */
+    private AppClusteredService engineService;
 
     ClusterConfig(
             final int memberId,
@@ -149,6 +159,8 @@ public final class ClusterConfig
                     "memberId=" + memberId + " is invalid, should be " + startingMemberId +
                             " <= memberId < " + startingMemberId + ingressHostnames.size());
         }
+        // S4 R-C3: the removed launch-mode settings refuse the boot (exit 78) before any Aeron component.
+        refuseRemovedSettings();
 
         final String clusterMembers = clusterMembers(startingMemberId, ingressHostnames, clusterHostnames, portBase);
 
@@ -316,7 +328,7 @@ public final class ClusterConfig
             serviceContexts.add(additionalServiceContext);
         }
 
-        return new ClusterConfig(
+        final ClusterConfig config = new ClusterConfig(
                 memberId,
                 ingressHostname,
                 hostname,
@@ -325,6 +337,106 @@ public final class ClusterConfig
                 aeronArchiveContext,
                 consensusModuleContext,
                 serviceContexts);
+        if (clusteredService instanceof AppClusteredService engineService)
+        {
+            config.engineService = engineService;
+        }
+        config.applyMemberCompat();
+        return config;
+    }
+
+    // ==================== S4: removed launch-mode settings ====================
+
+    /** The removed launch switch: {@code true} (the one legal value, launchers set it today) is accepted and ignored. */
+    public static final String ENGINE_FROM_CONFIG_ENV = "MATCH_ENGINE_FROM_CONFIG";
+    public static final String ENGINE_FROM_CONFIG_PROP = "match.engine.from.config";
+    public static final String ENGINE_IMPL_ENV = "MATCH_ENGINE_IMPL";
+    public static final String ENGINE_IMPL_PROP = "match.engine.impl";
+    public static final String BOOK_CAPACITY_ENV = "MATCH_ENGINE_BOOK_CAPACITY";
+    public static final String BOOK_CAPACITY_PROP = "match.engine.book.capacity";
+
+    /**
+     * A setting the node no longer reads refuses the boot. Thrown before any Aeron component exists;
+     * the launcher stops with {@link com.openexchange.cluster.EngineLifecycle#EXIT_CONFIG} (78), which
+     * the units never restart: the recovery is to unset it.
+     */
+    public static final class SettingRefusedException extends IllegalStateException
+    {
+        public SettingRefusedException(final String message)
+        {
+            super(message);
+        }
+    }
+
+    /**
+     * The refusal for the removed settings, null when none is set (or the switch is set to exactly
+     * {@code true}). Pure: {@code get} reads one name (an environment variable or a system property)
+     * and returns null when it is unset.
+     */
+    static String removedSettingsRefusal(final java.util.function.UnaryOperator<String> get)
+    {
+        for (final String name : new String[] {ENGINE_FROM_CONFIG_ENV, ENGINE_FROM_CONFIG_PROP})
+        {
+            final String v = get.apply(name);
+            if (v != null && !"true".equals(v))
+            {
+                return name + "=" + v + " is no longer supported: engines are created only from the replicated"
+                        + " EngineConfig; unset it";
+            }
+        }
+        for (final String name : new String[] {ENGINE_IMPL_ENV, ENGINE_IMPL_PROP, BOOK_CAPACITY_ENV, BOOK_CAPACITY_PROP})
+        {
+            if (get.apply(name) != null)
+            {
+                return name + " is no longer read: the implementation and the capacity come from the replicated"
+                        + " EngineConfig; unset it";
+            }
+        }
+        return null;
+    }
+
+    /** {@link #removedSettingsRefusal} over this process's environment (the upper-case names) and properties. */
+    static void refuseRemovedSettings()
+    {
+        final String refusal = removedSettingsRefusal(
+                name -> name.indexOf('.') >= 0 ? System.getProperty(name) : System.getenv(name));
+        if (refusal != null)
+        {
+            throw new SettingRefusedException(refusal);
+        }
+    }
+
+    // ==================== S4: member version ====================
+
+    /**
+     * The member version every context carries and the refusal its validator runs (production:
+     * {@code MemberCompat.fatalOnRefusal(lifecycle, build)}, exit 78). One validator instance for the
+     * consensus module and every service container, recording accepted versions in
+     * {@code <clusterDir>/member-compat.seen}. Call after the base directory is final ({@link #baseDir}
+     * re-applies it).
+     */
+    public void memberCompat(
+            final com.openexchange.cluster.MemberCompat own, final com.openexchange.cluster.MemberCompat.Refusal onRefusal)
+    {
+        this.memberCompat = java.util.Objects.requireNonNull(own, "own");
+        this.memberCompatRefusal = java.util.Objects.requireNonNull(onRefusal, "onRefusal");
+        applyMemberCompat();
+    }
+
+    /** The member version the contexts carry. */
+    public com.openexchange.cluster.MemberCompat memberCompat()
+    {
+        return memberCompat;
+    }
+
+    private void applyMemberCompat()
+    {
+        com.openexchange.cluster.MemberCompat.install(consensusModuleContext, clusteredServiceContexts, memberCompat,
+                memberCompatRefusal);
+        if (engineService != null)
+        {
+            engineService.memberCompat = memberCompat;
+        }
     }
 
     /**
@@ -433,6 +545,7 @@ public final class ClusterConfig
         this.archiveContext.archiveDir(new File(baseDir, ARCHIVE_SUB_DIR));
         this.consensusModuleContext.clusterDir(new File(baseDir, CLUSTER_SUB_DIR));
         this.clusteredServiceContexts.forEach((ctx) -> ctx.clusterDir(new File(baseDir, CLUSTER_SUB_DIR)));
+        applyMemberCompat();
     }
 
     /**

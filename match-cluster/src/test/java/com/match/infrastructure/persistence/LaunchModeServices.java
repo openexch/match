@@ -6,7 +6,7 @@ import com.match.application.engine.Engine;
 import java.lang.reflect.Field;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Test support: an {@link AppClusteredService} in a chosen launch mode with a recording fail-fast. */
+/** Test support: an {@link AppClusteredService} with or without compiled-market engines and recording fail-fast seams. */
 final class LaunchModeServices {
 
     private LaunchModeServices() {
@@ -52,22 +52,22 @@ final class LaunchModeServices {
         final AppClusteredService service;
         final AtomicInteger failFast = new AtomicInteger();
 
+        /** Counts the exit-78 seam alone; {@link #failFast} counts both seams. */
+        final AtomicInteger failFastIncompatible = new AtomicInteger();
+
+        /**
+         * @param configMode true: the production service (no engines until the first EngineConfig);
+         *                   false: a service around a test-factory engine with the compiled markets
+         *                   (the removed legacy launch mode, reachable only from tests)
+         */
         Service(boolean configMode) {
-            final String prior = System.getProperty("match.engine.from.config");
-            System.setProperty("match.engine.from.config", Boolean.toString(configMode));
-            try {
-                service = new AppClusteredService();
-            } finally {
-                if (prior == null) {
-                    System.clearProperty("match.engine.from.config");
-                } else {
-                    System.setProperty("match.engine.from.config", prior);
-                }
-            }
+            service = configMode ? new AppClusteredService()
+                    : AppClusteredService.withEngine(com.match.application.engine.TestEngines.withCompiledMarkets());
             service.failFast = failFast::incrementAndGet;
-            if (engine().isConfigMode() != configMode) {
-                throw new IllegalStateException("launch mode not applied (MATCH_ENGINE_FROM_CONFIG set in env?)");
-            }
+            service.failFastIncompatible = () -> {
+                failFastIncompatible.incrementAndGet();
+                failFast.incrementAndGet();
+            };
         }
 
         Engine engine() {
