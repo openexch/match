@@ -80,6 +80,28 @@ final class MeClusterHarness implements AutoCloseable {
      */
     boolean externalDriver;
     private final MediaDriver clientDriver;
+    /**
+     * While set, the clients' driver drops every status message carrying END_OF_STREAM (a member's receiver
+     * sends it when its driver closes gracefully). A member that is SIGKILLed sends none, so its clients'
+     * ingress publications stay connected until the publication connection timeout.
+     */
+    volatile boolean dropEosToClients;
+
+    private io.aeron.driver.ext.LossGenerator eosLoss() {
+        return new io.aeron.driver.ext.LossGenerator() {
+            @Override
+            public boolean shouldDropFrame(java.net.InetSocketAddress address, UnsafeBuffer buffer, int length) {
+                return dropEosToClients && buffer instanceof io.aeron.protocol.StatusMessageFlyweight sm
+                        && (sm.flags() & io.aeron.protocol.StatusMessageFlyweight.END_OF_STREAM_FLAG) != 0;
+            }
+
+            @Override
+            public boolean shouldDropFrame(java.net.InetSocketAddress address, UnsafeBuffer buffer, int streamId,
+                                           int sessionId, int termId, int termOffset, int length) {
+                return shouldDropFrame(address, buffer, length);
+            }
+        };
+    }
     private final Thread drainer;
     private volatile boolean running = true;
 
@@ -431,7 +453,9 @@ final class MeClusterHarness implements AutoCloseable {
                 .dirDeleteOnStart(true)
                 .dirDeleteOnShutdown(true)
                 .threadingMode(ThreadingMode.SHARED)
-                .sharedIdleStrategy(new SleepingMillisIdleStrategy(1)));
+                .sharedIdleStrategy(new SleepingMillisIdleStrategy(1))
+                .sendChannelEndpointSupplier((channel, status, context) ->
+                        new io.aeron.driver.ext.DebugSendChannelEndpoint(channel, status, context, noLoss(), eosLoss())));
         drainer = new Thread(this::drainLoop, "me3-journal-drainer");
         drainer.setDaemon(true);
         drainer.start();

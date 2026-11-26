@@ -27,6 +27,14 @@ import static org.junit.Assert.assertTrue;
  * snapshot state hash and equal journals. Orders are sent between the steps and while a member is down, and every
  * one of them is APPLIED (zero rejected commands); no member's validator refused anything.
  *
+ * <p>The forwarder keeps the client's side of the durable-command contract: an accepted {@code offer} only means the
+ * ingress publication took the bytes, and an order offered to a leader that died (or to its restarted self, now a
+ * follower) never reaches the log. So at every settle point the forwarder resends each order that has no outcome yet,
+ * the same command id and intent, until it has one. A resend of an order the log already holds is an equal-intent
+ * duplicate the ledger suppresses with no new journal record (row B3), so an order appended whose outcome is lost
+ * still fails here. The killed leader sends no end-of-stream to the clients (a SIGKILL sends none), so this path
+ * runs on every run, not only when a slow runner loses the race.</p>
+ *
  * <p>The per-member level is a test seam: {@code ClusterConfig.memberCompat} on each member's config, the method the
  * production launcher calls with the build's constant.</p>
  */
@@ -39,6 +47,7 @@ public class MixedLevelRollClusterTest {
     private final MemberCompat[] levels = {OLD, OLD, OLD};
     private final AtomicInteger refusals = new AtomicInteger();
     private final List<Long> sent = new ArrayList<>();
+    private final List<Long> resent = new ArrayList<>();
     private long nextId = 10_001;
 
     private void install(final MeClusterHarness h) {
@@ -53,18 +62,43 @@ public class MixedLevelRollClusterTest {
         };
     }
 
+    private static byte[] order(final long id) {
+        return create(id, 0, 100 + (id % 7), (int) (id % 2), 59_000 + (id % 3) * 10, 1 + id % 2);
+    }
+
     private void send(final MeClusterHarness h, final AeronCluster forwarder, final int n) {
         for (int i = 0; i < n; i++) {
             final long id = nextId++;
             sent.add(id);
-            assertTrue(MeClusterHarness.offer(forwarder, create(id, 0, 100 + (id % 7), (int) (id % 2),
-                    59_000 + (id % 3) * 10, 1 + id % 2), 10_000) > 0);
+            assertTrue(MeClusterHarness.offer(forwarder, order(id), 10_000) > 0);
         }
     }
 
+    private List<Long> withoutOutcome(final MeClusterHarness h) {
+        return sent.stream().filter(id -> !h.outcomes.containsKey(MeClusterHarness.key(id, 0))).toList();
+    }
+
+    /**
+     * Every order sent so far has an outcome, resending (same id, same intent) those that have none, then every live
+     * member journaled the same records.
+     */
+    private void settle(final MeClusterHarness h, final AeronCluster forwarder) {
+        final long deadline = System.currentTimeMillis() + 60_000;
+        while (!MeClusterHarness.await(forwarder, () -> withoutOutcome(h).isEmpty(), 2_000)) {
+            final List<Long> missing = withoutOutcome(h);
+            assertTrue("every order has an outcome; none yet for " + missing, System.currentTimeMillis() < deadline);
+            System.err.println("[T4] resending " + missing + " (no outcome yet)");
+            resent.addAll(missing);
+            for (final long id : missing) {
+                assertTrue(MeClusterHarness.offer(forwarder, order(id), 10_000) > 0);
+            }
+        }
+        assertTrue(h.awaitQuiescence(forwarder, 30_000));
+    }
+
     private void assertEveryOrderApplied(final MeClusterHarness h, final AeronCluster client) {
-        assertTrue("every order has an outcome", MeClusterHarness.await(client,
-                () -> sent.stream().allMatch(id -> h.outcomes.containsKey(MeClusterHarness.key(id, 0))), 30_000));
+        assertTrue("every order has an outcome; none for " + withoutOutcome(h),
+                MeClusterHarness.await(client, () -> withoutOutcome(h).isEmpty(), 30_000));
         for (final long id : sent) {
             assertEquals("order " + id + " APPLIED (zero rejected commands)", 0L,
                     h.outcomes.get(MeClusterHarness.key(id, 0))[0]);
@@ -109,6 +143,7 @@ public class MixedLevelRollClusterTest {
     public void aClusterRollsFromNMinusOneToNWithMixedLevelsAndALeaderKilledMidRoll() throws Exception {
         try (MeClusterHarness h = new MeClusterHarness(PORT_BASE, "mixed-level-roll")) {
             install(h);
+            h.dropEosToClients = true; // a killed leader tells its clients nothing
             h.startAll();
             MeClusterHarness.Member leader = h.awaitLeader(null, 30_000);
             try (AeronCluster admin = h.connect(ClusterSessionClass.ADMIN);
@@ -117,14 +152,17 @@ public class MixedLevelRollClusterTest {
                 assertTrue(MeClusterHarness.await(admin,
                         () -> h.engineConfigRecords.get() >= MeClusterHarness.MEMBERS, 20_000));
                 send(h, forwarder, 8);
-                assertTrue(h.awaitQuiescence(forwarder, 30_000));
+                settle(h, forwarder);
                 assertLevels(h, admin);
 
                 // R-B4 step 1: every member at N-1 holds a snapshot taken at N-1
                 h.snapshot(leader, admin);
                 h.awaitSnapshotSeries(admin, -1, 30_000);
+                // The service stamps its snapshot series inside onTakeSnapshot, before it acks; each consensus module
+                // writes its recording-log entry only on that ack, so the entry lands a moment after the series.
                 for (final MeClusterHarness.Member m : h.members) {
-                    assertTrue("member " + m.id + " holds a snapshot", m.newestSnapshot() > 0);
+                    assertTrue("member " + m.id + " holds a snapshot",
+                            MeClusterHarness.await(admin, () -> m.newestSnapshot() > 0, 30_000));
                 }
 
                 // step 2: the first follower to N
@@ -132,7 +170,7 @@ public class MixedLevelRollClusterTest {
                 final MeClusterHarness.Member f2 = h.members[(leader.id + 2) % MeClusterHarness.MEMBERS];
                 restartAt(h, f1, NEW, forwarder, admin);
                 send(h, forwarder, 4);
-                assertTrue(h.awaitQuiescence(forwarder, 30_000));
+                settle(h, forwarder);
                 assertLevels(h, admin);
 
                 // step 3, leader dies mid-roll: the N-1 leader is killed, restarted on N
@@ -158,14 +196,14 @@ public class MixedLevelRollClusterTest {
                 assertEquals("an N-1 follower remains", OLD, levels[f2.id]);
                 assertEquals(Cluster.Role.FOLLOWER, f2.role());
                 send(h, forwarder, 6);
-                assertTrue("N leads N-1: every member journaled the same records",
-                        h.awaitQuiescence(forwarder, 30_000));
+                // N leads N-1: every order sent since the kill has its outcome, and every member journaled the same
+                settle(h, forwarder);
                 assertLevels(h, admin);
 
                 // the last N-1 member (a follower) to N
                 restartAt(h, f2, NEW, forwarder, admin);
                 send(h, forwarder, 4);
-                assertTrue(h.awaitQuiescence(forwarder, 30_000));
+                settle(h, forwarder);
                 assertLevels(h, admin);
                 for (final MemberCompat l : levels) {
                     assertEquals(NEW, l);
@@ -182,6 +220,7 @@ public class MixedLevelRollClusterTest {
                     assertEquals("member " + i + " snapshot state hash", series[0][1], series[i][1]);
                 }
                 assertEveryOrderApplied(h, admin);
+                System.err.println("[T4] " + sent.size() + " orders, " + resent.size() + " resend(s): " + resent);
                 assertEquals("equal journals on every member", 0, h.unionMismatches.get());
                 assertEquals("no member refused a version", 0, refusals.get());
                 for (final MeClusterHarness.Member m : h.members) {
