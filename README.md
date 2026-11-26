@@ -135,15 +135,33 @@ Turn it on only when every member runs a build that knows the setting: write the
 
 #### ME journal retention
 
-The ME journal archive is purged by a command, keyed by what its readers have applied:
+Each member purges its own ME journal recordings, below what every registered reader has applied. The code is cluster-kit's journal retention (`journal.JournalRetention`, the same class the core runs for its journals); it runs inside the member on its own thread (`journal-retention`) with its own session on the journal archive. Outside processes only deliver the readers' cursors. The journal's name in settings, reader files and metrics is `settlement`.
+
+| Variable | Default | Description |
+|---|---|---|
+| `JOURNAL_RETENTION_SETTLEMENT` | `off` | `off`: nothing of the journal is ever purged. `report`: evaluated, logged and exported, nothing purged. `readers`: the member purges behind its registered readers. Anything but `off` on a member with `SETTLEMENT_JOURNAL_ENABLED` unset refuses the start |
+| `JOURNAL_RETENTION_REQUIRED_READERS_SETTLEMENT` | empty | reader names, separated by commas, that must have a valid file; one that has none holds the journal |
+| `JOURNAL_RETENTION_POLL_MS` | `60000` | interval between two passes (1000..3600000) |
+| `JOURNAL_RETENTION_PASS_TIMEOUT_MS` | `10000` | budget of one pass (1000..600000) |
+| `JOURNAL_RETENTION_ALARM_BYTES` | `2147483648` | journal bytes a member holds above which every pass prints a CRITICAL line; an alarm, not a limit (1048576..1099511627776) |
+| `JOURNAL_RETENTION_STALE_MS` | `3600000` | age of the oldest reader file above which every pass prints a CRITICAL line; it does not change the bound (1000..604800000) |
+| `TRANSPORT_JOURNAL_SEGMENT_LENGTH` | `64m` | segment file length of the journal archive: the unit of what a purge deletes. A power of two in 64k..1g, not below `TRANSPORT_JOURNAL_TERM_LENGTH` |
+
+A bad value refuses the start. A reader is registered, and its cursor delivered, by a command run on the member's host against that member's cluster directory; this jar carries it:
 
 ```
-java -cp match-cluster.jar com.match.infrastructure.journal.JournalRetention --journal-node-dir <SETTLEMENT_JOURNAL_DIR>/node<N> --aeron-dir <dir> --archive-control-port <port> --me-epoch <int64> --applied-journal-seq <int64> [--dry-run]
+java -cp match-cluster.jar com.openexchange.cluster.journal.JournalReaderTool set --cluster-dir <clusterDir> --engine match --cluster-id <n> --genesis-id <g> --journal settlement --reader <name> --applied-journal-seq <s> --source <name>
 ```
 
-The two numbers mean: every reader that needs this journal has durably applied every record of epoch `--me-epoch` with `journalSeq` at or below `--applied-journal-seq` (the core reports both as its bound `meEpoch` and `lastAppliedJournalSeq`; with several readers pass the lowest). The tool purges whole segments of the active recording below the newest checkpoint at or below that cursor and keeps two whole segments below the head. Positional arguments are refused: the earlier form took one bare number in another unit.
+It says: this reader has durably applied every record of epoch `<g>` with `journalSeq` at or below `<s>`. `<g>` is the `genesisId` of the recorded `EngineConfig`, the `meEpoch` every journal record carries (`match_engine_me_epoch`; compare it as text). Registering is the first `set` (0 is legal) and is done before the reader first starts; a reader with no file is not protected. `release`, `remove` and `show` are the other commands; the file format, the states and the exit codes are in the cluster-kit README ("Journal retention").
 
-Nothing is purged, with exit 65, when `--applied-journal-seq` is below 1 or `--me-epoch` is 0, when the journal's head file (`journal-head.dat`) or checkpoint sidecar (`journal-checkpoints-v2.dat`) is missing or damaged, when the epoch differs from the journal's, or when the applied value is above the journal head (a number in the wrong unit, or a stale head file). Exit 64 is a usage error, exit 1 a runtime failure (archive unreachable), exit 0 a purge or nothing to purge. A journal written at behaviour 1 has no epoch and no `journalSeq` and cannot be purged with this tool. The writer creates both files with its first record after an upgrade; until then the tool refuses. `journal-checkpoints.dat` of earlier builds is no longer written or read.
+What a member deletes: whole segments of its active recording below the greatest segment base whose first record every reader has applied, never the two whole segments below the head; and a stopped recording (an earlier process run) whole, once every reader has applied its last record and a newer recording carries the member's journal tail. The epoch is checked three ways: the reader file, the member's recorded genesis id and the `meEpoch` in the records must agree. A recording of another epoch is never touched; one that starts in another epoch is reported as an anomaly and not purged. With `RETENTION_OFFBOX=required` no record is purged whose `egressSeq` is above the member's off-box watermark.
+
+A member holds its journal (purges nothing) when no reader is registered, a required reader has no file, a file is invalid or names another engine, cluster, genesis or journal, a reader's cursor is above the member's own journal tail, the member has no recorded genesis id (behaviour 1), or the off-box watermark is required and not valid. A reader that stops moving holds the journal too: nothing gives up for it, and only an operator's `release` or `remove` moves past it. A hold is a CRITICAL line on every pass and a `journal-retention:` text on `/health`; `/ready` is unchanged. Gauges, each labelled `journal="settlement"`: `match_journal_retention_mode`, `_state`, `_safe_seq`, `_tail_seq`, `_retained_bytes`, `_recordings`, `_recordings_foreign`, `_recordings_anomaly`, `_oldest_reader_age_ms`, `_purged_bytes_total`, `_purge_failures_total`, `_pass_failures_total`, `_last_pass_age_ms`, per reader `_reader_applied_seq` and `_reader_released_seq`, and the thread's `match_journal_retention_agent_state` (1 running).
+
+The readers of the ME journal are the settlement bridges (their applied cursor is the core's `core_feed_cursor`) and the market data service (`md_journal_seq`). Turn the mode on in this order: register every reader on every member and keep its cursor delivered; `report` on every member and check `state` 0 and `safe_seq` near the readers' cursors; then `readers`, one member at a time.
+
+The engine's earlier retention command (`com.match.infrastructure.journal.JournalRetention`) and the files it read (`journal-head.dat`, `journal-checkpoints-v2.dat`) are gone: the recording is its own index. Files of those names left in a journal directory are no longer written or read and can be deleted.
 
 ## Load testing
 

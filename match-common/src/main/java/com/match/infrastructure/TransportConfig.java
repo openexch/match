@@ -233,6 +233,37 @@ public final class TransportConfig {
     }
 
     /**
+     * Segment file length of the settlement journal's archive, in bytes. Journal retention deletes whole segments
+     * and keeps two whole segments below the head of the active recording, so this is the unit of what a member
+     * reclaims and three times this is about what it keeps once its readers are at the head. A power of two from
+     * 64k to 1g, and not below {@link #journalTermLength()} (a recording's segment is never smaller than its term).
+     *
+     * @return the segment file length in bytes
+     * @throws IllegalArgumentException naming a value that is malformed, out of range or below the term length
+     */
+    public static int journalSegmentLength() {
+        final String raw = envOrProp("TRANSPORT_JOURNAL_SEGMENT_LENGTH", "transport.journal.segment.length", "64m");
+        final String name = "TRANSPORT_JOURNAL_SEGMENT_LENGTH/transport.journal.segment.length";
+        final long segment;
+        final long term;
+        try {
+            segment = org.agrona.SystemUtil.parseSize(name, raw.trim());
+            term = org.agrona.SystemUtil.parseSize("TRANSPORT_JOURNAL_TERM_LENGTH", journalTermLength().trim());
+        } catch (final RuntimeException e) {
+            throw new IllegalArgumentException(name + " '" + raw + "' and TRANSPORT_JOURNAL_TERM_LENGTH '"
+                    + journalTermLength() + "' must be sizes (64k, 4m, 1g): " + e.getMessage());
+        }
+        if (segment < 64 * 1024 || segment > 1024 * 1024 * 1024 || Long.bitCount(segment) != 1) {
+            throw new IllegalArgumentException(name + " must be a power of two in 64k..1g, got '" + raw + "'");
+        }
+        if (segment < term) {
+            throw new IllegalArgumentException(name + " '" + raw + "' is below TRANSPORT_JOURNAL_TERM_LENGTH '"
+                    + journalTermLength() + "': a recording's segment is never smaller than its term");
+        }
+        return (int) segment;
+    }
+
+    /**
      * Build a UDP channel URI with the configured term-length, MTU and optional interface
      * applied consistently. Accepts a base with or without existing URI params, e.g.
      * "aeron:udp" or "aeron:udp?endpoint=host:port".

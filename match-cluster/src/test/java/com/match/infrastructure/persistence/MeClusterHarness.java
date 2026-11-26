@@ -79,6 +79,13 @@ final class MeClusterHarness implements AutoCloseable {
      * archive and the consensus module (the production EXTERNAL driver shape) instead of a ClusteredMediaDriver.
      */
     boolean externalDriver;
+    /**
+     * When set before {@link #startAll}, each member runs the production settlement journal runtime: its own journal
+     * archive under {@code <root>/journal/node<id>} and the writer thread that drains the ring into a recorded
+     * publication. The harness then does not drain the ring itself ({@code frames}, {@code union} and
+     * {@code lastJournalSeq} stay empty); a test reads the journal from the member's journal archive.
+     */
+    boolean journalArchives;
     private final MediaDriver clientDriver;
     /**
      * While set, the clients' driver drops every status message carrying END_OF_STREAM (a member's receiver
@@ -127,6 +134,10 @@ final class MeClusterHarness implements AutoCloseable {
         io.aeron.archive.Archive extArchive;
         io.aeron.cluster.ConsensusModule extConsensus;
         ClusteredServiceContainer container;
+        /** The production journal runtime of this run ({@link #journalArchives}); null otherwise. */
+        volatile com.match.infrastructure.journal.SettlementJournalRuntime journalRuntime;
+        /** Process runs of this member so far. */
+        volatile int starts;
         volatile boolean live;
         final AtomicInteger failFast = new AtomicInteger();
         final List<byte[]> frames = Collections.synchronizedList(new ArrayList<>());
@@ -172,19 +183,31 @@ final class MeClusterHarness implements AutoCloseable {
             final AppClusteredService s = serviceFactory.apply(id);
             s.failFast = failFast::incrementAndGet; // never halt the test JVM
             s.failFastIncompatible = failFast::incrementAndGet; // the exit-78 seam: never halt the test JVM either
-            final SettlementJournal j = new SettlementJournal(4 << 20);
-            s.setSettlementJournal(j);
+            final SettlementJournal j;
+            final com.match.infrastructure.journal.SettlementJournalRuntime runtime;
+            if (journalArchives) {
+                runtime = com.match.infrastructure.journal.SettlementJournalRuntime.create(id, portBase,
+                        new File(root, "journal").toPath(), 4 << 20);
+                j = null; // the runtime's writer drains the ring, not the harness
+                s.setSettlementJournal(runtime.journal());
+                s.settlementJournalArchive(runtime::archiveClientContext);
+            } else {
+                runtime = null;
+                j = new SettlementJournal(4 << 20);
+                s.setSettlementJournal(j);
+            }
             beforeLaunch.accept(this, s);
             cfg = ClusterConfig.create(id, HOSTS, HOSTS, portBase, s);
             cfg.memberCompat(cfg.memberCompat(), com.openexchange.cluster.MemberCompat.testRefusal("rig"));
             cfg.baseDir(baseDir());
             cfg.aeronDirectoryName(driverDir());
             cfg.idleStrategySupplier(BackoffIdleStrategy::new);
-            cfg.errorHandler(t -> {
+            final org.agrona.ErrorHandler onError = t -> {
                 if (live) {
                     System.err.println("[ME3] member " + id + " Aeron error: " + t);
                 }
-            });
+            };
+            cfg.errorHandler(onError);
             cfg.archiveContext().segmentFileLength(segmentFileLength);
             cfg.consensusModuleContext()
                     .ingressChannel(INGRESS)
@@ -212,16 +235,30 @@ final class MeClusterHarness implements AutoCloseable {
             } else {
                 driver = ClusteredMediaDriver.launch(driverCtx, cfg.archiveContext(), cfg.consensusModuleContext());
             }
+            if (runtime != null) {
+                // as the production bootstrap: after the driver, before the container
+                runtime.start(driverDir(), onError);
+                journalRuntime = runtime;
+            }
             container = ClusteredServiceContainer.launch(cfg.clusteredServiceContext());
             journal = j;
             service = s;
+            starts++;
             live = true;
         }
 
         /** Close container then driver (a stop, as the core kill pattern); the journal ring is drained last. */
         void close() {
             live = false;
+            // A process that stops takes its retention thread with it; in one JVM the thread is stopped by hand, or
+            // it would connect to the restarted member's journal archive next to the new run's thread.
+            final AppClusteredService stopped = service;
+            if (stopped != null && stopped.journalRetention() != null) {
+                stopped.journalRetention().stop();
+            }
             CloseHelper.quietClose(container);
+            CloseHelper.quietClose(journalRuntime);
+            journalRuntime = null;
             CloseHelper.quietClose(driver);
             CloseHelper.quietClose(extConsensus);
             CloseHelper.quietClose(extArchive);
@@ -568,6 +605,16 @@ final class MeClusterHarness implements AutoCloseable {
         }
         throw new AssertionError("no leader" + (except == null ? "" : " other than member " + except.id)
                 + " within " + timeoutMs + " ms");
+    }
+
+    /** The current leader among the live members; fails when none is known within 30 s. */
+    Member awaitLeaderQuietly() {
+        try {
+            return awaitLeader(null, 30_000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
     }
 
     String liveIngressEndpoints() {

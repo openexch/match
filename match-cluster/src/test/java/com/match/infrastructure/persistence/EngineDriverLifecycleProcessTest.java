@@ -176,6 +176,28 @@ public class EngineDriverLifecycleProcessTest {
         return new Node(driver, engine, log, base, aeronDir, probePort);
     }
 
+    /**
+     * The same member started again after its driver died: a new driver process on the same directory, then the
+     * engine on the same state, ready.
+     */
+    Node restartOnNewDriver(final Node old, final Map<String, String> extraEnv) throws Exception {
+        final Process driver = driver(old.aeronDir(), old.base().resolve("driver-2.log"));
+        final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (!Files.exists(old.aeronDir().resolve("cnc.dat"))) {
+            assertTrue("driver did not start again", System.nanoTime() < deadline && driver.isAlive());
+            Thread.sleep(50);
+        }
+        final Path log = old.base().resolve("engine-2.log");
+        final Process engine = engine(old.base(), old.aeronDir(), old.probePort(), log, extraEnv);
+        awaitReady(engine, old.probePort(), log, 90_000);
+        return new Node(driver, engine, log, old.base(), old.aeronDir(), old.probePort());
+    }
+
+    /** A fresh directory this rig deletes in {@link #cleanUp}. */
+    Path newDir(final String prefix) throws IOException {
+        return dir(prefix);
+    }
+
     private static String childClasspath() {
         final String override = System.getProperty("engine.driver.classpath");
         return override == null || override.isEmpty() ? System.getProperty("java.class.path") : override;

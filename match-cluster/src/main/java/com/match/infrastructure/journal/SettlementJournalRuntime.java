@@ -37,14 +37,14 @@ public final class SettlementJournalRuntime implements AutoCloseable {
     private static final Logger log = Logger.getLogger(SettlementJournalRuntime.class);
 
     private static final int DEFAULT_RING_BYTES = 64 * 1024 * 1024;
-    private static final int SEGMENT_FILE_LENGTH = 64 * 1024 * 1024;
 
     private final int nodeId;
     private final int controlPort;
     private final Path journalDir;
     private final SettlementJournal journal;
-    private final JournalSidecarV2 checkpoints;
-    private final JournalHeadFile head;
+    private final int segmentFileLength;
+    /** The journal archive's client context, known once {@link #start} has the driver directory. */
+    private volatile java.util.function.Supplier<AeronArchive.Context> archiveClientContext;
 
     /** Constant true: what production always passes to the writer's drain gate. */
     private static final java.util.function.BooleanSupplier ALWAYS_DRAIN = () -> true;
@@ -71,8 +71,8 @@ public final class SettlementJournalRuntime implements AutoCloseable {
                 nodeId, portBase, InfrastructureConstants.JOURNAL_ARCHIVE_CONTROL_PORT_OFFSET);
         this.journalDir = journalDir;
         this.journal = new SettlementJournal(ringBytes);
-        this.checkpoints = new JournalSidecarV2(journalDir);
-        this.head = new JournalHeadFile(journalDir);
+        // read here, before anything is launched: a bad value refuses the start
+        this.segmentFileLength = com.match.infrastructure.TransportConfig.journalSegmentLength();
     }
 
     /** @return the runtime, or null when SETTLEMENT_JOURNAL_ENABLED is not "true" (journal dark). */
@@ -87,12 +87,37 @@ public final class SettlementJournalRuntime implements AutoCloseable {
         }
         final String ringEnv = System.getenv("SETTLEMENT_JOURNAL_RING_BYTES");
         final int ringBytes = ringEnv == null || ringEnv.isBlank() ? DEFAULT_RING_BYTES : Integer.parseInt(ringEnv);
-        final Path journalDir = Path.of(dir).resolve("node" + nodeId);
+        return create(nodeId, portBase, Path.of(dir), ringBytes);
+    }
+
+    /**
+     * The runtime of node {@code nodeId} with its journal under {@code dir/node<nodeId>} (what
+     * {@link #createIfEnabled} builds from the environment; a rig that runs members in one JVM calls this).
+     *
+     * @throws IllegalArgumentException naming a bad {@code TRANSPORT_JOURNAL_SEGMENT_LENGTH}
+     */
+    public static SettlementJournalRuntime create(final int nodeId, final int portBase, final Path dir,
+                                                  final int ringBytes) {
+        final Path journalDir = dir.resolve("node" + nodeId);
         final SettlementJournalRuntime runtime =
                 new SettlementJournalRuntime(nodeId, portBase, journalDir, ringBytes);
         log.info("Settlement journal ENABLED: dir=" + journalDir + " ring=" + ringBytes
-                + " controlPort=" + runtime.controlPort);
+                + " controlPort=" + runtime.controlPort + " segmentFileLength=" + runtime.segmentFileLength);
         return runtime;
+    }
+
+    /**
+     * A new client context of this node's journal archive, for a component of this process that needs its own
+     * archive session (the journal retention thread). Its Aeron client carries the node's error handler.
+     *
+     * @throws IllegalStateException before {@link #start}
+     */
+    public AeronArchive.Context archiveClientContext() {
+        final java.util.function.Supplier<AeronArchive.Context> supplier = archiveClientContext;
+        if (supplier == null) {
+            throw new IllegalStateException("the settlement journal archive of node " + nodeId + " is not started");
+        }
+        return supplier.get();
     }
 
     /** The ring facade to arm on the event publisher (safe before {@link #start}: the ring buffers). */
@@ -116,7 +141,7 @@ public final class SettlementJournalRuntime implements AutoCloseable {
         // bridge can replay the journal (multi-host deployments; the settlement bridge is the
         // journal's consumer). Default stays localhost: on a single box nothing changes, and
         // the money journal is never exposed beyond the host unless explicitly asked for.
-        // In-process clients (writer agent, retention) still connect via localhost when the
+        // In-process clients (writer agent, journal retention) still connect via localhost when the
         // bind is 0.0.0.0 (a wildcard is a valid listen address but not a valid destination).
         final String bindHost = archiveBindHost();
         final String connectHost = "0.0.0.0".equals(bindHost) ? "localhost" : bindHost;
@@ -142,7 +167,7 @@ public final class SettlementJournalRuntime implements AutoCloseable {
                 .idleStrategySupplier(BackoffIdleStrategy::new)
                 .fileSyncLevel(1)
                 .catalogFileSyncLevel(1)
-                .segmentFileLength(SEGMENT_FILE_LENGTH)
+                .segmentFileLength(segmentFileLength)
                 .errorHandler(errorHandler);
 
         journalArchive = Archive.launch(ctx);
@@ -151,19 +176,17 @@ public final class SettlementJournalRuntime implements AutoCloseable {
         // Aeron installs Aeron.Configuration.DEFAULT_ERROR_HANDLER, which answers a driver timeout with
         // Runtime.exit(-1) on a "runtime-exit-runner" thread: the node took a signal stop (status 255, the FATAL
         // never recorded) while its archives tore down under an unmapped CnC (exit 139 3/3).
+        archiveClientContext = () -> new AeronArchive.Context()
+                .errorHandler(errorHandler)
+                .aeronDirectoryName(aeronDirectoryName)
+                .controlRequestChannel(controlChannel)
+                .controlRequestStreamId(InfrastructureConstants.JOURNAL_ARCHIVE_CONTROL_STREAM_ID)
+                .controlResponseChannel("aeron:udp?endpoint=localhost:0");
         final JournalWriterAgent agent = new JournalWriterAgent(
                 journal.ringBuffer(),
-                () -> new AeronArchive.Context()
-                        .errorHandler(errorHandler)
-                        .aeronDirectoryName(aeronDirectoryName)
-                        .controlRequestChannel(controlChannel)
-                        .controlRequestStreamId(InfrastructureConstants.JOURNAL_ARCHIVE_CONTROL_STREAM_ID)
-                        .controlResponseChannel("aeron:udp?endpoint=localhost:0"),
+                archiveClientContext,
                 InfrastructureConstants.settlementJournalChannel(),
                 InfrastructureConstants.SETTLEMENT_JOURNAL_STREAM_ID,
-                checkpoints,
-                head,
-                SEGMENT_FILE_LENGTH,
                 drainGate);
 
         writerRunner = new AgentRunner(new BackoffIdleStrategy(), errorHandler, null, agent);
@@ -174,7 +197,7 @@ public final class SettlementJournalRuntime implements AutoCloseable {
 
     @Override
     public void close() {
-        // Runner first (stops the agent -> closes publication/archive-client/checkpoints),
+        // Runner first (stops the agent -> closes publication/archive-client),
         // then the Archive itself.
         CloseHelper.quietClose(writerRunner);
         CloseHelper.quietClose(journalArchive);

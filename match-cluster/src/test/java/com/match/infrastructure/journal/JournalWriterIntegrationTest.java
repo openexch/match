@@ -78,10 +78,7 @@ public class JournalWriterIntegrationTest {
                 journal.ringBuffer(),
                 this::clientContext,
                 TEST_CHANNEL,
-                TEST_STREAM_ID,
-                new JournalSidecarV2(tmpDir),
-                new JournalHeadFile(tmpDir),
-                SEGMENT_LENGTH);
+                TEST_STREAM_ID);
         writerRunner = new AgentRunner(new SleepingMillisIdleStrategy(1),
                 Throwable::printStackTrace, null, agent);
         AgentRunner.startOnThread(writerRunner);
