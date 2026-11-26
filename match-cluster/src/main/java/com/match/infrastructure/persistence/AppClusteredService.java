@@ -199,6 +199,30 @@ public class AppClusteredService implements ClusteredService {
     // The armed journal (null = dark), read by the backpressure gauge only.
     private volatile com.match.infrastructure.journal.SettlementJournal settlementJournal;
 
+    /**
+     * The settlement journal archive of this node, as a source of client contexts (null = the journal is dark and
+     * there is nothing to retain). Set at bootstrap before the container is launched; the journal archive is
+     * started before the container, so the supplier answers by the time {@code onStart} runs.
+     */
+    private volatile java.util.function.Supplier<AeronArchive.Context> settlementJournalArchive;
+    // The journal retention thread (kit): purges this member's settlement journal recordings behind their registered
+    // readers. Its own thread and its own session on the journal archive; it does not depend on the log pruner.
+    private volatile com.openexchange.cluster.journal.JournalRetentionAgent journalRetention;
+    // Why the journal retention thread did not start; null when it started, or there is no journal to retain.
+    private volatile String journalRetentionStartFailure;
+    /** Test seam: false leaves the journal retention unstarted (the engine before it purged its own journal). */
+    boolean journalRetentionEnabled = true;
+
+    /** Wired at bootstrap with {@code SettlementJournalRuntime::archiveClientContext} when the journal is on. */
+    public void settlementJournalArchive(final java.util.function.Supplier<AeronArchive.Context> archiveContext) {
+        this.settlementJournalArchive = archiveContext;
+    }
+
+    /** The journal retention thread of this member; null when the journal is dark or the thread did not start. */
+    com.openexchange.cluster.journal.JournalRetentionAgent journalRetention() {
+        return journalRetention;
+    }
+
     // Store cluster reference for snapshot idle strategy and broadcasting
     private Cluster cluster;
 
@@ -288,6 +312,11 @@ public class AppClusteredService implements ClusteredService {
      * (behaviour 1), which leaves a required off-box watermark unbound and the log held.
      */
     private volatile long publishedGenesisId;
+    /**
+     * Test seam, a negative control only: a non-zero value is published as this member's genesis id whatever is
+     * recorded (a behaviour 1 member that claims a genesis). Always 0 in production.
+     */
+    long genesisIdOverrideForTest;
     /** Test seam: the off-box retention mode of this member instead of the process setting (one JVM, three members). */
     com.openexchange.cluster.OffBoxWatermark.Mode offBoxModeOverride;
 
@@ -676,6 +705,7 @@ public class AppClusteredService implements ClusteredService {
 
         startMetricsServer();
         startDurability(cluster);
+        startJournalRetention(cluster);
 
         System.out.println("SERVICE onStart complete, markets initialized");
         System.out.flush();
@@ -737,6 +767,78 @@ public class AppClusteredService implements ClusteredService {
         }
     }
 
+    /**
+     * Start the journal retention thread: the kit's agent on the settlement journal's own archive. The member purges
+     * its journal recordings itself, below what every registered reader applied; outside processes only deliver the
+     * readers' cursors (reader files in this member's cluster directory). It does not hang on the log pruner:
+     * {@code SNAPSHOT_PRUNE_ENABLED=false} leaves it running. Identity: engine match, this member's cluster id and
+     * the recorded genesis id (the ME epoch every journal record carries), as the off-box watermark. The off-box
+     * bound is the member's {@code RETENTION_OFFBOX} mode and its watermark file, as the log pruner reads them,
+     * applied to a record's {@code egressSeq}.
+     */
+    private void startJournalRetention(final Cluster cluster) {
+        final java.util.function.Supplier<AeronArchive.Context> journalArchive = settlementJournalArchive;
+        if (journalArchive == null || !journalRetentionEnabled) {
+            return; // the journal is dark on this node: no recording, nothing to retain
+        }
+        try {
+            final int clusterId = cluster.context().clusterId();
+            final org.agrona.concurrent.status.CountersReader counters = cluster.aeron().countersReader();
+            final com.openexchange.cluster.OffBoxWatermark.Mode offBoxMode = offBoxModeOverride != null
+                    ? offBoxModeOverride : com.openexchange.cluster.OffBoxWatermark.modeSetting();
+            final com.openexchange.cluster.journal.JournalRetentionAgent agent =
+                    new com.openexchange.cluster.journal.JournalRetentionAgent(cluster.context().clusterDir(),
+                            journalArchive.get(),
+                            com.openexchange.cluster.journal.JournalReaders.ENGINE_MATCH, clusterId,
+                            () -> publishedGenesisId,
+                            com.openexchange.cluster.journal.JournalRetention.Settings.fromEnv(
+                                    com.match.infrastructure.journal.MatchJournalProfiles.SETTLEMENT_NAME),
+                            com.match.infrastructure.journal.MatchJournalProfiles.ALL)
+                            .offBox(offBoxMode, () -> {
+                                final int counterId = io.aeron.cluster.service.ClusterCounters.find(counters,
+                                        io.aeron.AeronCounters.CLUSTER_COMMIT_POSITION_TYPE_ID, clusterId);
+                                return counterId == org.agrona.concurrent.status.CountersReader.NULL_COUNTER_ID
+                                        ? -1 : counters.getCounterValue(counterId);
+                            });
+            agent.start();
+            journalRetention = agent;
+        } catch (final Throwable t) {
+            // loud and not fatal, as for the pruner: a member that cannot arm its retention still serves orders. The
+            // failure stays visible: match_journal_retention_agent_state 4 on /metrics and a line on /health.
+            journalRetentionStartFailure = "did not start: " + t;
+            System.err.println("SERVICE CRITICAL: journal retention did not start: this member will not reclaim the"
+                    + " disk of its settlement journal recordings: " + t);
+            t.printStackTrace();
+        }
+    }
+
+    /**
+     * The metrics body: the registry, then {@code match_journal_retention_*{journal}} and the per-reader series,
+     * rendered by the kit agent (its reader label values are the files registered on this member).
+     */
+    String renderMetrics() {
+        final String registry = metricsServer.render();
+        final com.openexchange.cluster.journal.JournalRetentionAgent retention = journalRetention;
+        if (retention != null) {
+            return registry + retention.renderMetrics("match");
+        }
+        return journalRetentionStartFailure == null ? registry
+                : registry + com.openexchange.cluster.journal.JournalRetentionAgent.renderNotStarted("match");
+    }
+
+    /**
+     * The probe the endpoint serves: the kit's readiness with the journal retention's hold in the detail line (a
+     * journal in mode {@code readers} that is held, or a pass that fails). Live and ready are unchanged: a member
+     * that keeps its journal serves.
+     */
+    com.openexchange.cluster.NodeReadiness.Probe probe() {
+        final com.openexchange.cluster.NodeReadiness.Probe base = readiness.probe();
+        final com.openexchange.cluster.journal.JournalRetentionAgent retention = journalRetention;
+        final String error = retention == null ? journalRetentionStartFailure : retention.lastError();
+        return error == null ? base : new com.openexchange.cluster.NodeReadiness.Probe(base.live(), base.ready(),
+                base.detail() + " journal-retention: " + error);
+    }
+
     /** This member's off-box watermark: engine match, its cluster id, and the genesis id the service thread publishes. */
     private com.openexchange.cluster.OffBoxWatermark offBoxWatermark(final java.io.File clusterDir, final int clusterId) {
         final java.util.function.LongSupplier genesis = () -> publishedGenesisId;
@@ -752,7 +854,8 @@ public class AppClusteredService implements ClusteredService {
     /** Service thread: publish the recorded genesis id when it changed (a FRESH config, a restore). */
     private void publishGenesisId() {
         final com.match.application.engine.EngineConfigState config = engine.getEngineConfig();
-        final long recorded = config == null ? 0L : config.genesisId;
+        final long recorded = genesisIdOverrideForTest != 0L ? genesisIdOverrideForTest
+                : config == null ? 0L : config.genesisId;
         if (recorded != publishedGenesisId) {
             publishedGenesisId = recorded;
         }
@@ -1073,7 +1176,7 @@ public class AppClusteredService implements ClusteredService {
                     com.match.infrastructure.TransportConfig.driverMode()
                             == com.match.infrastructure.TransportConfig.DriverMode.EXTERNAL ? "external" : "embedded");
             publishRecorded();
-            nodeEndpoint = new com.openexchange.cluster.NodeEndpoint(readiness, metricsServer::render)
+            nodeEndpoint = new com.openexchange.cluster.NodeEndpoint(this::probe, this::renderMetrics)
                     .withBuild(buildInfo != null ? buildInfo
                             : com.openexchange.cluster.BuildInfo.of(AppClusteredService.class))
                     .capabilities(capabilities);
@@ -2286,6 +2389,10 @@ public class AppClusteredService implements ClusteredService {
         if (consensusReadiness != null) { consensusReadiness.close(); }
         if (logPruner != null) {
             logPruner.stop();
+        }
+        final com.openexchange.cluster.journal.JournalRetentionAgent retention = journalRetention;
+        if (retention != null) {
+            retention.stop();
         }
         if (nodeEndpoint != null) {
             nodeEndpoint.stop();

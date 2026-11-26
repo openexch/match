@@ -81,7 +81,12 @@ public class AeronCluster {
                 com.match.infrastructure.journal.SettlementJournalRuntime.createIfEnabled(nodeId, portBase);
         if (journalRuntime != null) {
             appService.setSettlementJournal(journalRuntime.journal());
+            appService.settlementJournalArchive(journalRuntime::archiveClientContext);
         }
+        // The journal retention settings (JOURNAL_RETENTION_SETTLEMENT, its required readers, the poll, the pass
+        // budget and the two alarm bounds): a bad value, or a mode other than off on a node that writes no journal,
+        // refuses the start here, before anything is launched.
+        com.match.infrastructure.journal.MatchJournalProfiles.checkBoot(journalRuntime != null);
 
         clusterConfig.baseDir(getBaseDir(nodeId));
         // RETENTION_OFFBOX=off with an off-box watermark file in the cluster directory refuses the start (the

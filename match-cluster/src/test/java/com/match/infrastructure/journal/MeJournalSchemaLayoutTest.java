@@ -63,8 +63,6 @@ public class MeJournalSchemaLayoutTest {
             assertEquals(8, h[1]);
             assertEquals(16, h[2]);
         }
-        // The writer's retention checkpoint reads egressSeq at this frame offset on every record.
-        assertEquals(8 + 16, JournalWriterAgent.EGRESS_SEQ_OFFSET);
     }
 
     @Test

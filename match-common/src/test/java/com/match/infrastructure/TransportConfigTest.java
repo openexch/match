@@ -27,6 +27,48 @@ public class TransportConfigTest {
         System.clearProperty("transport.idle.mode");
         System.clearProperty("transport.driver.threading");
         System.clearProperty("transport.journal.term.length");
+        System.clearProperty("transport.journal.segment.length");
+    }
+
+    private static String segmentRefusal(final String segment, final String term) {
+        System.setProperty("transport.journal.segment.length", segment);
+        if (term != null) {
+            System.setProperty("transport.journal.term.length", term);
+        }
+        try {
+            final int accepted = TransportConfig.journalSegmentLength();
+            throw new AssertionError("segment '" + segment + "' with term '" + term + "' was accepted as " + accepted);
+        } catch (final IllegalArgumentException refused) {
+            return refused.getMessage();
+        }
+    }
+
+    @Test
+    public void journalSegmentLengthDefaultsTo64mAndTakesASize() {
+        if (System.getenv("TRANSPORT_JOURNAL_SEGMENT_LENGTH") != null
+                || System.getenv("TRANSPORT_JOURNAL_TERM_LENGTH") != null) {
+            return; // env override in effect
+        }
+        assertEquals(64 * 1024 * 1024, TransportConfig.journalSegmentLength());
+        System.setProperty("transport.journal.term.length", "64k");
+        System.setProperty("transport.journal.segment.length", "64k");
+        assertEquals(64 * 1024, TransportConfig.journalSegmentLength());
+        System.setProperty("transport.journal.segment.length", "1g");
+        assertEquals(1024 * 1024 * 1024, TransportConfig.journalSegmentLength());
+    }
+
+    /** One rule for every bad value: the start is refused with the setting's name, never a silent default. */
+    @Test
+    public void journalSegmentLengthRefusesWhatIsNotASegmentLength() {
+        if (System.getenv("TRANSPORT_JOURNAL_SEGMENT_LENGTH") != null
+                || System.getenv("TRANSPORT_JOURNAL_TERM_LENGTH") != null) {
+            return; // env override in effect
+        }
+        assertTrue(segmentRefusal("lots", null).contains("must be sizes"));
+        assertTrue(segmentRefusal("32k", "64k").contains("must be a power of two in 64k..1g"));
+        assertTrue(segmentRefusal("2g", null).contains("must be a power of two in 64k..1g"));
+        assertTrue(segmentRefusal("96k", "64k").contains("must be a power of two in 64k..1g"));
+        assertTrue(segmentRefusal("4m", "16m").contains("is below TRANSPORT_JOURNAL_TERM_LENGTH '16m'"));
     }
 
     @Test

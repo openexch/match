@@ -76,10 +76,7 @@ public class JournalWriterReconnectTest {
                 journal.ringBuffer(),
                 this::clientContext,
                 TEST_CHANNEL,
-                TEST_STREAM_ID,
-                new JournalSidecarV2(tmpDir),
-                new JournalHeadFile(tmpDir),
-                SEGMENT_LENGTH);
+                TEST_STREAM_ID);
     }
 
     private AeronArchive.Context clientContext() {
