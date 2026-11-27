@@ -115,6 +115,31 @@ public class MeJournalRetentionClusterTest {
                 }
                 assertTrue("the first record kept is one the reader applied", held.get(0).seq() <= reader.applied);
             }
+            // the passes asked no member's archive for a replay that starts inside a frame: an archive raises each
+            // such refusal into the member's Aeron error handler (the harness prints what reaches it)
+            assertFalse("a refused replay start reached a member's error handler",
+                    s.said("does not point to a valid frame"));
+            // each member exports Aeron's duty-cycle and snapshot-duration counters, in this driver mode
+            for (final Member m : s.h.members) {
+                final long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(20);
+                while (!m.service.renderMetrics().contains("match_service_max_cycle_time_seconds ")
+                        && System.nanoTime() < deadline) {
+                    Thread.sleep(100);
+                }
+                final String body = m.service.renderMetrics();
+                for (final String series : new String[] {"match_consensus_module_max_cycle_time_seconds ",
+                    "match_consensus_module_cycle_time_exceeded_total ", "match_service_max_cycle_time_seconds ",
+                    "match_service_cycle_time_exceeded_total ", "match_snapshot_total_max_duration_seconds ",
+                    "match_snapshot_service_max_duration_seconds ", "match_driver_conductor_max_cycle_time_seconds ",
+                    "match_driver_sender_max_cycle_time_seconds ", "match_driver_receiver_max_cycle_time_seconds ",
+                    "match_stall_sampler_age_seconds "}) {
+                    assertTrue("member " + m.id + " has no " + series + "series:\n" + body,
+                            body.contains("\n" + series));
+                }
+                assertEquals("member " + m.id + ": the cluster archive and the journal archive", 2,
+                        body.lines().filter(l -> l.startsWith("match_archive_max_cycle_time_seconds{archive_id=")
+                                && l.contains(",agent=\"conductor\"} ")).count());
+            }
             System.out.println("GREEN settlement journal retention (" + (externalDriver ? "external" : "embedded")
                     + " driver): head " + head + ", " + s.describe());
         }

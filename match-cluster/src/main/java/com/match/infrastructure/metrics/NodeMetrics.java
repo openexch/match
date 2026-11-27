@@ -31,6 +31,9 @@ public final class NodeMetrics {
     private long latencyCount;
     private int sampleTick;
     private long lastSnapshotMs;
+    private long lastSnapshotSerializeNanos = -1;
+    private long lastSnapshotOfferNanos = -1;
+    private long lastSnapshotRecordNanos = -1;
 
     // Rare writes (role change / startup) — volatile is fine here.
     private volatile int role = -1; // Cluster.Role ordinal: 0=follower,1=candidate,2=leader
@@ -68,6 +71,21 @@ public final class NodeMetrics {
 
     public void stampSnapshot(long epochMs) {
         lastSnapshotMs = epochMs;
+    }
+
+    /**
+     * Service thread, at the end of a snapshot: how long the service thread spent in each part of it. While it is
+     * in the snapshot callback it applies no command, so on a leader their sum is the time the book stood still.
+     *
+     * @param serializeNanos serialising the engine state
+     * @param offerNanos     offering the payload to the snapshot publication
+     * @param recordNanos    waiting until the archive had recorded it
+     */
+    public void stampSnapshotTimings(long serializeNanos, long offerNanos, long recordNanos) {
+        lastSnapshotSerializeNanos = serializeNanos;
+        lastSnapshotOfferNanos = offerNanos;
+        lastSnapshotRecordNanos = recordNanos;
+        publish();
     }
 
     /**
@@ -183,6 +201,19 @@ public final class NodeMetrics {
 
     public long lastSnapshotMs() {
         return lastSnapshotMs;
+    }
+
+    /** -1 before this node took a snapshot. */
+    public long lastSnapshotSerializeNanos() {
+        return lastSnapshotSerializeNanos;
+    }
+
+    public long lastSnapshotOfferNanos() {
+        return lastSnapshotOfferNanos;
+    }
+
+    public long lastSnapshotRecordNanos() {
+        return lastSnapshotRecordNanos;
     }
 
     public int role() {

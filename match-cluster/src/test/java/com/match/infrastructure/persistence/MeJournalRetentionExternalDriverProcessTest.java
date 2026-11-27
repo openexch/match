@@ -174,6 +174,55 @@ public class MeJournalRetentionExternalDriverProcessTest {
         assertTrue("at most three segments stay: " + metric(node, p + "retained_bytes" + SERIES),
                 metric(node, p + "retained_bytes" + SERIES) <= 3L * SEG);
 
+        // the real process on an external driver, after a dozen retention passes and a purge:
+        // no Aeron error (a refused replay start is one), every line of the member carries its time, that a
+        // watchdog was armed is INFO, and Aeron's duty-cycle counters are series of /metrics
+        assertEquals("no Aeron error on a healthy member:\n" + node.log(), 0, metric(node, "match_aeron_errors_total"));
+        final String healthy = node.log();
+        assertTrue(healthy, !healthy.contains("does not point to a valid frame"));
+        final String time = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z ";
+        int retentionLines = 0;
+        int armedLines = 0;
+        for (final String line : healthy.split("\n")) {
+            if (line.contains("[JOURNAL-RETENTION]")) {
+                retentionLines++;
+                assertTrue(line, line.matches(time + "\\[JOURNAL-RETENTION\\] .*"));
+            }
+            if (line.contains("watchdog armed")) {
+                armedLines++;
+                assertTrue(line, line.matches(time + "\\[INFO \\] AeronCluster - Match Engine node .* watchdog armed: .*"));
+            }
+            if (line.contains("SERVICE onStart complete")) {
+                assertTrue(line, line.matches(time + "SERVICE onStart complete, markets initialized"));
+            }
+            // only the JVM's own lines, written before main, and continuation lines carry no time
+            assertTrue("a line without its time: " + line, line.isEmpty() || line.matches(time + ".*")
+                    || line.startsWith("Picked up ") || line.startsWith("WARNING: ") || line.startsWith("\t")
+                    || line.startsWith(" ") || line.startsWith("Caused by: ")
+                    || line.matches("^([a-z_$][\\w$]*\\.)+[A-Z][\\w$]*(Exception|Error|Throwable)(:.*)?$"));
+        }
+        assertTrue("retention lines were written: " + retentionLines, retentionLines > 5);
+        assertEquals("the quorum, rejoin and catch-up watchdogs", 3, armedLines);
+        assertTrue(healthy, !healthy.contains("[ERROR]"));
+        final String body = metrics(node);
+        for (final String series : new String[] {"match_consensus_module_max_cycle_time_seconds ",
+            "match_consensus_module_max_cycle_time_recent_seconds ",
+            "match_consensus_module_max_cycle_time_last_rise_age_seconds ",
+            "match_consensus_module_cycle_time_exceeded_total ", "match_consensus_module_cycle_time_exceeded_recent ",
+            "match_service_max_cycle_time_seconds ", "match_service_cycle_time_exceeded_total ",
+            "match_snapshot_total_max_duration_seconds ", "match_snapshot_total_duration_exceeded_total ",
+            "match_snapshot_service_max_duration_seconds ", "match_snapshot_service_duration_exceeded_total ",
+            "match_driver_conductor_max_cycle_time_seconds ", "match_driver_sender_max_cycle_time_seconds ",
+            "match_driver_receiver_max_cycle_time_seconds ", "match_snapshot_last_serialize_seconds ",
+            "match_stall_sampler_age_seconds "}) {
+            assertTrue("no " + series + "series:\n" + body, body.contains("\n" + series));
+        }
+        assertEquals("the cluster archive and the journal archive", 2, body.lines()
+                .filter(l -> l.startsWith("match_archive_max_cycle_time_seconds{archive_id=")
+                        && l.contains(",agent=\"conductor\"} ")).count());
+        final long samplerAge = metric(node, "match_stall_sampler_age_seconds");
+        assertTrue("the sampler runs: " + samplerAge, samplerAge >= 0 && samplerAge <= 5);
+
         // kill -9 of the media driver under the running retention thread: the member exits 1, never 0
         node.driver().destroyForcibly();
         final long t0 = System.nanoTime();

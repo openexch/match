@@ -110,6 +110,16 @@ public final class NodeMetricsServer {
           .append(snapMs == 0 ? -1 : (System.currentTimeMillis() - snapMs) / 1000)
           .append('\n');
 
+        appendSeconds(sb, "match_snapshot_last_serialize_seconds",
+                "Service-thread time to serialize the engine state for the last snapshot (-1 = never)",
+                metrics.lastSnapshotSerializeNanos());
+        appendSeconds(sb, "match_snapshot_last_offer_seconds",
+                "Service-thread time to offer the last snapshot's chunks (-1 = never)",
+                metrics.lastSnapshotOfferNanos());
+        appendSeconds(sb, "match_snapshot_last_record_seconds",
+                "Wait until the archive had ingested the last snapshot (-1 = never)",
+                metrics.lastSnapshotRecordNanos());
+
         // One read of the holder: the position and the hash below always come from the same stamp.
         final NodeMetrics.SnapshotState snapshot = metrics.snapshotState();
         sb.append("# HELP match_snapshot_last_log_position Log position of the last snapshot this node took or loaded (-1 = never)\n");
@@ -137,6 +147,13 @@ public final class NodeMetricsServer {
         sb.append("match_order_latency_seconds_sum ").append(metrics.latencySumNanos() / 1e9).append('\n');
         sb.append("match_order_latency_seconds_count ").append(metrics.latencyCount()).append('\n');
         return sb.toString();
+    }
+
+    /** A duration gauge in decimal seconds from nanoseconds; -1 stays -1. */
+    private static void appendSeconds(StringBuilder sb, String name, String help, long nanos) {
+        sb.append("# HELP ").append(name).append(' ').append(help).append('\n');
+        sb.append("# TYPE ").append(name).append(" gauge\n");
+        sb.append(name).append(' ').append(nanos < 0 ? "-1" : Double.toString(nanos / 1e9)).append('\n');
     }
 
     private static void appendSeries(StringBuilder sb, String nameAndHelp, String type, long value) {

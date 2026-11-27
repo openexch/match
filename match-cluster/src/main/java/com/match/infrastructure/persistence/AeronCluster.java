@@ -49,7 +49,12 @@ public class AeronCluster {
      * running.
      */
     public AeronCluster() {
-        final EngineLifecycle lifecycle = EngineLifecycle.install("Match Engine node", msg -> log.error(msg));
+        // Every line of this process starts with its time (ISO-8601, UTC, milliseconds), whoever writes it: the
+        // logger, the [TAG] lines on System.out and System.err, a library.
+        com.openexchange.cluster.LogTimestamps.install();
+        // A fault goes to the log at ERROR; that a watchdog was armed is information.
+        final EngineLifecycle lifecycle = EngineLifecycle.install("Match Engine node", msg -> log.error(msg),
+                msg -> log.status(msg));
         try {
             run(lifecycle);
         } catch (final Throwable t) {
