@@ -88,8 +88,11 @@ public class MeJournalRetentionControlsClusterTest {
     public void withTheMaximumInsteadOfTheMinimumADeadReaderIsCutPast() throws Exception {
         control(29_300, "mjr-nc-dead", () -> JournalRetention.Seams.minIsMax = true,
                 "purged a record above reader oe-marketdata's cursor", (s, head) -> {
-                    s.setAll("ct-bridge", head);
+                    // The reader that holds the journal is registered first. A reader with no file is not
+                    // protected, and a member's pass may fall between two registrations: with ct-bridge alone
+                    // at the head, that pass is right to purge up to the head.
                     s.setAll("oe-marketdata", 0);
+                    s.setAll("ct-bridge", head);
                 });
     }
 
