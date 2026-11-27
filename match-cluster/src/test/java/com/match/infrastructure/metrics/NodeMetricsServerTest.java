@@ -41,6 +41,24 @@ public class NodeMetricsServerTest {
                 out.contains("match_order_latency_seconds_bucket{le=\"6.5536E-5\"} 1"));
     }
 
+    /** The three parts of the last snapshot as the service thread timed them: -1 before one, seconds after. */
+    @Test
+    public void rendersTheLastSnapshotsTimings() {
+        NodeMetrics metrics = new NodeMetrics();
+        NodeMetricsServer server = new NodeMetricsServer(metrics);
+        String before = server.render();
+        assertTrue(before, before.contains("match_snapshot_last_serialize_seconds -1\n"));
+        assertTrue(before, before.contains("match_snapshot_last_offer_seconds -1\n"));
+        assertTrue(before, before.contains("match_snapshot_last_record_seconds -1\n"));
+        assertTrue(before, before.contains("# TYPE match_snapshot_last_serialize_seconds gauge\n"));
+
+        metrics.stampSnapshotTimings(1_250_000_000L, 40_000_000L, 3_000_000L);
+        String after = server.render();
+        assertTrue(after, after.contains("match_snapshot_last_serialize_seconds 1.25\n"));
+        assertTrue(after, after.contains("match_snapshot_last_offer_seconds 0.04\n"));
+        assertTrue(after, after.contains("match_snapshot_last_record_seconds 0.003\n"));
+    }
+
     @Test
     public void histogramBucketsSaturateAtEnds() {
         NodeMetrics metrics = new NodeMetrics();

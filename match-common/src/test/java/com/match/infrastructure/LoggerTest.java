@@ -183,4 +183,54 @@ public class LoggerTest {
         // debug format should be skipped at INFO level
         logger.debug("This %s should not be %s formatted", "message");
     }
+
+    // ==================== Line format ====================
+
+    private static String capture(Runnable r) {
+        java.io.PrintStream saved = System.out;
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        System.setOut(new java.io.PrintStream(bytes, true));
+        try {
+            r.run();
+        } finally {
+            System.setOut(saved);
+        }
+        return bytes.toString();
+    }
+
+    /** ISO-8601 UTC with milliseconds at the line start, the level padded to one width, the text unchanged. */
+    @Test
+    public void testLine_StartsWithIsoUtcTimeAndPaddedLevel() {
+        Logger.setLevel(Logger.Level.DEBUG);
+        String out = capture(() -> {
+            logger.info("an info line");
+            logger.warn("a warn line %d", 7);
+            logger.error("an error line");
+            logger.debug("a debug line");
+        });
+        String[] lines = out.split(System.lineSeparator());
+        assertEquals(4, lines.length);
+        String time = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z";
+        assertTrue(lines[0], lines[0].matches(time + " \\[INFO \\] LoggerTest - an info line"));
+        assertTrue(lines[1], lines[1].matches(time + " \\[WARN \\] LoggerTest - a warn line 7"));
+        assertTrue(lines[2], lines[2].matches(time + " \\[ERROR\\] LoggerTest - an error line"));
+        assertTrue(lines[3], lines[3].matches(time + " \\[DEBUG\\] LoggerTest - a debug line"));
+        long written = java.time.Instant.parse(lines[0].substring(0, 24)).toEpochMilli();
+        assertTrue("the time is now, in UTC", Math.abs(written - System.currentTimeMillis()) < 5_000);
+    }
+
+    /** A status line is INFO and is printed at the default level, where info lines are not. */
+    @Test
+    public void testStatus_PrintedAsInfoAtTheDefaultLevel() {
+        Logger.setLevel(Logger.Level.ERROR);
+        String out = capture(() -> {
+            logger.info("filtered");
+            logger.status("quorum watchdog armed");
+        });
+        assertFalse(out, out.contains("filtered"));
+        assertTrue(out, out.contains(" [INFO ] LoggerTest - quorum watchdog armed"));
+        assertFalse(out, out.contains("[ERROR]"));
+        Logger.setLevel(Logger.Level.OFF);
+        assertEquals("", capture(() -> logger.status("nothing at OFF")));
+    }
 }

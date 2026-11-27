@@ -163,6 +163,23 @@ The readers of the ME journal are the settlement bridges (their applied cursor i
 
 The engine's earlier retention command (`com.match.infrastructure.journal.JournalRetention`) and the files it read (`journal-head.dat`, `journal-checkpoints-v2.dat`) are gone: the recording is its own index. Files of those names left in a journal directory are no longer written or read and can be deleted.
 
+### Stalls, snapshot time and log lines
+
+`/metrics` carries the counters Aeron keeps for this member's slowest work cycle and slowest snapshot, read by the cluster-kit's `StallMetrics` on a thread of its own (once a second, from a read-only mapping of the media driver's counters file; both driver modes). Durations are seconds.
+
+| Series | What |
+|---|---|
+| `match_consensus_module_max_cycle_time_seconds`, `match_consensus_module_cycle_time_exceeded_total` | the consensus module's work cycle: the maximum since it started, and the cycles over its threshold |
+| `match_service_max_cycle_time_seconds`, `match_service_cycle_time_exceeded_total` | the clustered service's work cycle |
+| `match_snapshot_total_max_duration_seconds`, `match_snapshot_total_duration_exceeded_total` | a snapshot as the consensus module times it |
+| `match_snapshot_service_max_duration_seconds`, `match_snapshot_service_duration_exceeded_total` | the service's snapshot as its container times it |
+| `match_driver_{conductor,sender,receiver}_max_cycle_time_seconds`, `match_driver_{conductor,sender,receiver}_cycle_time_exceeded_total` | the media driver's agents |
+| `match_archive_max_cycle_time_seconds{archive_id,agent}`, `match_archive_cycle_time_exceeded_total{archive_id,agent}` | each archive agent: the cluster's archive and the settlement journal's |
+
+Each maximum `M_seconds` has `M_recent_seconds` (the maximum when it rose within the last 300 s, else 0) and `M_last_rise_age_seconds` (seconds since it last rose, -1 when not since the member began to sample). Each count `C_total` has `C_recent` (its rise over the last 300 one-second samples) and `C_last_age_seconds`. `match_stall_sampler_age_seconds` is the time since the counters were last read. The service's own timing of its last snapshot is `match_snapshot_last_serialize_seconds`, `match_snapshot_last_offer_seconds` and `match_snapshot_last_record_seconds` (-1 before the first), next to `match_snapshot_age_seconds`: while the service thread is in the snapshot it applies no command.
+
+Every line a member writes starts with its time in ISO-8601 UTC with milliseconds: `2026-11-27T11:44:31.654Z [INFO ] AeronCluster - ...` from the logger, `2026-11-27T11:44:31.654Z [SNAPSHOT] ...` for the tagged lines. The frames of a stack trace and its `Caused by:` lines carry none and belong to the line above them; the head line of a printed trace has its time. The text after the time is unchanged.
+
 ## Load testing
 
 ```bash

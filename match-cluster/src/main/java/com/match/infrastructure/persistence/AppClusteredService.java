@@ -237,6 +237,8 @@ public class AppClusteredService implements ClusteredService {
     private final com.match.infrastructure.metrics.NodeMetrics nodeMetrics =
             new com.match.infrastructure.metrics.NodeMetrics();
     private com.match.infrastructure.metrics.NodeMetricsServer metricsServer;
+    /** The kit's duty-cycle and snapshot-duration series; null when the sampler did not start. */
+    private volatile com.openexchange.cluster.StallMetrics stallMetrics;
     /**
      * Test seam only: false skips the live log-position update, so a test can prove its assertion
      * notices a gauge that no longer follows the log. Always true in production.
@@ -706,6 +708,7 @@ public class AppClusteredService implements ClusteredService {
         startMetricsServer();
         startDurability(cluster);
         startJournalRetention(cluster);
+        startStallMetrics(cluster);
 
         System.out.println("SERVICE onStart complete, markets initialized");
         System.out.flush();
@@ -817,13 +820,41 @@ public class AppClusteredService implements ClusteredService {
      * rendered by the kit agent (its reader label values are the files registered on this member).
      */
     String renderMetrics() {
-        final String registry = metricsServer.render();
+        final String registry = metricsServer.render() + renderStallMetrics();
         final com.openexchange.cluster.journal.JournalRetentionAgent retention = journalRetention;
         if (retention != null) {
             return registry + retention.renderMetrics("match");
         }
         return journalRetentionStartFailure == null ? registry
                 : registry + com.openexchange.cluster.journal.JournalRetentionAgent.renderNotStarted("match");
+    }
+
+    /**
+     * The duty-cycle and snapshot-duration series of this member ({@code match_consensus_module_*},
+     * {@code match_service_*}, {@code match_snapshot_total_*}, {@code match_snapshot_service_*},
+     * {@code match_archive_*}, {@code match_driver_*}), rendered by the kit; empty when the sampler did not start.
+     */
+    private String renderStallMetrics() {
+        final com.openexchange.cluster.StallMetrics stall = stallMetrics;
+        return stall == null ? "" : stall.renderMetrics();
+    }
+
+    /**
+     * Start the kit's sampler of Aeron's duty-cycle and snapshot-duration counters: a daemon thread of its own that
+     * reads the media driver's counters file once a second through its own read-only mapping. Nothing of it runs on
+     * the service thread after this call. Loud and not fatal when it cannot start: the series are then absent.
+     */
+    private void startStallMetrics(final Cluster cluster) {
+        try {
+            final com.openexchange.cluster.StallMetrics stall = com.openexchange.cluster.StallMetrics.open("match",
+                    cluster.aeron().context().aeronDirectoryName(), cluster.context().clusterId(),
+                    cluster.context().serviceId());
+            stall.start();
+            stallMetrics = stall;
+        } catch (final Throwable t) {
+            System.err.println("SERVICE CRITICAL: the duty-cycle metrics did not start, /metrics has no"
+                    + " match_*_max_cycle_time series on this member: " + t);
+        }
     }
 
     /**
@@ -2152,7 +2183,9 @@ public class AppClusteredService implements ClusteredService {
         final long orderId = engine.getOrderIdGenerator();
         final long tradeId = engine.getTradeIdGenerator();
         final long timerCorrelationId = timerManager.getCorrelationId();
+        final long snapshotStartNs = System.nanoTime();
         final int pos = SnapshotCodec.serialize(engine, timerCorrelationId, buffer);
+        final long serializedNs = System.nanoTime();
 
         System.out.println("[SNAPSHOT] OrderIdGenerator=" + orderId
                 + " TradeIdGenerator=" + tradeId
@@ -2178,8 +2211,13 @@ public class AppClusteredService implements ClusteredService {
         // recording file. Without this, onTakeSnapshot returns while the recording is still in
         // flight; if the node is killed before Archive flushes the catalog stopPosition, the
         // recording is pruned on restart and recovery fails with `unknown recording id`.
+        final long offeredNs = System.nanoTime();
         awaitSnapshotRecorded(snapshotPublication);
+        final long recordedNs = System.nanoTime();
         nodeMetrics.stampSnapshot(System.currentTimeMillis()); // match#33: wall-clock stamp, metrics only
+        // How long the service thread stood in each part of this snapshot (metrics only).
+        nodeMetrics.stampSnapshotTimings(serializedNs - snapshotStartNs, offeredNs - serializedNs,
+                recordedNs - offeredNs);
         // Position and hash of what was just recorded, as one value: a pure function of the replicated state at
         // this log position (the payload CRC32C serialize already computed), equal on every healthy member.
         nodeMetrics.stampSnapshotState(cluster.logPosition(), telemetryStateHash(buffer, 0, pos));
@@ -2387,6 +2425,11 @@ public class AppClusteredService implements ClusteredService {
     private void applyOnTerminate(final Cluster cluster) {
         readiness.stopping();
         if (consensusReadiness != null) { consensusReadiness.close(); }
+        final com.openexchange.cluster.StallMetrics stall = stallMetrics;
+        if (stall != null) {
+            stallMetrics = null;
+            stall.close();
+        }
         if (logPruner != null) {
             logPruner.stop();
         }
