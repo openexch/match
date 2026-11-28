@@ -74,7 +74,7 @@ CPUQuota=400%
 ## Image
 
 ```sh
-docker build -f deploy/oci/Dockerfile --build-context deploy=deploy -t openexchange/match <dir with match-cluster.jar>
+docker build -f deploy/oci/Dockerfile --build-context deploy=deploy -t openexchange/match <dir with match-cluster.jar, LICENSE, NOTICE>
 docker run --read-only --tmpfs /tmp --shm-size 1g -v match-state:/var/lib/openexchange/match \
     --env-file cluster.env --env-file member.env --env-file host.env --env-file secrets.env \
     openexchange/match embedded
@@ -84,6 +84,18 @@ The image runs as uid 10001 with a read-only root; state and the ME journal live
 external driver, run the cluster-tools image's `aeronmd` as a sidecar: the member shares its network namespace
 (`--network container:<driver>`) and its driver directory (a shared tmpfs volume, `AERON_DIR` in both), and is
 started with `external`.
+
+The image ships `LICENSE` and `NOTICE` under `/usr/share/doc/openexchange/match/`; `NOTICE` lists every third-party
+component in the jar and the base image, with its licence.
+
+CI publishes the image for linux/amd64 and linux/arm64 as `ghcr.io/openexch/match`, built from the same jar the
+publish job uploads: every main push is tagged with its full commit sha, and `nightly` moves to it unless it already
+names a newer commit. Pull requests build the image for both platforms and push nothing. Each pushed image carries
+a GitHub build provenance attestation:
+
+```sh
+gh attestation verify oci://ghcr.io/openexch/match:<sha> -R openexch/match
+```
 
 ## Tests
 

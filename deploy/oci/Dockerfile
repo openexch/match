@@ -5,7 +5,8 @@
 # deploy/bin/match-launch (the same launcher the systemd units run). Nothing is compiled here: the image wraps the
 # published jar.
 #
-# Build context: a directory holding the published match-cluster.jar; deploy/ of this repo is a named context:
+# Build context: a directory holding the published match-cluster.jar and this repo's LICENSE and NOTICE; deploy/ of
+# this repo is a named context:
 #
 #   docker build -f deploy/oci/Dockerfile --build-context deploy=deploy -t openexchange/match <jar-dir>
 #
@@ -19,14 +20,18 @@
 # Java 21 (Zulu, headless JRE), pinned by digest.
 ARG JRE_IMAGE=azul/zulu-openjdk-debian:21-jre-headless-latest@sha256:3b45cab1e7092d81daede33a242871fd1110e208b760f75479c9495402feef7a
 FROM ${JRE_IMAGE}
+LABEL org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/openexch/match"
 ARG OE_UID=10001
 RUN groupadd --system --gid "${OE_UID}" openexchange \
     && useradd --system --uid "${OE_UID}" --gid "${OE_UID}" --no-create-home --home-dir /nonexistent \
         --shell /usr/sbin/nologin openexchange \
-    && install -d -m 0755 /opt/openexchange/match/bin \
+    && install -d -m 0755 /opt/openexchange/match/bin /usr/share/doc/openexchange/match \
     && mkdir -p /var/lib/openexchange/match \
     && chown openexchange:openexchange /var/lib/openexchange/match
 COPY --chmod=0444 match-cluster.jar /opt/openexchange/match/match-cluster.jar
+# The licence and the notices for everything this image ships (the bundled jars and the base image).
+COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/openexchange/match/
 COPY --from=deploy --chmod=0555 bin/match-launch /opt/openexchange/match/bin/match-launch
 ENV BASE_DIR=/var/lib/openexchange/match/cluster \
     SETTLEMENT_JOURNAL_DIR=/var/lib/openexchange/match/journal

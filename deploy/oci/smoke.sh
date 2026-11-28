@@ -41,6 +41,7 @@ fail() { echo "FAIL $1"; FAILS=$((FAILS + 1)); }
 pass() { echo "ok   $1"; }
 
 cp "$JAR" "$CTX/match-cluster.jar"
+cp "$HERE/../LICENSE" "$HERE/../NOTICE" "$CTX/"
 docker build -q -f "$HERE/oci/Dockerfile" --build-context deploy="$HERE" -t "$TAG" "$CTX" >/dev/null
 pass "image $TAG built from $(sha256sum "$JAR" | cut -c1-12) $(basename "$JAR")"
 
@@ -49,6 +50,14 @@ ENVS=(-e CLUSTER_ADDRESSES=localhost -e CLUSTER_PORT_BASE=9000 -e CLUSTER_PORT_S
       -e TRANSPORT_SNAPSHOT_TERM_LENGTH=1m -e TRANSPORT_IDLE_MODE=backoff -e MATCH_ENGINE_FROM_CONFIG=true
       -e SETTLEMENT_JOURNAL_ENABLED=true -e ME_AUTH_KEYS=)
 RO=(--read-only --tmpfs "/tmp:rw,size=64m")
+
+# The licence and the third-party notices travel with the image.
+if docker run --rm --entrypoint /bin/sh "${RO[@]}" "$TAG" -c \
+    'test -s /usr/share/doc/openexchange/match/LICENSE && test -s /usr/share/doc/openexchange/match/NOTICE'; then
+    pass "LICENSE and NOTICE in /usr/share/doc/openexchange/match"
+else
+    fail "LICENSE or NOTICE missing from /usr/share/doc/openexchange/match"
+fi
 
 wait_health() { # container host-port seconds
     local c=$1 port=$2 secs=$3 code=000 i
