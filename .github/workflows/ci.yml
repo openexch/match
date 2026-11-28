@@ -106,6 +106,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # A pull request's image-check job builds the container image from this jar.
+      - name: Keep the engine jar for the image check
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-jar
+          path: match-cluster/target/match-cluster.jar
+          if-no-files-found: error
+          retention-days: 1
+
   # Dependency CVEs + committed secrets (match#32 / P1.5). Trivy covers both on a
   # private repo without GitHub Advanced Security; triaged findings go in .trivyignore.
   security:
@@ -373,6 +383,17 @@ jobs:
           DEST: ${{ steps.dest.outputs.prefix }}
         run: echo "published s3://${BUCKET}/${DEST}"
 
+      # The image job builds the container image from this exact jar: the one just verified in S3. Main only; a tag
+      # publishes no image.
+      - name: Keep the published engine jar for the image job
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-jar
+          path: match-cluster/target/match-cluster.jar
+          if-no-files-found: error
+          retention-days: 1
+
       # ---- cross-repo wire artifact ----
       # core and oms consume com.match:match-common. Until now they resolved it by
       # checking out match at FLOATING main and mvn-installing a permanently-static
@@ -489,3 +510,164 @@ jobs:
             gh pr merge --repo "openexch/${REPO}" --auto --squash "$BRANCH" \
               || echo "${REPO}: auto-merge unavailable; PR stays open for a human"
           done
+
+  # ---- container image ----
+  # The engine image (deploy/oci/Dockerfile) wraps the jar: nothing is compiled in the image build. A pull request
+  # builds it for both platforms from the jar its build job made and pushes nothing; the token here can only read.
+  image-check:
+    needs: [build]
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fetch the jar the build job made
+        uses: actions/download-artifact@v4
+        with:
+          name: image-jar
+          path: image-context
+
+      # The image build context is exactly the jar plus the licence and the notices it ships.
+      - name: Stage the build context
+        run: cp LICENSE NOTICE image-context/
+
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build the image for linux/amd64 and linux/arm64 (not pushed)
+        uses: docker/build-push-action@v7
+        with:
+          context: image-context
+          file: deploy/oci/Dockerfile
+          build-contexts: deploy=deploy
+          platforms: linux/amd64,linux/arm64
+          push: false
+          provenance: false
+          sbom: false
+
+  # On main, after the publish job: the image is built from the very jar that job verified and published, pushed to
+  # the GitHub container registry under the full commit sha, given a build provenance attestation (keyless: an OIDC
+  # token per run, no signing key anywhere in CI), and `nightly` is moved to it. Gated by the publish job, so it runs
+  # only where publishing is switched on, and never for a tag or a fork.
+  image:
+    needs: [publish]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # One image publish at a time; the nightly move below is also written to only ever go forward.
+    concurrency:
+      group: image-${{ github.repository }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write # pushes the image to ghcr.io with the workflow token
+      id-token: write # the OIDC token the attestation's short-lived signing certificate is issued for
+      attestations: write # stores the build provenance attestation
+    env:
+      IMAGE: ghcr.io/openexch/match
+    steps:
+      # Full history: the nightly move compares commits.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Fetch the published jar
+        uses: actions/download-artifact@v4
+        with:
+          name: image-jar
+          path: image-context
+
+      - name: Verify the jar carries this commit's sha
+        run: |
+          set -euo pipefail
+          unzip -p image-context/match-cluster.jar META-INF/MANIFEST.MF | tr -d '\r' \
+            | grep -q "^Build-Sha: $(git rev-parse --short HEAD)$" || {
+            echo "::error::match-cluster.jar's Build-Sha does not match this commit"
+            exit 1
+          }
+
+      - name: Stage the build context
+        run: |
+          set -euo pipefail
+          cp LICENSE NOTICE image-context/
+          echo "BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the GitHub container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the image for linux/amd64 and linux/arm64
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: image-context
+          file: deploy/oci/Dockerfile
+          build-contexts: deploy=deploy
+          platforms: linux/amd64,linux/arm64
+          # OCI media types explicitly: the index annotations below need them.
+          outputs: type=image,oci-mediatypes=true,push=true
+          provenance: false
+          sbom: false
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.title=Open Exchange matching engine
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ env.BUILT_AT }}
+            org.opencontainers.image.licenses=Apache-2.0
+          annotations: |
+            index:org.opencontainers.image.title=Open Exchange matching engine
+            index:org.opencontainers.image.description=The Open Exchange matching engine: a replicated Aeron Cluster service
+            index:org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            index:org.opencontainers.image.revision=${{ github.sha }}
+            index:org.opencontainers.image.created=${{ env.BUILT_AT }}
+            index:org.opencontainers.image.licenses=Apache-2.0
+
+      # Verify with: gh attestation verify oci://ghcr.io/openexch/match:<sha> -R openexch/match
+      - name: Attest the build provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      # Same rule as the S3 latest pointer: never backwards. A displaced or retried older run can finish after a newer
+      # one, so nightly moves only when the commit it names now is an ancestor of this one (or it does not exist yet).
+      # A single-source imagetools create copies the index unchanged, so nightly carries the digest the attestation
+      # names; the last check proves it.
+      - name: Move nightly
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          CURRENT=$(docker buildx imagetools inspect --raw "${IMAGE}:nightly" 2>/dev/null \
+            | jq -r '.annotations["org.opencontainers.image.revision"] // ""' || true)
+          if [ -n "$CURRENT" ] && [ "$CURRENT" != "${GITHUB_SHA}" ]; then
+            if ! git cat-file -e "${CURRENT}^{commit}" 2>/dev/null \
+              || ! git merge-base --is-ancestor "$CURRENT" "${GITHUB_SHA}"; then
+              echo "nightly names ${CURRENT}, which is not an ancestor of ${GITHUB_SHA}; leaving it alone."
+              exit 0
+            fi
+          fi
+          docker buildx imagetools create --tag "${IMAGE}:nightly" "${IMAGE}@${DIGEST}"
+          MOVED=$(docker buildx imagetools inspect "${IMAGE}:nightly" --format '{{json .Manifest}}' | jq -r .digest)
+          [ "$MOVED" = "$DIGEST" ] || {
+            echo "::error::nightly is ${MOVED}, expected ${DIGEST}"
+            exit 1
+          }
+          echo "nightly -> ${IMAGE}@${DIGEST} (${GITHUB_SHA})"
+
+      - name: Say what was pushed
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: echo "pushed ${IMAGE}:${GITHUB_SHA} (${DIGEST})"
